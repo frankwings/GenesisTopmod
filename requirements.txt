@@ -1,0 +1,5 @@
+# Core library — pure Python, no dependencies
+# Optional for geometry optimization pipeline (Phase 2):
+# torch
+# nvdiffrast
+# numpy

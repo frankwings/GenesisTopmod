@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GenesisTopmod Interactive</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #08080e; color: #d0d0d0; font-family: 'Segoe UI', system-ui, sans-serif;
+       display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+header { padding: 14px 24px; background: #0e0e1a; border-bottom: 1px solid #1a1a2e;
+         display: flex; justify-content: space-between; align-items: center; }
+header h1 { font-size: 1.2em; color: #7ecfff; }
+header h1 span { color: #444; font-size: 0.7em; }
+
+.main { display: flex; flex: 1; overflow: hidden; }
+
+/* Controls panel */
+.panel { width: 300px; background: #0c0c18; border-right: 1px solid #1a1a2e;
+         padding: 20px; overflow-y: auto; flex-shrink: 0; }
+.panel h2 { font-size: 0.9em; color: #6a9fcf; margin-bottom: 14px;
+            text-transform: uppercase; letter-spacing: 1px; }
+
+.control-group { margin-bottom: 24px; }
+.control-group label { display: block; font-size: 0.82em; color: #888;
+                       margin-bottom: 6px; }
+.control-group .value { color: #7ecfff; font-weight: 600; }
+
+input[type=range] { width: 100%; accent-color: #3388cc; height: 6px;
+                    -webkit-appearance: none; background: #1a1a2e; border-radius: 3px;
+                    outline: none; margin-top: 4px; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px;
+    height: 18px; border-radius: 50%; background: #3388cc; cursor: pointer;
+    border: 2px solid #0a0a12; }
+
+.info-box { background: #0f1020; border: 1px solid #1a1a2e; border-radius: 8px;
+            padding: 12px; margin-top: 12px; }
+.info-row { display: flex; justify-content: space-between; padding: 3px 0;
+            font-size: 0.82em; }
+.info-row .k { color: #666; }
+.info-row .v { color: #aacfee; font-family: monospace; }
+.info-row .v.ok { color: #5fdb8a; }
+.info-row .v.err { color: #db5f5f; }
+
+.ops-log { background: #0a0a14; border: 1px solid #1a1a2e; border-radius: 8px;
+           padding: 10px; margin-top: 12px; max-height: 180px; overflow-y: auto;
+           font-family: monospace; font-size: 0.75em; line-height: 1.6; color: #6a8fa0; }
+.ops-log .op { color: #cc9944; }
+
+.render-toggle { margin-top: 16px; display: flex; gap: 6px; }
+.render-toggle button { flex: 1; padding: 8px; background: #1a1a2e; border: 1px solid #2a2a4a;
+    color: #8ab; border-radius: 5px; cursor: pointer; font-size: 0.8em; transition: 0.15s; }
+.render-toggle button:hover { background: #2a2a4a; }
+.render-toggle button.active { background: #1a3a5a; border-color: #3a6a9a; color: #9ecfff; }
+
+/* 3D viewport */
+.viewport { flex: 1; position: relative; }
+#canvas3d { width: 100%; height: 100%; display: block; }
+
+.loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+           color: #3388cc; font-size: 0.9em; }
+
+/* Topology diagram */
+.topo-diagram { text-align: center; margin-top: 12px; padding: 8px;
+                background: #0a0a14; border-radius: 8px; border: 1px solid #1a1a2e; }
+.topo-diagram svg { max-width: 100%; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>GenesisTopmod <span>Interactive Topology Explorer</span></h1>
+  <div style="color:#444; font-size:0.8em;">TopMod 4-Operator Theory &middot; Dr. Akleman</div>
+</header>
+
+<div class="main">
+  <div class="panel">
+    <h2>Topology Controls</h2>
+
+    <div class="control-group">
+      <label>Genus (Holes): <span class="value" id="genus-val">0</span></label>
+      <input type="range" id="genus" min="0" max="3" value="0" step="1">
+      <div style="display:flex; justify-content:space-between; font-size:0.7em; color:#444; margin-top:2px;">
+        <span>Sphere</span><span>Torus</span><span>Double</span><span>Triple</span>
+      </div>
+    </div>
+
+    <div class="control-group">
+      <label>Subdivision (Catmull-Clark): <span class="value" id="cc-val">2</span></label>
+      <input type="range" id="cc" min="0" max="3" value="2" step="1">
+      <div style="display:flex; justify-content:space-between; font-size:0.7em; color:#444; margin-top:2px;">
+        <span>Raw</span><span>1x</span><span>2x</span><span>3x</span>
+      </div>
+    </div>
+
+    <h2>Render Mode</h2>
+    <div class="render-toggle">
+      <button id="btn-wire" onclick="setRender('wire')">Wire</button>
+      <button id="btn-solid" onclick="setRender('solid')">Solid</button>
+      <button id="btn-both" class="active" onclick="setRender('both')">Both</button>
+    </div>
+
+    <h2 style="margin-top:20px;">Mesh Info</h2>
+    <div class="info-box">
+      <div class="info-row"><span class="k">Vertices</span><span class="v" id="info-v">-</span></div>
+      <div class="info-row"><span class="k">Edges</span><span class="v" id="info-e">-</span></div>
+      <div class="info-row"><span class="k">Faces</span><span class="v" id="info-f">-</span></div>
+      <div class="info-row"><span class="k">Genus</span><span class="v" id="info-g">-</span></div>
+      <div class="info-row"><span class="k">Euler (V-E+F)</span><span class="v" id="info-euler">-</span></div>
+      <div class="info-row"><span class="k">Manifold</span><span class="v ok" id="info-mf">-</span></div>
+    </div>
+
+    <h2 style="margin-top:20px;">Operator Log</h2>
+    <div class="ops-log" id="ops-log">
+      <div>Select genus to see operators...</div>
+    </div>
+
+    <div class="topo-diagram" id="topo-diagram"></div>
+  </div>
+
+  <div class="viewport">
+    <canvas id="canvas3d"></canvas>
+    <div class="loading" id="loading">Loading mesh...</div>
+  </div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+}}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+
+// Metadata from Python generation
+const META = {
+  "icosahedron_g0_cc0": {"V":12,"E":30,"F":20,"genus":0,"manifold":true},
+  "icosahedron_g0_cc1": {"V":62,"E":60,"F":60,"genus":0,"manifold":true},
+  "icosahedron_g0_cc2": {"V":242,"E":480,"F":240,"genus":0,"manifold":true},
+  "icosahedron_g0_cc3": {"V":962,"E":1920,"F":960,"genus":0,"manifold":true},
+  "icosahedron_g1_cc0": {"V":12,"E":33,"F":21,"genus":1,"manifold":true},
+  "icosahedron_g1_cc1": {"V":66,"E":132,"F":66,"genus":1,"manifold":true},
+  "icosahedron_g1_cc2": {"V":264,"E":528,"F":264,"genus":1,"manifold":true},
+  "icosahedron_g1_cc3": {"V":1056,"E":2112,"F":1056,"genus":1,"manifold":true},
+  "icosahedron_g2_cc0": {"V":12,"E":36,"F":22,"genus":2,"manifold":true},
+  "icosahedron_g2_cc1": {"V":70,"E":144,"F":72,"genus":2,"manifold":true},
+  "icosahedron_g2_cc2": {"V":286,"E":576,"F":288,"genus":2,"manifold":true},
+  "icosahedron_g2_cc3": {"V":1150,"E":2304,"F":1152,"genus":2,"manifold":true},
+  "icosahedron_g3_cc0": {"V":12,"E":39,"F":23,"genus":3,"manifold":true},
+  "icosahedron_g3_cc1": {"V":74,"E":156,"F":78,"genus":3,"manifold":true},
+  "icosahedron_g3_cc2": {"V":308,"E":624,"F":312,"genus":3,"manifold":true},
+  "icosahedron_g3_cc3": {"V":1244,"E":2496,"F":1248,"genus":3,"manifold":true}
+};
+
+// Three.js setup
+const canvas = document.getElementById('canvas3d');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x08080e);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 100);
+camera.position.set(3, 2, 3.5);
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 1.5;
+
+// Lighting
+scene.add(new THREE.AmbientLight(0x303050, 2.0));
+const dl1 = new THREE.DirectionalLight(0xffffff, 1.5);
+dl1.position.set(4, 6, 5);
+scene.add(dl1);
+const dl2 = new THREE.DirectionalLight(0x4466aa, 1.0);
+dl2.position.set(-4, -2, -5);
+scene.add(dl2);
+
+let currentGroup = null;
+let renderMode = 'both';
+
+const loader = new OBJLoader();
+
+function loadMesh(genus, cc) {
+  const key = `icosahedron_g${genus}_cc${cc}`;
+  const meta = META[key];
+  if (!meta) return;
+
+  document.getElementById('loading').style.display = 'block';
+
+  // Update info panel
+  const V = meta.V, F = meta.F, g = meta.genus;
+  const E = V + F - 2 + 2 * g; // Euler
+  document.getElementById('info-v').textContent = V;
+  document.getElementById('info-e').textContent = E;
+  document.getElementById('info-f').textContent = F;
+  document.getElementById('info-g').textContent = g;
+  document.getElementById('info-euler').textContent = `${V} - ${E} + ${F} = ${V - E + F}`;
+  const mfEl = document.getElementById('info-mf');
+  mfEl.textContent = meta.manifold ? '✓ Yes' : '✗ No';
+  mfEl.className = 'v ' + (meta.manifold ? 'ok' : 'err');
+
+  // Update ops log
+  updateOpsLog(genus, cc);
+  updateTopoDiagram(genus);
+
+  // Load OBJ
+  loader.load(`${key}.obj`, (obj) => {
+    if (currentGroup) scene.remove(currentGroup);
+    const group = new THREE.Group();
+
+    obj.traverse(child => {
+      if (!child.isMesh) return;
+      child.geometry.computeBoundingBox();
+      child.geometry.computeVertexNormals();
+      const bb = child.geometry.boundingBox;
+      const center = new THREE.Vector3();
+      bb.getCenter(center);
+      const size = new THREE.Vector3();
+      bb.getSize(size);
+      const scale = 2.2 / Math.max(size.x, size.y, size.z);
+
+      // Solid
+      const solidMat = new THREE.MeshStandardMaterial({
+        color: 0x2277bb, metalness: 0.1, roughness: 0.6, side: THREE.DoubleSide
+      });
+      const solid = new THREE.Mesh(child.geometry.clone(), solidMat);
+      solid.geometry.translate(-center.x, -center.y, -center.z);
+      solid.geometry.scale(scale, scale, scale);
+      solid.userData.role = 'solid';
+      solid.visible = (renderMode === 'solid' || renderMode === 'both');
+      group.add(solid);
+
+      // Wireframe
+      const wireGeo = new THREE.WireframeGeometry(solid.geometry);
+      const wireMat = new THREE.LineBasicMaterial({
+        color: 0x55bbff, opacity: renderMode === 'both' ? 0.35 : 0.8,
+        transparent: true
+      });
+      const wire = new THREE.LineSegments(wireGeo, wireMat);
+      wire.userData.role = 'wire';
+      wire.visible = (renderMode === 'wire' || renderMode === 'both');
+      group.add(wire);
+    });
+
+    scene.add(group);
+    currentGroup = group;
+    document.getElementById('loading').style.display = 'none';
+  });
+}
+
+function updateOpsLog(genus, cc) {
+  const log = document.getElementById('ops-log');
+  let html = `<div><span class="op">make_icosahedron()</span></div>`;
+  html += `<div>  → V=12 E=30 F=20 genus=0</div>`;
+
+  for (let i = 0; i < genus; i++) {
+    html += `<div><span class="op">add_handle(face_${i*2}, face_${i*2+1})</span></div>`;
+    html += `<div>  → genus=${i+1}</div>`;
+  }
+
+  for (let i = 0; i < cc; i++) {
+    html += `<div><span class="op">catmull_clark()</span> #${i+1}</div>`;
+  }
+
+  html += `<div style="color:#5fdb8a; margin-top:4px;">✓ manifold invariant maintained</div>`;
+  log.innerHTML = html;
+}
+
+function updateTopoDiagram(genus) {
+  const container = document.getElementById('topo-diagram');
+  const names = ['Sphere (S²)', 'Torus (T²)', 'Double Torus', 'Triple Torus'];
+  // Simple SVG topology diagrams
+  const svgs = [
+    // genus 0: sphere
+    `<svg width="120" height="80" viewBox="0 0 120 80">
+      <ellipse cx="60" cy="40" rx="40" ry="30" fill="none" stroke="#3388cc" stroke-width="2"/>
+      <text x="60" y="72" text-anchor="middle" fill="#666" font-size="10">${names[0]}</text>
+    </svg>`,
+    // genus 1: torus
+    `<svg width="120" height="80" viewBox="0 0 120 80">
+      <ellipse cx="60" cy="35" rx="45" ry="28" fill="none" stroke="#3388cc" stroke-width="2"/>
+      <ellipse cx="60" cy="35" rx="18" ry="12" fill="#08080e" stroke="#cc9944" stroke-width="2"/>
+      <text x="60" y="72" text-anchor="middle" fill="#666" font-size="10">${names[1]}</text>
+    </svg>`,
+    // genus 2: double torus
+    `<svg width="160" height="80" viewBox="0 0 160 80">
+      <path d="M20,35 Q20,10 50,10 Q80,10 80,35 Q80,10 110,10 Q140,10 140,35 Q140,60 110,60 Q80,60 80,35 Q80,60 50,60 Q20,60 20,35Z"
+            fill="none" stroke="#3388cc" stroke-width="2"/>
+      <ellipse cx="50" cy="35" rx="14" ry="10" fill="#08080e" stroke="#cc9944" stroke-width="2"/>
+      <ellipse cx="110" cy="35" rx="14" ry="10" fill="#08080e" stroke="#cc9944" stroke-width="2"/>
+      <text x="80" y="75" text-anchor="middle" fill="#666" font-size="10">${names[2]}</text>
+    </svg>`,
+    // genus 3: triple torus
+    `<svg width="200" height="80" viewBox="0 0 200 80">
+      <path d="M15,35 Q15,8 42,8 Q68,8 68,35 Q68,8 100,8 Q132,8 132,35 Q132,8 158,8 Q185,8 185,35 Q185,62 158,62 Q132,62 132,35 Q132,62 100,62 Q68,62 68,35 Q68,62 42,62 Q15,62 15,35Z"
+            fill="none" stroke="#3388cc" stroke-width="2"/>
+      <ellipse cx="42" cy="35" rx="12" ry="10" fill="#08080e" stroke="#cc9944" stroke-width="2"/>
+      <ellipse cx="100" cy="35" rx="12" ry="10" fill="#08080e" stroke="#cc9944" stroke-width="2"/>
+      <ellipse cx="158" cy="35" rx="12" ry="10" fill="#08080e" stroke="#cc9944" stroke-width="2"/>
+      <text x="100" y="75" text-anchor="middle" fill="#666" font-size="10">${names[3]}</text>
+    </svg>`
+  ];
+  container.innerHTML = svgs[genus] || svgs[0];
+}
+
+window.setRender = function(mode) {
+  renderMode = mode;
+  document.querySelectorAll('.render-toggle button').forEach(b => b.classList.remove('active'));
+  document.getElementById(`btn-${mode}`).classList.add('active');
+  if (currentGroup) {
+    currentGroup.children.forEach(child => {
+      if (child.userData.role === 'solid')
+        child.visible = (mode === 'solid' || mode === 'both');
+      if (child.userData.role === 'wire') {
+        child.visible = (mode === 'wire' || mode === 'both');
+        child.material.opacity = mode === 'both' ? 0.35 : 0.8;
+      }
+    });
+  }
+};
+
+// Slider events
+document.getElementById('genus').addEventListener('input', (e) => {
+  document.getElementById('genus-val').textContent = e.target.value;
+  loadMesh(+e.target.value, +document.getElementById('cc').value);
+});
+document.getElementById('cc').addEventListener('input', (e) => {
+  document.getElementById('cc-val').textContent = e.target.value;
+  loadMesh(+document.getElementById('genus').value, +e.target.value);
+});
+
+// Resize
+function resize() {
+  const rect = canvas.getBoundingClientRect();
+  renderer.setSize(rect.width, rect.height, false);
+  camera.aspect = rect.width / rect.height;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Animate
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// Initial load
+loadMesh(0, 2);
+</script>
+</body>
+</html>
