@@ -12,6 +12,13 @@ from .primitives import make_cube, make_tetrahedron, make_icosahedron, make_octa
 from .io import to_obj, from_obj, to_triangle_arrays
 from .high_level_ops import extrude_face, add_handle, stellate, subdivide_edge, subdivide_face
 from .subdivision import catmull_clark
+from .tokenizer import (
+    TopModToken,
+    quantize_coord, dequantize_coord,
+    tokenize, detokenize,
+    build_vocabulary, encode_sequence, decode_sequence,
+    token_stats, sequence_length,
+)
 
 __all__ = [
     # Data structures
@@ -29,4 +36,10 @@ __all__ = [
     "extrude_face", "add_handle", "stellate", "subdivide_edge", "subdivide_face",
     # Subdivision
     "catmull_clark",
+    # Tokenizer
+    "TopModToken",
+    "quantize_coord", "dequantize_coord",
+    "tokenize", "detokenize",
+    "build_vocabulary", "encode_sequence", "decode_sequence",
+    "token_stats", "sequence_length",
 ]
