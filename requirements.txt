@@ -1,5 +1,12 @@
 # Core library — pure Python, no dependencies
-# Optional for geometry optimization pipeline (Phase 2):
-# torch
+
+# Web demo (app.py)
+gradio>=4.0
+
+# Geometry optimization pipeline (Phase 2) — needs CUDA
+# torch>=2.0
 # nvdiffrast
 # numpy
+
+# Plotting (used by app.py and manifold_loss_demo.py)
+# matplotlib

@@ -238,10 +238,14 @@ def euler_loss(
     )
     E_eff = edge_face_sum.clamp(max=1.0).sum()
 
-    # Effective vertex count: clamp sum of adjacent face probs at 1
-    all_verts_idx = faces.reshape(-1)    # [3F]
+    # Effective vertex count: clamp sum of adjacent face probs at 1.
+    # faces.reshape(-1) is FACE-CONSECUTIVE: [f0v0, f0v1, f0v2, f1v0, ...].
+    # We need fp repeated face-consecutively too: fp.repeat_interleave(3).
+    # (fp_rep uses column-consecutive layout from _build_edge_tables — wrong here.)
+    all_verts_idx = faces.reshape(-1)                          # [3F] face-consecutive
+    fp_rep_vert   = fp.repeat_interleave(3)                    # [3F] face-consecutive
     vert_face_sum = torch.zeros(V, device=device, dtype=dtype).scatter_add(
-        0, all_verts_idx.long(), fp_rep
+        0, all_verts_idx.long(), fp_rep_vert
     )
     V_eff = vert_face_sum.clamp(max=1.0).sum()
 
