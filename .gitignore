@@ -9,3 +9,6 @@ ui/meshes/
 .gradio/
 experiments/opseq/data/
 experiments/opseq/ckpt/
+experiments/opseq_b/data/
+experiments/opseq_b/ckpt/
+logs/
