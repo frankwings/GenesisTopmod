@@ -7,3 +7,5 @@ build/
 ui/meshes/
 *.obj
 .gradio/
+experiments/opseq/data/
+experiments/opseq/ckpt/
