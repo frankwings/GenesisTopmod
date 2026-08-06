@@ -183,6 +183,18 @@ def normal_consistency_loss(verts: torch.Tensor, faces: torch.Tensor) -> torch.T
     return (1.0 - dot).mean()
 
 
+def mesh_volume(verts: torch.Tensor, faces: torch.Tensor) -> torch.Tensor:
+    """
+    Signed volume of the mesh via the divergence theorem:
+        V = Σ_f det(v0, v1, v2) / 6
+    Differentiable w.r.t. verts.  Positive for outward-wound closed meshes.
+    """
+    v0 = verts[faces[:, 0].long()]
+    v1 = verts[faces[:, 1].long()]
+    v2 = verts[faces[:, 2].long()]
+    return (torch.linalg.cross(v0, v1) * v2).sum() / 6.0
+
+
 # ── main optimizer ────────────────────────────────────────────────────────────
 
 def optimize(
@@ -196,6 +208,8 @@ def optimize(
     lambda_lap:    float = 0.05,
     lambda_edge:   float = 0.01,
     lambda_normal: float = 0.0,
+    lambda_vol:    float = 0.0,
+    vol_min_ratio: float = 0.25,
     resolution:    Tuple[int, int] = (256, 256),
     log_every:     int   = 50,
     scheduler:     bool  = True,
@@ -215,6 +229,14 @@ def optimize(
     lambda_lap     : Laplacian smoothness weight.
     lambda_edge    : Edge length regularisation weight.
     lambda_normal  : Normal consistency weight (0 = disabled).
+    lambda_vol     : Volume-preservation hinge weight (0 = disabled).
+                     Penalises the mesh only when its volume drops below
+                     vol_min_ratio × initial volume.  Prevents the classic
+                     single-view degeneracy where depth is unconstrained and
+                     the mesh collapses into a paper-thin sheet facing the
+                     camera (silhouette loss cannot see depth).
+    vol_min_ratio  : Fraction of the initial volume below which the hinge
+                     activates.
     resolution     : Render resolution (H, W).
     log_every      : Print progress every N steps.
     scheduler      : If True, use cosine LR annealing.
@@ -229,6 +251,9 @@ def optimize(
 
     # Learnable vertex positions
     verts = verts_init.clone().detach().to(device).requires_grad_(True)
+
+    # Reference volume for the anti-flattening hinge
+    vol_init = mesh_volume(verts_init, faces).abs().detach().clamp(min=1e-8)
 
     optimizer = torch.optim.Adam([verts], lr=lr)
     if scheduler:
@@ -255,6 +280,9 @@ def optimize(
             reg_loss = reg_loss + lambda_edge  * edge_length_loss(verts, faces)
         if lambda_normal > 0:
             reg_loss = reg_loss + lambda_normal * normal_consistency_loss(verts, faces)
+        if lambda_vol > 0:
+            vol_ratio = mesh_volume(verts, faces).abs() / vol_init
+            reg_loss = reg_loss + lambda_vol * F.relu(vol_min_ratio - vol_ratio) ** 2
 
         total_loss = sil_loss + reg_loss
         total_loss.backward()

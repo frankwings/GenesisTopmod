@@ -80,10 +80,14 @@ def orbit_cameras(
     near:          float = 0.1,
     far:           float = 10.0,
     device:        str   = "cuda",
+    azimuths_deg:  "List[float] | None" = None,
 ) -> Tuple[torch.Tensor, List[Tuple[float, float, float]]]:
     """
     Generate *n* MVP matrices equally spaced on a horizontal orbit at the
     given *elevation_deg* above the equator.
+
+    If *azimuths_deg* is given, it overrides the equal spacing (and *n* is
+    taken from its length).  Azimuth 0° puts the camera on the +X axis.
 
     Returns
     -------
@@ -96,11 +100,15 @@ def orbit_cameras(
     y   = radius * math.sin(elev_rad)
     r_h = radius * math.cos(elev_rad)   # horizontal radius
 
+    if azimuths_deg is not None:
+        n = len(azimuths_deg)
+
     mvps: List[torch.Tensor] = []
     eyes: List[Tuple[float, float, float]] = []
 
     for i in range(n):
-        az = 2.0 * math.pi * i / n
+        az = (math.radians(azimuths_deg[i]) if azimuths_deg is not None
+              else 2.0 * math.pi * i / n)
         x  = r_h * math.cos(az)
         z  = r_h * math.sin(az)
         eye = (x, y, z)

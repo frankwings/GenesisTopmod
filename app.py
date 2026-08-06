@@ -102,10 +102,48 @@ def _build_genus_mesh(genus: int, cc_level: int):
     return mesh
 
 
+def _compute_normals(positions, triangles):
+    """Compute per-vertex normals from positions and triangle indices."""
+    verts = np.array(positions, dtype=np.float32)
+    norms = np.zeros_like(verts)
+    for tri in triangles:
+        v0, v1, v2 = verts[tri[0]], verts[tri[1]], verts[tri[2]]
+        n = np.cross(v1 - v0, v2 - v0)
+        ln = np.linalg.norm(n)
+        if ln > 1e-12:
+            n /= ln
+        for idx in tri:
+            norms[idx] += n
+    # Normalize
+    lengths = np.linalg.norm(norms, axis=1, keepdims=True)
+    lengths = np.maximum(lengths, 1e-12)
+    norms /= lengths
+    return norms
+
+
+def _write_glb(verts_np, faces_np, path, color=(70, 130, 255, 255)):
+    """Write a GLB file with a PBR material.
+
+    NOTE: Gradio 6 Model3D (Babylon.js) renders material-less OBJ files as
+    solid black. GLB with an explicit PBR material renders correctly.
+    """
+    import trimesh
+    tm = trimesh.Trimesh(vertices=np.asarray(verts_np, dtype=np.float64),
+                         faces=np.asarray(faces_np, dtype=np.int64),
+                         process=False)
+    tm.visual = trimesh.visual.TextureVisuals(
+        material=trimesh.visual.material.PBRMaterial(
+            baseColorFactor=list(color), metallicFactor=0.1, roughnessFactor=0.6))
+    tm.export(path)
+
+
 def _mesh_to_obj(mesh, name: str) -> str:
-    """Save mesh to a temp OBJ file and return the path."""
+    """Save mesh to a temp GLB file for proper 3D rendering (name .obj → .glb)."""
+    if name.endswith(".obj"):
+        name = name[:-4] + ".glb"
     path = _tmp(name)
-    to_obj(mesh, path)
+    positions, triangles = to_triangle_arrays(mesh)
+    _write_glb(positions, triangles, path)
     return path
 
 
@@ -157,23 +195,57 @@ def _silhouette_from_image(img_array: np.ndarray) -> np.ndarray:
         grey = img_array.mean(axis=2)
     else:
         grey = img_array.astype(float)
-    # White background → dark object: invert
+    # Mark dark pixels as the object (dark object on white background)
     binary = (grey < 128).astype(np.float32)
-    # If mostly dark, flip (assume dark background, bright object)
-    if binary.mean() < 0.5:
+    # The *object* should be the minority region. If the mask covers more
+    # than half the image, we grabbed the background — flip it.
+    # (Handles bright object on dark background automatically.)
+    if binary.mean() > 0.5:
         binary = 1.0 - binary
     return binary
 
 
+def _write_obj_with_normals(verts_np, faces_np, path):
+    """Write mesh for the 3D viewer (GLB; see _write_glb for why not OBJ)."""
+    _write_glb(verts_np, faces_np, path)
+
+
+def _prep_target(img_array: np.ndarray, res: int) -> np.ndarray:
+    """
+    Image → normalized binary silhouette target [res, res] float32.
+
+    Steps: binarize → crop to object bbox → pad square (aspect preserved) →
+    scale object to ~55% of frame (matches the seed sphere's projected
+    extent: scale 0.6 @ radius 3, fov 40°) → resize → vertical flip
+    (image row 0 = top, raster row 0 = bottom in OpenGL y-up clip space).
+    """
+    sil = _silhouette_from_image(img_array)
+    ys, xs = np.where(sil > 0.5)
+    if len(ys) > 0:
+        y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+        crop = sil[y0:y1, x0:x1]
+        h, w = crop.shape
+        side = int(max(h, w) / 0.55)  # object occupies 55% of frame
+        canvas = np.zeros((side, side), dtype=np.float32)
+        oy, ox = (side - h) // 2, (side - w) // 2
+        canvas[oy:oy + h, ox:ox + w] = crop
+        sil = canvas
+    from PIL import Image as PILImage
+    sil_img = PILImage.fromarray((sil * 255).astype(np.uint8))
+    sil_img = sil_img.resize((res, res), PILImage.BILINEAR)
+    sil_np = np.array(sil_img).astype(np.float32) / 255.0
+    return np.flipud(sil_np).copy()
+
+
 def tab2_run(
-    image: Optional[np.ndarray],
+    files,
     example_shape: str,
     genus: int,
     n_steps: int,
     n_views: int,
     progress=gr.Progress(),
 ) -> tuple:
-    """Run geometry optimization and return before-mesh, loss plot, status."""
+    """Run geometry optimization and return before-mesh, after-mesh, loss plot, status."""
     if not _NVDIFFRAST:
         msg = (
             "## ⚠️ nvdiffrast not available\n\n"
@@ -186,81 +258,179 @@ def tab2_run(
 
     try:
         device = torch.device("cuda")
+        import nvdiffrast.torch as dr
         from pipeline.topology_builder import build_topology
-        from pipeline.geometry_optimizer import optimize
-        from pipeline.cameras import orbit_cameras, transform_to_clip
+        from pipeline.geometry_optimizer import optimize, render_silhouette
+        from pipeline.cameras import orbit_cameras
 
-        progress(0, desc="Building topology...")
-        verts, faces = build_topology(genus=int(genus), subdivisions=2, device=device)
+        n_steps = int(n_steps)
+        n_views = int(n_views)
+        genus = int(genus)
+        res = 256
 
-        # Build target silhouette
-        if image is not None:
-            sil = _silhouette_from_image(np.array(image))
-        else:
-            # Create synthetic silhouette for chosen example shape
-            H = W = 128
-            sil = np.zeros((H, W), dtype=np.float32)
-            cx, cy, r = W // 2, H // 2, H // 2 - 8
-            for y in range(H):
-                for x in range(W):
-                    if example_shape == "Torus":
-                        d = abs(math.sqrt((x - cx) ** 2 + (y - cy) ** 2) - r * 0.6)
-                        if d < r * 0.3:
-                            sil[y, x] = 1.0
-                    else:  # Sphere
-                        if (x - cx) ** 2 + (y - cy) ** 2 < r ** 2:
-                            sil[y, x] = 1.0
+        # ── Load uploaded silhouette image(s). Each file = ONE camera view. ──
+        images: list = []
+        if files:
+            from PIL import Image as PILImage
+            if not isinstance(files, (list, tuple)):
+                files = [files]
+            for f in files:
+                fpath = f if isinstance(f, str) else getattr(f, "name", str(f))
+                images.append(np.array(PILImage.open(fpath).convert("RGB")))
+            # Uploads define the number of views — the slider is ignored.
+            n_views = len(images)
 
-        target = torch.tensor(sil, device=device).unsqueeze(0).unsqueeze(-1)  # [1,H,W,1]
+        progress(0.05, desc="Initialising nvdiffrast...")
+        ctx = dr.RasterizeCudaContext()
 
-        # Save before-mesh
-        before_path = _tmp("tab2_before.obj")
-        verts_np = verts.detach().cpu().numpy()
-        faces_np = faces.cpu().numpy()
-        with open(before_path, "w") as fh:
-            for x, y, z in verts_np:
-                fh.write(f"v {x:.6f} {y:.6f} {z:.6f}\n")
-            for a, b, c in faces_np:
-                fh.write(f"f {a+1} {b+1} {c+1}\n")
-
-        progress(0.1, desc="Optimizing geometry...")
-        result = optimize(
-            verts, faces,
-            target_images=[target] * int(n_views),
-            n_steps=int(n_steps),
-            device=device,
+        progress(0.1, desc="Building topology seed...")
+        init_verts, init_faces = build_topology(
+            genus=genus, boundaries=0,
+            # uploads need more vertex capacity for irregular outlines
+            subdivisions=3 if images else 2,
+            scale=0.6, device=device,
         )
-        opt_verts = result["verts"]
-        loss_history = result.get("losses", [])
 
-        # Save after-mesh
-        after_path = _tmp("tab2_after.obj")
-        verts_out = opt_verts.detach().cpu().numpy()
-        with open(after_path, "w") as fh:
-            for x, y, z in verts_out:
-                fh.write(f"v {x:.6f} {y:.6f} {z:.6f}\n")
-            for a, b, c in faces_np:
-                fh.write(f"f {a+1} {b+1} {c+1}\n")
+        # Camera rig. Uploaded views get explicit azimuths:
+        #   1 image  → front (0°)
+        #   2 images → front + side (0°, 90°) — best depth constraint
+        #   N images → evenly spaced over 360°
+        # An uploaded silhouette is treated as an eye-level view (elevation 0).
+        azimuths = None
+        if images:
+            if n_views == 1:
+                azimuths = [0.0]
+            elif n_views == 2:
+                azimuths = [0.0, 90.0]
+            else:
+                azimuths = [360.0 * i / n_views for i in range(n_views)]
+        mvps, _ = orbit_cameras(
+            n=n_views,
+            elevation_deg=0.0 if images else 25.0,
+            radius=3.0,
+            fov_deg=40.0, device=device,
+            azimuths_deg=azimuths,
+        )
 
-        # Loss plot
+        # Build target silhouettes
+        progress(0.15, desc="Rendering target silhouettes...")
+        if images:
+            sils = [_prep_target(img, res) for img in images]
+            target_images = torch.tensor(
+                np.stack(sils, axis=0), device=device
+            ).unsqueeze(-1).contiguous()          # [N, res, res, 1]
+        else:
+            # Use a reference shape to render targets
+            import trimesh
+            if example_shape == "Torus":
+                tm = trimesh.creation.torus(major_radius=1.0, minor_radius=0.30,
+                                            major_sections=48, minor_sections=24)
+            else:
+                tm = trimesh.creation.icosphere(subdivisions=4)
+            ref_np = np.array(tm.vertices, dtype=np.float32)
+            ref_np -= ref_np.mean(axis=0, keepdims=True)
+            max_ext = np.abs(ref_np).max()
+            if max_ext > 1e-6:
+                ref_np = ref_np / max_ext * 0.85
+            ref_verts = torch.tensor(ref_np, dtype=torch.float32, device=device)
+            ref_faces = torch.tensor(np.array(tm.faces, dtype=np.int32), device=device)
+            imgs = []
+            for i in range(n_views):
+                sil = render_silhouette(ctx, ref_verts, ref_faces, mvps[i], (res, res))
+                imgs.append(sil)
+            target_images = torch.cat(imgs, dim=0).clamp(0, 1)
+
+        # Save before mesh
+        before_path = _tmp("tab2_before.glb")
+        v_np = init_verts.detach().cpu().numpy()
+        f_np = init_faces.cpu().numpy()
+        _write_obj_with_normals(v_np, f_np, before_path)
+
+        # Optimize
+        progress(0.2, desc=f"Optimizing ({n_steps} steps)...")
+        final_verts, history = optimize(
+            ctx=ctx,
+            verts_init=init_verts,
+            faces=init_faces,
+            target_images=target_images,
+            mvps=mvps,
+            num_steps=n_steps,
+            lr=5e-3,
+            lambda_lap=0.05,
+            lambda_edge=0.01,
+            # Anti-flattening (active with < 3 views, where depth is weakly
+            # constrained and the mesh degenerates into paper-thin sheets):
+            #  - normal consistency: folded/creased sheets have adjacent faces
+            #    with opposing normals → directly penalises local thin fins
+            #  - volume hinge: keeps at least 40% of the seed volume
+            lambda_normal=0.02 if n_views < 3 else 0.0,
+            lambda_vol=2.0 if n_views < 3 else 0.0,
+            vol_min_ratio=0.4,
+            resolution=(res, res),
+            log_every=max(1, n_steps // 20),
+            scheduler=True,
+        )
+
+        # Save after mesh.
+        # Rotate -90° about Y so the optimised camera view (camera on +X axis)
+        # faces the Model3D viewer's default front (+Z) — the user immediately
+        # sees the view that was fitted to the silhouette.
+        rot = np.array([[0.0, 0.0, -1.0],
+                        [0.0, 1.0,  0.0],
+                        [1.0, 0.0,  0.0]])
+        after_path = _tmp("tab2_after.glb")
+        vout_np = final_verts.detach().cpu().numpy() @ rot.T
+        _write_obj_with_normals(vout_np, f_np, after_path)
+        # re-export the before mesh with the same rotation for fair comparison
+        _write_obj_with_normals(v_np @ rot.T, f_np, before_path)
+
+        # Fitted-view comparison: target silhouette vs final rendered silhouette
+        with torch.no_grad():
+            fitted_sil = render_silhouette(
+                ctx, final_verts, init_faces, mvps[0], (res, res)
+            ).squeeze().detach().cpu().numpy()
+        # raster row 0 = bottom; flip both for display in image orientation
+        target_np = np.flipud(target_images[0, :, :, 0].detach().cpu().numpy())
+        fitted_sil = np.flipud(fitted_sil)
+
+        # Plot: target | fitted | overlay + loss curve
         plot_path = None
-        if _MPL and loss_history:
-            fig, ax = plt.subplots(figsize=(7, 3))
-            ax.semilogy(loss_history, color="#4f8ef7", linewidth=2)
-            ax.set_xlabel("Step")
-            ax.set_ylabel("Loss (log)")
-            ax.set_title("Silhouette Optimization Loss")
-            ax.grid(True, alpha=0.3)
+        if _MPL and history:
+            fig, axes = plt.subplots(1, 4, figsize=(14, 3.2))
+            axes[0].imshow(target_np, cmap="gray"); axes[0].set_title("Target silhouette")
+            axes[1].imshow(fitted_sil, cmap="gray"); axes[1].set_title("Fitted (view 0)")
+            overlay = np.stack([target_np, fitted_sil, np.zeros_like(target_np)], axis=-1)
+            axes[2].imshow(overlay); axes[2].set_title("Overlay (yellow = match)")
+            for a in axes[:3]:
+                a.set_xticks([]); a.set_yticks([])
+            steps_list = [h["step"] for h in history]
+            total_list = [h["loss"] for h in history]
+            sil_list = [h["sil_loss"] for h in history]
+            axes[3].semilogy(steps_list, total_list, label="total", linewidth=2, color="#4f8ef7")
+            axes[3].semilogy(steps_list, sil_list, label="silhouette", linewidth=1.5,
+                             linestyle="--", color="#e74c3c")
+            axes[3].set_xlabel("Step"); axes[3].set_ylabel("Loss (log)")
+            axes[3].set_title("Loss"); axes[3].legend(); axes[3].grid(True, alpha=0.3)
             plt.tight_layout()
             plot_path = _tmp("tab2_loss.png")
             plt.savefig(plot_path, dpi=120)
             plt.close()
 
+        initial_loss = history[0]["sil_loss"] if history else 0
+        final_loss = history[-1]["sil_loss"] if history else 0
+        improvement = (initial_loss - final_loss) / max(initial_loss, 1e-8) * 100
+
         status = (
-            f"✅ Optimization complete\n\n"
-            f"- Steps: {n_steps}\n"
-            f"- Views: {n_views}\n"
-            f"- Final loss: {loss_history[-1]:.5f}" if loss_history else ""
+            f"## ✅ Optimization complete\n\n"
+            f"| Metric | Value |\n|---|---|\n"
+            f"| Steps | {n_steps} |\n"
+            f"| Views | {n_views} |\n"
+            f"| Vertices | {final_verts.shape[0]} |\n"
+            f"| Faces | {init_faces.shape[0]} |\n"
+            f"| Genus | {genus} |\n"
+            f"| Initial loss | {initial_loss:.5f} |\n"
+            f"| Final loss | {final_loss:.5f} |\n"
+            f"| Improvement | {improvement:.1f}% |\n"
         )
         return before_path, after_path, plot_path, status
 
@@ -502,13 +672,12 @@ def tab4_compute(
         fp_np    = fp.detach().numpy()
         verts_np = verts.numpy()
         faces_np = faces.numpy()
-        obj_path = _tmp("tab4_mesh.obj")
-        with open(obj_path, "w") as fh:
-            for x, y, z in verts_np:
-                fh.write(f"v {x:.6f} {y:.6f} {z:.6f}\n")
-            for i, (a, b, c) in enumerate(faces_np):
-                if fp_np[i] >= 0.5:
-                    fh.write(f"f {a+1} {b+1} {c+1}\n")
+        active_faces = np.array([f for i, f in enumerate(faces_np) if fp_np[i] >= 0.5])
+        obj_path = _tmp("tab4_mesh.glb")
+        if len(active_faces) > 0:
+            _write_obj_with_normals(verts_np, active_faces, obj_path)
+        else:
+            obj_path = None  # no faces survive the threshold — nothing to render
 
         return stats_md, grad_info or "_Gradient info only shown for meshes with rogue faces._", plot_path, obj_path
 
@@ -572,9 +741,15 @@ by the TopMod invariants (twin check, face-loop check, Euler characteristic).
         gr.Markdown(f"""
 ### Phase 2 — Differentiable Silhouette Fitting (nvdiffrast)
 
-Upload a **target silhouette** or pick a built-in example shape.  The optimizer builds
-a mesh with the requested topology, then adjusts vertex positions to match the silhouette
-using differentiable rasterization (nvdiffrast).
+Upload **one or more target silhouettes** (each image = one camera view) or pick a
+built-in example shape.  The optimizer builds a mesh with the requested topology, then
+adjusts vertex positions to match the silhouettes using differentiable rasterization.
+
+**View assignment for uploads:** 1 image → front view · 2 images → front + side (90°,
+best depth constraint) · N ≥ 3 → evenly spaced around 360°.  With fewer than 3 views,
+anti-flattening regularizers (normal consistency + volume hinge) are enabled, since a
+single silhouette cannot constrain depth — a paper-thin sheet has the same silhouette
+as a solid object.
 
 **GPU status:** {"✅ CUDA + nvdiffrast available" if _NVDIFFRAST else "⚠️ nvdiffrast **not** available — install with `pip install git+https://github.com/NVlabs/nvdiffrast`"}
 """)
@@ -585,13 +760,17 @@ using differentiable rasterization (nvdiffrast).
             )
         with gr.Row():
             with gr.Column(scale=1):
-                t2_image   = gr.Image(label="Target silhouette (optional PNG/JPG)", type="numpy", height=200)
+                t2_image   = gr.File(
+                    label="Target silhouette(s) — upload 1..N images, each = one view "
+                          "(1: front · 2: front+side 90° · N≥3: evenly spaced 360°)",
+                    file_count="multiple", file_types=["image"],
+                )
                 t2_example = gr.Dropdown(
                     ["Sphere", "Torus"], value="Sphere", label="Built-in example shape"
                 )
                 t2_genus   = gr.Slider(0, 2, value=0, step=1, label="Target genus")
                 t2_steps   = gr.Slider(100, 500, value=200, step=50, label="Optimization steps")
-                t2_views   = gr.Slider(4, 16, value=8, step=4, label="Camera views")
+                t2_views   = gr.Slider(1, 16, value=8, step=1, label="Camera views (1 = single-view silhouette fit)")
                 t2_btn     = gr.Button("Run Optimization", variant="primary", interactive=_NVDIFFRAST)
             with gr.Column(scale=2):
                 with gr.Row():
@@ -686,12 +865,10 @@ gradient-based topology optimisation (DMesh / LATO.2 style).
             inputs=[t4_mesh, t4_rogue_prob],
             outputs=[t4_stats, t4_grad, t4_plot, t4_model],
         )
-        # Auto-compute on load
-        demo.load(
-            fn=tab4_compute,
-            inputs=[t4_mesh, t4_rogue_prob],
-            outputs=[t4_stats, t4_grad, t4_plot, t4_model],
-        )
+        # NOTE: do NOT auto-compute via demo.load here.
+        # Gradio 6.12 has a Svelte "effect_update_depth_exceeded" infinite-loop bug:
+        # a demo.load that writes outputs into a *hidden* tab (with 3+ tabs present)
+        # freezes the whole page on any tab switch. User clicks the button instead.
 
     gr.Markdown("""
 ---
@@ -706,6 +883,8 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0", help="Bind host")
     parser.add_argument("--port", type=int, default=7860, help="Port")
     parser.add_argument("--share", action="store_true", help="Create public link")
+    parser.add_argument("--root-path", default=None,
+                        help="Root path when served behind a reverse proxy (e.g. /topmod)")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -720,6 +899,5 @@ if __name__ == "__main__":
         server_name=args.host,
         server_port=args.port,
         share=args.share,
-        theme=gr.themes.Soft(primary_hue="indigo"),
-        css=".gradio-container { max-width: 1100px !important; }",
+        root_path=args.root_path,
     )
