@@ -108,7 +108,7 @@ class OpEntry:
     token: str                    # tokenizer opcode or '—'
     oracle: str                   # closed-form element-count effect
     params: str                   # parameter meaning ('—' if none)
-    desc: str                     # what it does (Chinese)
+    desc: str                     # short explanation of what it does
     example: str                  # usage snippet
     base: Callable[[], DLFLMesh] = make_cube
     base_name: str = "cube"
@@ -183,226 +183,321 @@ def _apply_crust_hole(m):
 
 
 OPS: List[OpEntry] = [
-    # ── 1. 基础算子（Akleman & Chen 2003 极小完备集）────────────────────
-    OpEntry("create_vertex", "1. 基础算子",
+    # ── 1. Fundamental operators (Akleman & Chen 2003 minimal complete set) ──
+    OpEntry("create_vertex", "1. Fundamental Operators",
             "create_vertex(mesh, x, y, z) -> Vertex", "CV",
-            "V+1, E+0, F+1（点球面）",
-            "x,y,z — 坐标",
-            "创建一个孤立点球面（point sphere）：单顶点自成一个组件，是所有构造的起点。",
+            "V+1, E+0, F+1 (point sphere)",
+            "x, y, z — coordinates",
+            "Creates an isolated *point sphere*: a single vertex that forms "
+            "its own connected component with one degenerate face. It is the "
+            "starting point of every DLFL construction — all meshes grow from "
+            "point spheres by inserting edges.",
             "v = create_vertex(mesh, 0.0, 0.0, 0.0)",
-            no_image=True, no_image_reason="单个点，无可视化意义"),
-    OpEntry("delete_vertex", "1. 基础算子",
+            no_image=True,
+            no_image_reason="a single point — nothing meaningful to render"),
+    OpEntry("delete_vertex", "1. Fundamental Operators",
             "delete_vertex(mesh, vertex)", "—",
             "V−1, E+0, F−1",
             "—",
-            "删除一个孤立点球面。仅对无边顶点合法。",
+            "Removes an isolated point sphere. Only legal on a vertex with no "
+            "incident edges; it is the exact inverse of `create_vertex`.",
             "delete_vertex(mesh, v)",
-            no_image=True, no_image_reason="单个点，无可视化意义"),
-    OpEntry("insert_edge", "1. 基础算子",
+            no_image=True,
+            no_image_reason="a single point — nothing meaningful to render"),
+    OpEntry("insert_edge", "1. Fundamental Operators",
             "insert_edge(mesh, he1, he2) -> Edge", "IE",
-            "E+1；同面 → F+1（分面），异面 → F−1（并组件/开柄）",
-            "he1, he2 — 两个角（半边）",
-            "在两个角之间插入一条边。同一面内插入把面一分为二；跨面插入把两个面合并。这是 DLFL 的两大核心算子之一，任何时刻保持 2-流形。",
-            "hes = face.halfedges()\ninsert_edge(mesh, hes[0], hes[2])  # 四边形对角线",
+            "E+1; same face → F+1 (split), different faces → F−1 "
+            "(merge components / open handle)",
+            "he1, he2 — two corners (half-edges)",
+            "Inserts a new edge between two corners. If both corners lie on "
+            "the *same* face, the face is split in two (shown: a diagonal "
+            "chord splits a cube quad into two triangles). If they lie on "
+            "*different* faces, the two faces merge into one — this is how "
+            "components are joined and handles are opened. One of the two "
+            "core DLFL operators; the mesh is a valid 2-manifold after every "
+            "single call.",
+            "hes = face.halfedges()\n"
+            "insert_edge(mesh, hes[0], hes[2])  # diagonal across the quad",
             apply=_apply_insert_edge),
-    OpEntry("delete_edge", "1. 基础算子",
+    OpEntry("delete_edge", "1. Fundamental Operators",
             "delete_edge(mesh, edge)", "DE",
-            "E−1；两侧异面 → F−1（并面），两侧同面 → F+1",
+            "E−1; two distinct sides → F−1 (merge), same face both sides → F+1",
             "—",
-            "删除一条边。两侧是不同面时合并为一个面（图示：立方体一条边删除后两个方形并成六边形）。insert_edge 的逆算子。",
+            "Deletes an edge. When the two sides of the edge belong to "
+            "different faces, those faces merge into one (shown: removing one "
+            "cube edge merges two squares into a hexagon). The inverse of "
+            "`insert_edge`.",
             "delete_edge(mesh, edge)",
             apply=_apply_delete_edge),
 
-    # ── 2. 高层算子 ────────────────────────────────────────────────────
-    OpEntry("extrude_face", "2. 高层算子",
+    # ── 2. High-level operators ─────────────────────────────────────────────
+    OpEntry("extrude_face", "2. High-Level Operators",
             "extrude_face(mesh, face, dist=1.0) -> List[Face]", "—",
-            "V+n, E+2n, F+n（n = 面的度）",
-            "dist — 沿法线挤出距离",
-            "沿法线挤出一个面：顶面 + n 个侧面四边形。返回 [顶面] + 侧面列表。",
-            "new_faces = extrude_face(mesh, face, dist=0.6)\ntop = new_faces[0]",
+            "V+n, E+2n, F+n (n = face degree)",
+            "dist — extrusion distance along the face normal",
+            "Extrudes a face along its normal, creating a lifted copy of the "
+            "face (the *top*) connected to the original boundary by n side "
+            "quads — like pulling a box out of the surface. Returns "
+            "`[top_face] + side_faces`. The building block of the DOME scheme.",
+            "new_faces = extrude_face(mesh, face, dist=0.6)\n"
+            "top = new_faces[0]",
             apply=_apply_extrude),
-    OpEntry("stellate", "2. 高层算子",
+    OpEntry("stellate", "2. High-Level Operators",
             "stellate(mesh, face, dist=0.0) -> Vertex", "—",
             "V+1, E+n, F+n−1",
-            "dist — 顶点沿法线位移",
-            "星化一个面：质心加顶点，与各角连边，n 边形变 n 个三角形。",
+            "dist — apex displacement along the face normal",
+            "Stellates one face: adds an apex vertex at the face centroid "
+            "(optionally raised along the normal) and connects it to every "
+            "corner, turning one n-gon into n triangles — a pyramid grown on "
+            "the face.",
             "apex = stellate(mesh, face)",
             apply=_apply_stellate),
-    OpEntry("subdivide_edge", "2. 高层算子",
+    OpEntry("subdivide_edge", "2. High-Level Operators",
             "subdivide_edge(mesh, edge) -> Vertex", "—",
             "V+1, E+1, F+0",
             "—",
-            "在中点劈开一条边，返回中点顶点。",
+            "Splits an edge at its midpoint and returns the new midpoint "
+            "vertex. The two flanking faces each gain one corner; no face is "
+            "created or destroyed.",
             "mid = subdivide_edge(mesh, edge)",
             apply=_apply_subdivide_edge),
-    OpEntry("subdivide_face", "2. 高层算子",
+    OpEntry("subdivide_face", "2. High-Level Operators",
             "subdivide_face(mesh, face) -> Vertex", "—",
             "V+1, E+n, F+n−1",
             "—",
-            "面细分：质心顶点向各角连边（拓扑同 stellate，位置在面内）。",
+            "Fans a face from its centroid: a center vertex is added and "
+            "connected to every corner. Topologically identical to "
+            "`stellate`, but the new vertex stays in the face plane instead "
+            "of being lifted.",
             "c = subdivide_face(mesh, face)",
             apply=_apply_subdivide_face),
-    OpEntry("add_handle", "2. 高层算子",
+    OpEntry("add_handle", "2. High-Level Operators",
             "add_handle(mesh, face1, face2) -> List[Edge]", "HDL",
-            "V+0, E+n, F+n−2, χ−2, genus+1（同组件）",
+            "V+0, E+n, F+n−2, χ−2, genus+1 (same component)",
             "—",
-            "在两个同度面之间加柄（隧道）：两面消耗，生成 n 个侧面四边形。唯一改变 genus 的算子；也用于 crust 打孔。图示：立方体顶底面打通成方环。",
+            "Connects two faces of equal degree with a tunnel (handle): both "
+            "faces are consumed and n side quads bridge their boundaries. "
+            "This is the only operator that changes genus — a cube becomes a "
+            "square torus (shown: tunnel between two opposite faces). It is "
+            "also the hole-punching primitive for `create_crust` shells.",
             "add_handle(mesh, top_face, bottom_face)",
             apply=_apply_add_handle, alpha_after=0.55),
-    OpEntry("stellate_all", "2. 高层算子",
-            "stellate_all(mesh) -> List[Vertex]  # 原地", "STA",
+    OpEntry("stellate_all", "2. High-Level Operators",
+            "stellate_all(mesh) -> List[Vertex]  # in place", "STA",
             "V'=V+F, E'=3E, F'=2E",
             "—",
-            "对所有面星化，输出全三角形网格。是 honeycomb / star 的组成模块。",
+            "Stellates every face of the mesh at once, producing an "
+            "all-triangle mesh (a pyramid on every face). Used as a building "
+            "block inside the honeycomb and star schemes.",
             "apexes = stellate_all(mesh)",
             apply=_apply_stellate_all),
 
-    # ── 3. 经典细分 ────────────────────────────────────────────────────
-    OpEntry("catmull_clark", "3. 经典细分",
+    # ── 3. Classic subdivision ──────────────────────────────────────────────
+    OpEntry("catmull_clark", "3. Classic Subdivision",
             "catmull_clark(mesh) -> DLFLMesh", "CC",
-            "V'=V+E+F, E'=4E, F'=2E（全四边形）",
+            "V'=V+E+F, E'=4E, F'=2E (all quads)",
             "—",
-            "Catmull-Clark 细分：面点/边点/顶点平滑，输出全四边形，是工业标准光滑细分。",
+            "Catmull-Clark subdivision, the industry-standard smoothing "
+            "scheme: face points, edge points and repositioned vertex points "
+            "split every face into quads while pulling the surface toward a "
+            "smooth limit surface. Output is always an all-quad mesh.",
             "out = catmull_clark(mesh)",
             apply=catmull_clark),
-    OpEntry("dual", "3. 经典细分",
+    OpEntry("dual", "3. Classic Subdivision",
             "dual(mesh) -> DLFLMesh", "DUAL",
             "V'=F, E'=E, F'=V",
             "—",
-            "组合对偶：面变顶点（质心）、顶点变面。dual(dual(M)) ≅ M。立方体 ↔ 八面体。",
+            "Takes the combinatorial dual: every face becomes a vertex (at "
+            "its centroid) and every vertex becomes a face. Applying it twice "
+            "returns the original topology: `dual(dual(M)) ≅ M`. A cube maps "
+            "to an octahedron and vice versa.",
             "out = dual(mesh)",
             apply=dual),
-    OpEntry("doo_sabin", "3. 经典细分",
+    OpEntry("doo_sabin", "3. Classic Subdivision",
             "doo_sabin(mesh) -> DLFLMesh", "DS",
             "V'=2E, E'=4E, F'=V+E+F",
             "—",
-            "Doo-Sabin 细分（切角类）：每角一个新顶点，生成面面/边面/顶点面三类面。",
+            "Doo-Sabin subdivision (corner-cutting family): one new vertex "
+            "per face corner, producing shrunken *face-faces*, quad "
+            "*edge-faces*, and *vertex-faces* — every sharp corner and edge "
+            "of the input gets beveled away.",
             "out = doo_sabin(mesh)",
             apply=doo_sabin),
-    OpEntry("simplest_subdivide", "3. 经典细分",
+    OpEntry("simplest_subdivide", "3. Classic Subdivision",
             "simplest_subdivide(mesh) -> DLFLMesh", "SIMP",
             "V'=E, E'=2E, F'=F+V",
             "—",
-            "中边（simplest / Peters-Reif）细分：边中点为新顶点。立方体 → 立方八面体。",
+            "Mid-edge (simplest / Peters-Reif) subdivision: edge midpoints "
+            "become the only vertices; each face shrinks to its midpoint "
+            "polygon and each old vertex is replaced by a new face. A cube "
+            "becomes a cuboctahedron.",
             "out = simplest_subdivide(mesh)",
             apply=simplest_subdivide),
-    OpEntry("vertex_cutting", "3. 经典细分",
+    OpEntry("vertex_cutting", "3. Classic Subdivision",
             "vertex_cutting(mesh, offset=0.25) -> DLFLMesh", "VC",
             "V'=2E, E'=3E, F'=F+V",
-            "offset ∈ (0,0.5) — 切角深度",
-            "顶点截断：每个顶点被切掉，n 边形变 2n 边形。立方体 → 截角立方体。",
+            "offset ∈ (0, 0.5) — corner-cut depth",
+            "Vertex truncation: every vertex is sliced off, leaving a small "
+            "polygon where the corner was, and every n-gon becomes a 2n-gon. "
+            "A cube becomes a truncated cube.",
             "out = vertex_cutting(mesh, offset=0.25)",
             apply=vertex_cutting),
-    OpEntry("loop_subdivide", "3. 经典细分",
-            "loop_subdivide(mesh) -> DLFLMesh  # 仅三角网格", "LOOP",
+    OpEntry("loop_subdivide", "3. Classic Subdivision",
+            "loop_subdivide(mesh) -> DLFLMesh  # triangle meshes only", "LOOP",
             "V'=V+E, E'=4E, F'=4F",
             "—",
-            "Loop 细分：1 分 4 + β 权重平滑。非三角输入抛 ValueError。",
+            "Loop subdivision: every triangle is split 1-into-4 at edge "
+            "midpoints, with β-weighted smoothing of old vertices — the "
+            "standard smooth scheme for triangle meshes. Raises ValueError on "
+            "non-triangle input.",
             "out = loop_subdivide(make_icosahedron())",
             base=make_icosahedron, base_name="icosahedron",
             apply=loop_subdivide),
-    OpEntry("sqrt3_subdivide", "3. 经典细分",
-            "sqrt3_subdivide(mesh) -> DLFLMesh  # 仅三角网格", "SQRT3",
+    OpEntry("sqrt3_subdivide", "3. Classic Subdivision",
+            "sqrt3_subdivide(mesh) -> DLFLMesh  # triangle meshes only", "SQRT3",
             "V'=V+F, E'=3E, F'=3F",
             "—",
-            "√3 细分（Kobbelt）：质心插点 + 全边翻转。非三角输入抛 ValueError。",
+            "√3 subdivision (Kobbelt): a vertex is inserted at every face "
+            "centroid, then all original edges are flipped, tripling the "
+            "triangle count with the slowest possible growth rate. Raises "
+            "ValueError on non-triangle input.",
             "out = sqrt3_subdivide(make_icosahedron())",
             base=make_icosahedron, base_name="icosahedron",
             apply=sqrt3_subdivide),
 
-    # ── 4. TopMod 特色细分（clean-room 自参考语义实现）──────────────────
-    OpEntry("honeycomb_subdivide", "4. TopMod 特色细分",
+    # ── 4. TopMod remeshing schemes (clean-room, from reference semantics) ──
+    OpEntry("honeycomb_subdivide", "4. TopMod Remeshing Schemes",
             "honeycomb_subdivide(mesh) -> DLFLMesh", "HONEY",
             "V'=2E, E'=3E, F'=F+V",
             "—",
-            "蜂窝细分 = dual ∘ stellate_all。三角输入产生六边形主导网格。",
+            "Honeycomb subdivision, defined as `dual ∘ stellate_all`: "
+            "stellate every face, then dualize. Triangle input yields a "
+            "hexagon-dominated (honeycomb-like) mesh.",
             "out = honeycomb_subdivide(mesh)",
             apply=honeycomb_subdivide),
-    OpEntry("star_subdivide", "4. TopMod 特色细分",
-            "star_subdivide(mesh, offset=0.0)  # 原地", "STAR",
-            "V'=V+F+2E, E'=9E, F'=6E（全三角）",
-            "offset — 一轮顶点沿原面法线位移",
-            "星形细分 = stellate_all 两次；offset 把第一轮顶点抬起形成星刺。",
+    OpEntry("star_subdivide", "4. TopMod Remeshing Schemes",
+            "star_subdivide(mesh, offset=0.0)  # in place", "STAR",
+            "V'=V+F+2E, E'=9E, F'=6E (all triangles)",
+            "offset — first-round apex lift along original face normals",
+            "Star subdivision: `stellate_all` applied twice. A positive "
+            "offset lifts the first round of apexes along the original face "
+            "normals, growing star-like spikes on every face.",
             "star_subdivide(mesh, offset=0.3)",
             apply=_apply_star),
-    OpEntry("corner_cutting", "4. TopMod 特色细分",
+    OpEntry("corner_cutting", "4. TopMod Remeshing Schemes",
             "corner_cutting(mesh, alpha=0.5) -> DLFLMesh", "CCUT",
-            "V'=2E, E'=4E, F'=V+E+F（同 Doo-Sabin 拓扑）",
-            "alpha ∈ (0,1) — 张力（对角权重）",
-            "切角细分：Doo-Sabin 的参数化几何变体，alpha 控制新角靠近原角的程度。",
+            "V'=2E, E'=4E, F'=V+E+F (same topology as Doo-Sabin)",
+            "alpha ∈ (0, 1) — tension (diagonal weight)",
+            "Corner-cutting subdivision: a parameterized geometric variant "
+            "of Doo-Sabin with identical connectivity. `alpha` controls how "
+            "close each new corner stays to the original corner, i.e. how "
+            "aggressively corners are shaved off.",
             "out = corner_cutting(mesh, alpha=0.7)",
             apply=corner_cutting),
-    OpEntry("loop_style_subdivide", "4. TopMod 特色细分",
+    OpEntry("loop_style_subdivide", "4. TopMod Remeshing Schemes",
             "loop_style_subdivide(mesh, length=1.0) -> DLFLMesh", "LSTYLE",
             "V'=V+E, E'=4E, F'=F+2E",
-            "length ∈ [0,1] — 原顶点混合（1=保持）",
-            "Loop 连通性的多边形推广：每面切下角三角形，留中点 d 边形。三角输入时连通性 = Loop。",
+            "length ∈ [0, 1] — old-vertex blend (1 = keep position)",
+            "Loop connectivity generalized to arbitrary polygons: each face "
+            "gets its corner triangles cut off, leaving a central midpoint "
+            "d-gon. On triangle input the connectivity coincides exactly with "
+            "Loop subdivision.",
             "out = loop_style_subdivide(mesh)",
             apply=loop_style_subdivide),
-    OpEntry("fractal_subdivide", "4. TopMod 特色细分",
+    OpEntry("fractal_subdivide", "4. TopMod Remeshing Schemes",
             "fractal_subdivide(mesh, offset=1.0) -> DLFLMesh", "FRAC",
-            "V'=V+E+F, E'=6E, F'=4E（全三角）",
-            "offset — 尖顶高度系数",
-            "分形细分 = loop_style + 中央多边形星化（尖顶沿法线抬升），产生分形尖刺外观。",
+            "V'=V+E+F, E'=6E, F'=4E (all triangles)",
+            "offset — spike height factor",
+            "Fractal subdivision: `loop_style` followed by stellating every "
+            "central polygon with an apex raised along the face normal. "
+            "Repeated application produces a fractal, spiky landscape.",
             "out = fractal_subdivide(mesh, offset=1.0)",
             apply=fractal_subdivide),
-    OpEntry("pentagonal_subdivide", "4. TopMod 特色细分",
+    OpEntry("pentagonal_subdivide", "4. TopMod Remeshing Schemes",
             "pentagonal_subdivide(mesh, offset=0.0) -> DLFLMesh", "PENT",
-            "V'=V+2E+F, E'=5E, F'=2E（全五边形）",
-            "offset ∈ [0,1] — 辐条邻点向质心收拢",
-            "五边形细分：三等分每条边 + 质心辐条，每个 d 边形变 d 个五边形。四面体 → 正十二面体组合结构。",
+            "V'=V+2E+F, E'=5E, F'=2E (all pentagons)",
+            "offset ∈ [0, 1] — pull spoke neighbors toward the centroid",
+            "Pentagonal subdivision: every edge is trisected and every face "
+            "gets a centroid spoke, converting each d-gon into d pentagons — "
+            "the whole mesh becomes all-pentagon. A tetrahedron maps to the "
+            "combinatorial structure of a regular dodecahedron.",
             "out = pentagonal_subdivide(mesh)",
             apply=pentagonal_subdivide),
-    OpEntry("pentagonal2_subdivide", "4. TopMod 特色细分",
+    OpEntry("pentagonal2_subdivide", "4. TopMod Remeshing Schemes",
             "pentagonal2_subdivide(mesh, scale_factor=0.75) -> DLFLMesh", "PENT2",
             "V'=V+3E, E'=6E, F'=F+2E",
-            "scale_factor — 内多边形收缩",
-            "五边形细分变体 2：中点劈边 + 缩放内 d 边形 + 连接边；每面 = 内 d 边形 + d 个五边形。",
+            "scale_factor — inner-polygon shrink",
+            "Second pentagonal variant: edges are split at midpoints and a "
+            "scaled inner copy of each face is inserted, then connected — "
+            "each face becomes one inner d-gon surrounded by d pentagons.",
             "out = pentagonal2_subdivide(mesh, scale_factor=0.7)",
             apply=pentagonal2_subdivide),
-    OpEntry("dual1264_subdivide", "4. TopMod 特色细分",
+    OpEntry("dual1264_subdivide", "4. TopMod Remeshing Schemes",
             "dual1264_subdivide(mesh, sf=1.0) -> DLFLMesh", "D1264",
             "V'=4E, E'=6E, F'=F+E+V",
-            "sf — 内多边形缩放",
-            "12.6.4 对偶细分：类 Doo-Sabin，但每面的内多边形是 2d 边形（边上 1/3、2/3 点），三角输入产生 12.6.4 式镶嵌。",
+            "sf — inner-polygon scale",
+            "Dual 12.6.4 subdivision: Doo-Sabin-like, but each face's inner "
+            "polygon is a 2d-gon built from the 1/3 and 2/3 points of every "
+            "edge. Triangle input produces the semi-regular 12.6.4 tiling "
+            "pattern (dodecagons, hexagons, squares).",
             "out = dual1264_subdivide(mesh)",
             apply=dual1264_subdivide),
-    OpEntry("root4_subdivide", "4. TopMod 特色细分",
+    OpEntry("root4_subdivide", "4. TopMod Remeshing Schemes",
             "root4_subdivide(mesh, a=0.0, twist=0.0) -> DLFLMesh", "ROOT4",
             "V'=V+2E, E'=4E, F'=F+E",
-            "a — 原顶点平滑混合；twist — 内环采样滑移",
-            "Root-4 细分：蜂窝掩码内多边形 + 棱柱桥接 + 删除全部原边；原顶点保留（每边一个六边形）。",
+            "a — old-vertex smoothing blend; twist — inner-ring sampling shift",
+            "Root-4 subdivision: an inner polygon (honeycomb-mask weighted) "
+            "is inserted in every face and bridged to neighbors with "
+            "hexagons, while all original edges are deleted. Unlike "
+            "Doo-Sabin, the original vertices survive.",
             "out = root4_subdivide(mesh, a=0.3, twist=0.2)",
             apply=root4_subdivide),
-    OpEntry("checkerboard_remesh", "4. TopMod 特色细分",
+    OpEntry("checkerboard_remesh", "4. TopMod Remeshing Schemes",
             "checkerboard_remesh(mesh, thickness=0.25) -> DLFLMesh", "CHKB",
             "V'=V+4E, E'=9E, F'=F+4E",
-            "thickness ∈ (0,0.5) — 内缩/三等分比例",
-            "棋盘重网格化：内缩面 + 边三等分 + 角切弦；四边形输入输出仍全四边形，呈棋盘交错。",
+            "thickness ∈ (0, 0.5) — inset / trisection ratio",
+            "Checkerboard remeshing: each face is inset, each edge trisected, "
+            "and corners are chamfered, producing an alternating quad pattern. "
+            "Quad input stays all-quad, with a visible checkerboard layout.",
             "out = checkerboard_remesh(mesh, thickness=0.25)",
             apply=checkerboard_remesh),
-    OpEntry("ds_bc_new_subdivide", "4. TopMod 特色细分",
+    OpEntry("ds_bc_new_subdivide", "4. TopMod Remeshing Schemes",
             "ds_bc_new_subdivide(mesh, sf=1.0, length=1.0) -> DLFLMesh", "DSBC",
             "V'=V+4E, E'=7E, F'=F+2E",
-            "sf — DS 缩放；length — 原顶点混合",
-            "Doo-Sabin BC-new：对中点加密后的 2d 边形边界做 DS，原顶点存活；每面一个 2d 边形 + 每边两个五边形。",
+            "sf — DS corner scale; length — old-vertex blend",
+            "Doo-Sabin \"BC new\" variant: a Doo-Sabin pass is applied to the "
+            "midpoint-refined 2d-gon boundary of every face, but the original "
+            "vertices survive. Each face yields one 2d-gon plus two pentagons "
+            "per edge.",
             "out = ds_bc_new_subdivide(mesh, sf=0.9)",
             apply=ds_bc_new_subdivide),
-    OpEntry("dome_subdivide", "4. TopMod 特色细分",
-            "dome_subdivide(mesh, length=1.0, sf=1.0)  # 原地", "DOME",
+    OpEntry("dome_subdivide", "4. TopMod Remeshing Schemes",
+            "dome_subdivide(mesh, length=1.0, sf=1.0)  # in place", "DOME",
             "V'=V+59E, E'=116E, F'=F+56E",
-            "length — 高度轮廓；sf — 缩放轮廓",
-            "穹顶细分：每边四等分 + 每原面 7 层 DS 式挤出（内置高度/缩放轮廓），每面隆起一个圆顶。",
+            "length — height profile scale; sf — ring scale profile",
+            "Dome subdivision: every edge is split into quarters, then every "
+            "original face is extruded seven times with a built-in "
+            "height/scale profile, growing a rounded dome on each face — the "
+            "mesh sprouts a bubble on every side.",
             "dome_subdivide(mesh)",
             apply=_apply_dome),
 
-    # ── 5. 结构算子 ────────────────────────────────────────────────────
-    OpEntry("create_crust", "5. 结构算子",
+    # ── 5. Structural operators ─────────────────────────────────────────────
+    OpEntry("create_crust", "5. Structural Operators",
             "create_crust(mesh, thickness=0.1) -> (DLFLMesh, pairs)", "CRUST",
-            "V'=2V, E'=2E, F'=2F，2 个组件；打 k 孔后 genus'=2g+k−1",
-            "thickness — 壳厚（负值向外偏移）",
-            "壳体化：整个曲面反向复制并沿顶点平均法线内偏，形成内外双层壳。返回镜像面对列表，用 add_handle 逐对打孔形成隧道。图示：壳体 + 打穿一个孔。",
-            "out, pairs = create_crust(mesh, thickness=0.25)\nfor outer, inner in pairs[:2]:\n    add_handle(out, outer, inner)   # 每孔 genus +1（首孔连通两壳）",
+            "V'=2V, E'=2E, F'=2F, 2 components; after punching k holes: "
+            "genus' = 2g+k−1",
+            "thickness — shell thickness (negative offsets outward)",
+            "Turns a surface into a hollow shell: the whole mesh is duplicated "
+            "with reversed orientation and offset inward along averaged vertex "
+            "normals, giving an outer and an inner wall. Returns the list of "
+            "mirrored face pairs (outer face i ↔ inner face F+i); punching "
+            "holes through pairs with `add_handle` connects the walls and "
+            "creates tunnels (shown: shell with one hole punched).",
+            "out, pairs = create_crust(mesh, thickness=0.25)\n"
+            "for outer, inner in pairs[:2]:\n"
+            "    add_handle(out, outer, inner)  # each hole: genus +1\n"
+            "                                   # (first hole joins the walls)",
             apply=_apply_crust_hole, alpha_after=0.45),
 ]
 
@@ -411,93 +506,104 @@ OPS: List[OpEntry] = [
 # Markdown generation
 # ─────────────────────────────────────────────────────────────────────────────
 
-MD_HEADER = """# TopMod 算子完全参考
+MD_HEADER = """# TopMod Operator Reference
 
-> 由 `scripts/generate_op_gallery.py` 生成 — 手改会被覆盖，改注册表后重跑脚本。
+> Generated by `scripts/generate_op_gallery.py` — manual edits will be
+> overwritten. Edit the registry in that script and re-run it.
 
-GenesisTopmod 的全部网格算子：签名、参数、闭式 oracle（元素数量效果）、
-tokenizer 词元与 before/after 可视化。所有算子在每一步都保持 2-流形
-（Akleman & Chen 2003 的 DLFL 构造性保证）。
+Complete reference for every mesh operator in GenesisTopmod: signature,
+parameters, closed-form oracle (element-count effect), tokenizer opcode, and
+a before/after visualization. Every operator preserves 2-manifoldness at
+every step (the constructive DLFL guarantee of Akleman & Chen 2003).
 
-- **oracle 列**给出算子对 (V, E, F) 的精确闭式效果，是
-  `tests/test_semantic_oracle.py` 的断言依据；除 `add_handle`/crust 打孔外
-  全部保持 χ 与 genus。
-- **token 列**是 `topmod/tokenizer.py` 词汇表中的操作码；带 token 的算子可被
-  序列化为整数 ID 序列并由 `detokenize` 回放（自回归生成的基础）。
-- 可视化图由本脚本渲染，before/after 均标注 V/E/F。
+- The **oracle** column gives the exact closed-form effect on (V, E, F); it
+  is what `tests/test_semantic_oracle.py` asserts. All operators preserve χ
+  and genus except `add_handle` and crust hole punching.
+- The **token** column is the opcode in the `topmod/tokenizer.py` vocabulary;
+  tokenized operators can be serialized to integer-ID sequences and replayed
+  by `detokenize` (the basis for autoregressive mesh generation).
+- All images are rendered by this script; both sides are annotated with
+  V/E/F counts.
 
-## 速查表
+## Quick Reference
 
-| 算子 | token | oracle (V', E', F') | 可视化 |
-|---|---|---|---|
+| # | Operator | Token | Oracle (V', E', F') | Image |
+|---|---|---|---|---|
 """
 
 MD_USAGE_FOOTER = """
-## Tokenizer 用法
+## Tokenizer Usage
 
 ```python
 from topmod import tokenize, detokenize, build_vocabulary, encode_sequence
 from topmod.tokenizer import TopModToken
 
-# 任何 token 序列从确定性的二十面体基元开始执行
+# Every token sequence executes from the deterministic icosahedron primitive
 tokens = [TopModToken(op='PENT'), TopModToken(op='DUAL'), TopModToken(op='EOS')]
-mesh = detokenize(tokens)            # 保证 is_manifold(mesh) == True
+mesh = detokenize(tokens)            # guaranteed: is_manifold(mesh) == True
 
-vocab = build_vocabulary()           # 词元 → 整数 ID（append-only，向后兼容）
+vocab = build_vocabulary()           # token → integer ID (append-only)
 ids = encode_sequence(tokens, vocab)
 ```
 
-带孔壳体（生成模型可学的 genus 构造）：
+Holed shells (a genus construction that generative models can learn):
 
 ```python
-# CRUST 后镜像面对的序号确定：外层面 i ↔ 内层面 F+i，
-# 因此打孔可以直接用现有 HDL(face1, face2) 词元表达。
+# After CRUST the mirrored face pairs have deterministic ordinals:
+# outer face i ↔ inner face F+i, so hole punching is expressible with the
+# existing HDL(face1, face2) token.
 tokens = [TopModToken(op='CRUST'),
-          TopModToken(op='HDL', refs=(0, 20)),   # 二十面体：F=20
+          TopModToken(op='HDL', refs=(0, 20)),   # icosahedron: F=20
           TopModToken(op='EOS')]
 ```
 
-## 测试
+## Testing
 
 ```bash
 python3 -m pytest tests/ -q --ignore=tests/test_manifold_loss.py --ignore=tests/test_pipeline.py
 ```
 
-每个算子的 oracle 测试在 `tests/test_semantic_oracle.py`（四种基元 ×
-精确 ΔV/ΔE/ΔF/χ/genus + 面度数普查），token 测试在 `tests/test_tokenizer.py`。
+Per-operator oracle tests live in `tests/test_semantic_oracle.py` (four
+primitives × exact ΔV/ΔE/ΔF/χ/genus + face-degree census); token tests in
+`tests/test_tokenizer.py`.
 
-## 参考
+## References
 
-- Akleman & Chen 2003 — DLFL 极小完备算子集
-- `docs/reference_semantics.md` — 参考库（davyrisso/topmod3d, GPL）语义的
-  clean-room 提取与 χ 验证
-- `docs/vocabulary_roadmap.md` — 词汇表演进路线
+- Akleman & Chen 2003 — the minimal complete DLFL operator set
+- `docs/reference_semantics.md` — clean-room extraction (with χ
+  verification) of the reference library's semantics (davyrisso/topmod3d, GPL)
+- `docs/vocabulary_roadmap.md` — vocabulary evolution roadmap
 """
+
+
+def _anchor(i: int, name: str) -> str:
+    # GitHub slug for a heading like "### #3 insert_edge" is "3-insert_edge"
+    return f"{i}-{name.lower()}"
 
 
 def gen_markdown() -> None:
     lines = [MD_HEADER]
-    for op in OPS:
-        img = (f"[图](assets/ops/{op.name}.png)"
+    for i, op in enumerate(OPS, start=1):
+        img = (f"[img](assets/ops/{op.name}.png)"
                if not op.no_image else "—")
-        lines.append(f"| [`{op.name}`](#{op.name.lower()}) | {op.token} "
-                     f"| {op.oracle} | {img} |\n")
+        lines.append(f"| #{i} | [`{op.name}`](#{_anchor(i, op.name)}) "
+                     f"| {op.token} | {op.oracle} | {img} |\n")
 
     cat = None
-    for op in OPS:
+    for i, op in enumerate(OPS, start=1):
         if op.category != cat:
             cat = op.category
             lines.append(f"\n---\n\n## {cat}\n")
-        lines.append(f"\n### {op.name}\n\n")
+        lines.append(f"\n### #{i} {op.name}\n\n")
         lines.append(f"{op.desc}\n\n")
-        lines.append(f"- **签名**: `{op.signature}`\n")
-        lines.append(f"- **token**: `{op.token}`\n")
-        lines.append(f"- **oracle**: {op.oracle}\n")
-        lines.append(f"- **参数**: {op.params}\n")
-        lines.append(f"- **示例基元**: {op.base_name}\n\n")
+        lines.append(f"- **Signature**: `{op.signature}`\n")
+        lines.append(f"- **Token**: `{op.token}`\n")
+        lines.append(f"- **Oracle**: {op.oracle}\n")
+        lines.append(f"- **Parameters**: {op.params}\n")
+        lines.append(f"- **Example primitive**: {op.base_name}\n\n")
         lines.append("```python\n" + op.example + "\n```\n")
         if op.no_image:
-            lines.append(f"\n*（无可视化：{op.no_image_reason}）*\n")
+            lines.append(f"\n*(no image: {op.no_image_reason})*\n")
         else:
             lines.append(f"\n![{op.name}](assets/ops/{op.name}.png)\n")
 
