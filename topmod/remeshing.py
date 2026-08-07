@@ -1102,3 +1102,63 @@ def dome_subdivide(mesh: DLFLMesh, length: float = 1.0,
                 v.y = cy + scale * (dsy - cy)
                 v.z = cz + scale * (dsz - cz)
             current = top
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 4c — crust / shell creation (docs/reference_semantics.md, DLFLCrust.cc)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def create_crust(mesh: DLFLMesh, thickness: float = 0.1):
+    """
+    Crust / shell creation (TopMod createCrust).
+
+    Duplicate the entire surface with reversed orientation and offset the
+    copy inward along per-vertex averaged face normals by *thickness*
+    (negative thickness offsets outward instead) — producing two nested,
+    disjoint, oppositely-oriented closed surfaces.
+
+    Returns (new_mesh, pairs) where *pairs* is a list of
+    (outer_face, inner_face) mirror pairs in the new mesh, for later
+    hole punching: each `add_handle(new_mesh, outer, inner)` punches a
+    tunnel through the wall (Δχ = −2).  After k ≥ 1 holes on a
+    connected genus-g input: genus' = 2g + k − 1.
+
+    Oracle: V' = 2V, E' = 2E, F' = 2F, χ' = 2χ, 2 components.
+    """
+    positions: List[Tuple[float, float, float]] = []
+    vid_to_idx: Dict[int, int] = {}
+    verts = list(mesh.iter_vertices())
+    for v in verts:
+        vid_to_idx[v.id] = len(positions)
+        positions.append((v.x, v.y, v.z))
+
+    # Per-vertex averaged (normalized) face normal
+    n_verts = len(verts)
+    for v in verts:
+        nx = ny = nz = 0.0
+        for he in v.outgoing_halfedges():
+            fn = he.face.normal()
+            nx += fn[0]
+            ny += fn[1]
+            nz += fn[2]
+        mag = (nx * nx + ny * ny + nz * nz) ** 0.5
+        if mag > 1e-12:
+            nx, ny, nz = nx / mag, ny / mag, nz / mag
+        positions.append((v.x - thickness * nx,
+                          v.y - thickness * ny,
+                          v.z - thickness * nz))
+
+    faces: List[List[int]] = []
+    face_list = list(mesh.iter_faces())
+    for f in face_list:                       # outer copy: same winding
+        faces.append([vid_to_idx[v.id] for v in f.vertices()])
+    for f in face_list:                       # inner copy: reversed winding
+        ring = [vid_to_idx[v.id] + n_verts for v in f.vertices()]
+        ring.reverse()
+        faces.append(ring)
+
+    out = _build_mesh(positions, faces)
+    new_faces = list(out.iter_faces())
+    nf = len(face_list)
+    pairs = [(new_faces[i], new_faces[nf + i]) for i in range(nf)]
+    return out, pairs

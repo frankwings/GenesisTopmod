@@ -33,6 +33,7 @@ no GPL code is copied.*
 | `checkerboard_remesh` (token `CHKB`) | V'=V+4E, E'=9E, F'=F+4E; all-quad on quad input (param thickness) | ✅ 2026-08-07 |
 | `ds_bc_new_subdivide` (token `DSBC`) | V'=V+4E, E'=7E, F'=F+2E (params sf, length) | ✅ 2026-08-07 |
 | `dome_subdivide` (token `DOME`) | V'=V+59E, E'=116E, F'=F+56E; in-place composition (params length, sf) | ✅ 2026-08-07 |
+| `create_crust` (token `CRUST`) | V'=2V, E'=2E, F'=2F, 2 components; punch k holes via `add_handle` on mirror pairs (HDL tokens) → genus 2g+k−1 | ✅ 2026-08-07 |
 | 4 fundamental ops (create/delete vertex, insert/delete edge) | per Akleman & Chen 2003 | ✅ |
 
 Tokenizer note: `DUAL`/`DS` vocabulary IDs are appended AFTER the REF block,
@@ -52,9 +53,19 @@ DONE (batch 2): honeycomb, star, corner_cutting, loop_style, fractal.
 DONE (batch 3): pentagonal, pentagonal2, dual1264, root4.
 DONE (batch 4a): checkerboard, ds_bc_new.
 DONE (batch 4b): dome.
+DONE (batch 4c): create_crust (+ hole punching = existing add_handle/HDL).
 See the Current Vocabulary table.
 
-Tier 2 is complete — all 13 reference subdivision schemes implemented.
+Tier 2 is complete — all 13 reference subdivision schemes + crust
+implemented.
+
+multiConnectFaces status: NOT implemented as a token by design.
+- Its core primitive `connectFaces` ≡ our `add_handle` (already a token: HDL).
+- The greedy half-edge-pairing variant has no input-only closed-form
+  oracle (data-dependent geometric matching) — unsuitable as a
+  deterministic vocabulary token.
+- Convex-hull variants = hull construction + k × add_handle; revisit if
+  the Blender plugin needs them as macros (Blender ships a hull op).
 
 ## Tier 3 — Structural operators (beyond subdivision)
 
@@ -79,6 +90,6 @@ From `dlflaux` standalone modules (verified present 2026-08-06):
 
 ## Ceiling
 
-25 current + 4 (T3) ≈ **29-op vocabulary**, matching the
+26 current + remaining T3 candidates ≈ **29-op vocabulary**, matching the
 original TopMod's expressive range while remaining differentiable-pipeline-
 and Blender-embeddable.

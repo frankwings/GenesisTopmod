@@ -852,3 +852,65 @@ class TestDomeOracle:
         mesh = make_cube()
         dome_subdivide(mesh)
         assert counts(mesh) == (716, 1392, 678)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 4c — crust / shell (docs/reference_semantics.md, DLFLCrust.cc)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from topmod.remeshing import create_crust   # noqa: E402
+
+
+class TestCrustOracle:
+    """create_crust: duplicate the surface reversed and offset inward:
+    V'=2V, E'=2E, F'=2F, 2 components, no holes yet.
+    Punching k holes via add_handle on mirror pairs: genus' = 2g + k − 1."""
+
+    def test_counts_two_components(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out, pairs = create_crust(mesh, thickness=0.1)
+        assert counts(out) == (2 * V, 2 * E, 2 * F), name
+        assert out.component_count() == 2, name
+        assert len(pairs) == F, name
+        assert_valid(out, f"crust on {name}")
+
+    def test_pairs_are_mirrors(self):
+        out, pairs = create_crust(make_cube())
+        for outer, inner in pairs:
+            assert outer.degree() == inner.degree()
+
+    def test_punch_one_hole_thickened_disc(self):
+        """Sphere crust + 1 hole → thickened disc ≅ sphere (genus 0)."""
+        out, pairs = create_crust(make_cube())
+        add_handle(out, pairs[0][0], pairs[0][1])
+        assert out.component_count() == 1
+        assert out.genus() == 0
+        assert_valid(out, "crust + 1 hole")
+
+    def test_punch_two_holes_torus(self):
+        """Sphere crust + 2 holes → torus (genus 1)."""
+        out, pairs = create_crust(make_cube())
+        add_handle(out, pairs[0][0], pairs[0][1])
+        add_handle(out, pairs[1][0], pairs[1][1])
+        assert out.genus() == 1
+        assert_valid(out, "crust + 2 holes")
+
+    def test_punch_all_cube_faces_genus_5(self):
+        """All 6 faces of a cube crust punched → genus 5 (reference)."""
+        out, pairs = create_crust(make_cube())
+        for outer, inner in pairs:
+            add_handle(out, outer, inner)
+        assert out.genus() == 5
+        assert out.component_count() == 1
+        assert_valid(out, "crust + 6 holes")
+
+    def test_thickness_changes_geometry_not_topology(self):
+        a, _ = create_crust(make_cube(), thickness=0.1)
+        b, _ = create_crust(make_cube(), thickness=0.3)
+        assert counts(a) == counts(b)
+        pa = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in a.vertices.values())
+        pb = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in b.vertices.values())
+        assert pa != pb
