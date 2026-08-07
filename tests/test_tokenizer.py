@@ -579,9 +579,9 @@ class TestVocabulary:
         max_ref = 128
         vocab   = build_vocabulary(n_position_bins=n_bins, max_ordinal=max_ref)
         # 6 op tokens + n_bins coord tokens + max_ref ref tokens
-        # + 16 extension ops (DUAL..SQRT3 + HONEY/STAR/CCUT/LSTYLE/FRAC
-        #   + PENT/PENT2/D1264/ROOT4)
-        assert len(vocab) == 6 + n_bins + max_ref + 16
+        # + 18 extension ops (DUAL..SQRT3 + HONEY/STAR/CCUT/LSTYLE/FRAC
+        #   + PENT/PENT2/D1264/ROOT4 + CHKB/DSBC)
+        assert len(vocab) == 6 + n_bins + max_ref + 18
 
     def test_encode_eos(self):
         vocab  = build_vocabulary(n_position_bins=32, max_ordinal=64)
@@ -904,6 +904,28 @@ class TestBatch2Tokens:
             'CCUT':   (60, 120, 62),    # 2E, 4E, V+E+F
             'LSTYLE': (42, 120, 80),    # V+E, 4E, F+2E
             'FRAC':   (62, 180, 120),   # V+E+F, 6E, 4E
+        }
+        for op, cnt in expected.items():
+            mesh = detokenize([TopModToken(op=op), TopModToken(op='EOS')],
+                              validate_steps=True)
+            assert (mesh.V(), mesh.E(), mesh.F()) == cnt, op
+            assert is_manifold(mesh), op
+
+
+class TestBatch4Tokens:
+    """CHKB / DSBC extension tokens."""
+
+    def test_vocab_backward_compatible(self):
+        vocab = build_vocabulary(n_position_bins=128, max_ordinal=100)
+        base = 6 + 128 + 100 + 16   # after DUAL..ROOT4
+        for i, op in enumerate(('CHKB', 'DSBC')):
+            assert vocab[op] == base + i
+
+    def test_detokenize_each(self):
+        """Each opcode executes on the icosahedron base (V12 E30 F20)."""
+        expected = {
+            'CHKB': (132, 270, 140),   # V+4E, 9E, F+4E
+            'DSBC': (132, 210, 80),    # V+4E, 7E, F+2E
         }
         for op, cnt in expected.items():
             mesh = detokenize([TopModToken(op=op), TopModToken(op='EOS')],

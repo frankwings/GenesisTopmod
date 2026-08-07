@@ -849,3 +849,179 @@ def root4_subdivide(mesh: DLFLMesh, a: float = 0.0, twist: float = 0.0) -> DLFLM
                       inner[h.id]])
 
     return _build_mesh(positions, faces)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 4a — schemes from docs/reference_semantics.md §§9, 11
+# ─────────────────────────────────────────────────────────────────────────────
+
+def checkerboard_remesh(mesh: DLFLMesh, thickness: float = 0.25) -> DLFLMesh:
+    """
+    Checkerboard remeshing (TopMod checkerBoardRemeshing).
+
+    Reference pipeline: inset every face, trisect every original edge at
+    *thickness*·length from each end, chord every corner around each old
+    vertex, then delete the inset spokes.  Final connectivity (derived,
+    χ-verified):
+
+      - inner d-gon per old face:        [q(he) …]
+      - central quad per half-edge:      [c(he), c(he.twin), q(he.next), q(he)]
+      - corner quad per half-edge:       [c(he.prev.twin), v, c(he), q(he)]
+
+    where q(he) = inset corner of he.face at he.origin and c(he) = point
+    at *thickness* along he from he.origin.
+
+    Oracle: V' = V + 4E, E' = 9E, F' = F + 4E; χ and genus preserved.
+    All-quad output on all-quad input.  *thickness* ∈ (0, 0.5): geometric.
+    """
+    t = thickness
+    positions: List[Tuple[float, float, float]] = []
+
+    vid_to_idx: Dict[int, int] = {}
+    for v in mesh.iter_vertices():
+        vid_to_idx[v.id] = len(positions)
+        positions.append((v.x, v.y, v.z))
+
+    # c(he): checker point at t along he from he.origin (2 per edge)
+    c_idx: Dict[int, int] = {}
+    for he in mesh.iter_halfedges():
+        u, w = he.origin, he.twin.origin
+        c_idx[he.id] = len(positions)
+        positions.append((u.x + t * (w.x - u.x),
+                          u.y + t * (w.y - u.y),
+                          u.z + t * (w.z - u.z)))
+
+    # q(he): inset corner — he.origin pulled inward along both incident
+    # boundary directions of the face by t.
+    q_idx: Dict[int, int] = {}
+    for f in mesh.iter_faces():
+        for he in f.halfedges():
+            v = he.origin
+            wn = he.twin.origin      # next vertex along the face
+            wp = he.prev.origin      # previous vertex along the face
+            q_idx[he.id] = len(positions)
+            positions.append((v.x + t * (wn.x - v.x) + t * (wp.x - v.x),
+                              v.y + t * (wn.y - v.y) + t * (wp.y - v.y),
+                              v.z + t * (wn.z - v.z) + t * (wp.z - v.z)))
+
+    faces: List[List[int]] = []
+
+    # Inner d-gon per face (same winding)
+    for f in mesh.iter_faces():
+        faces.append([q_idx[he.id] for he in f.halfedges()])
+
+    # Central + corner quads per half-edge
+    for f in mesh.iter_faces():
+        for he in f.halfedges():
+            faces.append([c_idx[he.id],
+                          c_idx[he.twin.id],
+                          q_idx[he.next.id],
+                          q_idx[he.id]])
+            faces.append([c_idx[he.prev.twin.id],
+                          vid_to_idx[he.origin.id],
+                          c_idx[he.id],
+                          q_idx[he.id]])
+
+    return _build_mesh(positions, faces)
+
+
+def ds_bc_new_subdivide(mesh: DLFLMesh, sf: float = 1.0,
+                        length: float = 1.0) -> DLFLMesh:
+    """
+    Doo-Sabin BC-new subdivision (TopMod dooSabinSubdivideBCNew).
+
+    DS polygon computed from the mid-edge-refined boundary (a 2d-gon per
+    face), original vertices survive; the reference's midpoint vertices
+    are eliminated by bypass chords.  Final connectivity (derived,
+    χ-verified):
+
+      - top 2d-gon per face:  [tv(he), tm(he) …]
+      - v-side pentagon per edge: [tmA(h), tvA(h), v, tvB(t.next), tmB(t)]
+      - w-side pentagon per edge: [w, tvA(h.next), tmA(h), tmB(t), tvB(t)]
+
+    where tv/tm are the per-face DS corners at old vertices / edge
+    midpoints, scaled by *sf* about the face centroid.
+
+    Oracle: V' = V + 4E, E' = 7E, F' = F + 2E; χ and genus preserved.
+    *sf* = DS scale, *length* = old-vertex blend (1 = keep): geometric.
+    """
+    positions: List[Tuple[float, float, float]] = []
+
+    # Per-face DS corners on the refined 2d-gon boundary
+    # (alternating old corners and edge midpoints), DS mask =
+    # (point + centroid + two adjacent refined midpoints)/4, then scaled
+    # by sf about the refined-boundary centroid.
+    tv_idx: Dict[int, int] = {}
+    tm_idx: Dict[int, int] = {}
+    top_of_vertex: Dict[int, List[int]] = {}   # old vid -> its top corners
+
+    for f in mesh.iter_faces():
+        hes = f.halfedges()
+        ring: List[Tuple[float, float, float]] = []
+        for he in hes:
+            v = he.origin
+            w = he.twin.origin
+            ring.append((v.x, v.y, v.z))
+            ring.append(((v.x + w.x) / 2, (v.y + w.y) / 2, (v.z + w.z) / 2))
+        n = len(ring)
+        cx = sum(p[0] for p in ring) / n
+        cy = sum(p[1] for p in ring) / n
+        cz = sum(p[2] for p in ring) / n
+
+        def ds_point(k: int) -> Tuple[float, float, float]:
+            p = ring[k]
+            a = ring[(k - 1) % n]
+            b = ring[(k + 1) % n]
+            m1 = ((p[0] + a[0]) / 2, (p[1] + a[1]) / 2, (p[2] + a[2]) / 2)
+            m2 = ((p[0] + b[0]) / 2, (p[1] + b[1]) / 2, (p[2] + b[2]) / 2)
+            x = (p[0] + cx + m1[0] + m2[0]) / 4.0
+            y = (p[1] + cy + m1[1] + m2[1]) / 4.0
+            z = (p[2] + cz + m1[2] + m2[2]) / 4.0
+            return (cx + sf * (x - cx), cy + sf * (y - cy), cz + sf * (z - cz))
+
+        for i, he in enumerate(hes):
+            tv_idx[he.id] = len(positions)
+            positions.append(ds_point(2 * i))
+            top_of_vertex.setdefault(he.origin.id, []).append(tv_idx[he.id])
+            tm_idx[he.id] = len(positions)
+            positions.append(ds_point(2 * i + 1))
+
+    # Old vertices, blended toward the average of their top corners
+    vid_to_idx: Dict[int, int] = {}
+    for v in mesh.iter_vertices():
+        tops = top_of_vertex[v.id]
+        k = len(tops)
+        ax = sum(positions[i][0] for i in tops) / k
+        ay = sum(positions[i][1] for i in tops) / k
+        az = sum(positions[i][2] for i in tops) / k
+        vid_to_idx[v.id] = len(positions)
+        positions.append((length * v.x + (1 - length) * ax,
+                          length * v.y + (1 - length) * ay,
+                          length * v.z + (1 - length) * az))
+
+    faces: List[List[int]] = []
+
+    # Top 2d-gon per face (same winding)
+    for f in mesh.iter_faces():
+        ring2: List[int] = []
+        for he in f.halfedges():
+            ring2.append(tv_idx[he.id])
+            ring2.append(tm_idx[he.id])
+        faces.append(ring2)
+
+    # Two pentagons per old edge
+    for e in mesh.iter_edges():
+        h, t = e.he0, e.he1
+        v, w = h.origin, t.origin
+        faces.append([tm_idx[h.id],
+                      tv_idx[h.id],
+                      vid_to_idx[v.id],
+                      tv_idx[t.next.id],
+                      tm_idx[t.id]])
+        faces.append([vid_to_idx[w.id],
+                      tv_idx[h.next.id],
+                      tm_idx[h.id],
+                      tm_idx[t.id],
+                      tv_idx[t.id]])
+
+    return _build_mesh(positions, faces)
