@@ -27,16 +27,17 @@ def acquire(args: argparse.Namespace) -> None:
     import thingi10k
 
     # ── Initialise dataset ─────────────────────────────────────────────
-    print(f"[acquire] Initialising thingi10k (cache_dir={args.cache_dir}) …")
+    print(f"[acquire] Initialising thingi10k …")
     sys.stdout.flush()
     os.makedirs(args.cache_dir, exist_ok=True)
-    thingi10k.init(variant='raw', cache_dir=args.cache_dir)
+    thingi10k.init()
 
     print("[acquire] Filtering dataset (manifold, closed, single component, "
           "genus 0–2, facets 100–20000) …")
     sys.stdout.flush()
     ds = thingi10k.dataset(
         manifold=True,
+        oriented=True,
         closed=True,
         num_components=1,
         genus=(0, 2),
@@ -61,14 +62,16 @@ def acquire(args: argparse.Namespace) -> None:
     records = []
     for i, idx in enumerate(selected):
         row = ds[idx]
+        # genus = (2 - euler) / 2 for closed orientable single-component mesh
+        genus = (2 - int(row['euler'])) // 2
         entry = {
             'file_id':   int(row['file_id']),
             'file_path': str(row['file_path']),
-            'genus':     int(row['genus']),
+            'genus':     genus,
             'num_facets': int(row['num_facets']),
         }
         records.append(entry)
-        genus_counter[int(row['genus'])] += 1
+        genus_counter[genus] += 1
 
         if (i + 1) % 200 == 0:
             print(f"[acquire] Processed {i+1}/{take_n} …")

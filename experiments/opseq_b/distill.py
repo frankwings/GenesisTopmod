@@ -42,7 +42,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 import nvdiffrast.torch as dr
-import trimesh
+import thingi10k
 
 from topmod.primitives    import make_icosahedron
 from topmod.high_level_ops import add_handle
@@ -241,6 +241,9 @@ def distill(args: argparse.Namespace) -> None:
         print(f"{_ts()} [warn] CUDA not available, falling back to cpu")
         device = 'cpu'
 
+    # ── Init thingi10k for load_file ──────────────────────────────────
+    thingi10k.init()
+
     # ── Setup directories ──────────────────────────────────────────────
     os.makedirs(args.out_dir, exist_ok=True)
     os.makedirs(os.path.join(_SCRIPT_DIR, 'logs'), exist_ok=True)
@@ -318,9 +321,9 @@ def distill(args: argparse.Namespace) -> None:
 
             # ── Load mesh ──────────────────────────────────────────────
             try:
-                tm = trimesh.load(file_path, force='mesh')
-                target_verts_np = np.array(tm.vertices, dtype=np.float32)
-                target_faces_np = np.array(tm.faces,    dtype=np.int32)
+                target_verts_np, target_faces_np = thingi10k.load_file(file_path)
+                target_verts_np = target_verts_np.astype(np.float32)
+                target_faces_np = target_faces_np.astype(np.int32)
             except Exception as exc:
                 print(f"{_ts()} [skip] file_id={file_id}: load error: {exc!r}")
                 sys.stdout.flush()

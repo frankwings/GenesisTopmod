@@ -410,11 +410,16 @@ def evaluate(args: argparse.Namespace) -> None:
             )
             n_samples_saved += 1
 
-        if (idx + 1) % 20 == 0:
-            elapsed = time.time() - t0
-            print(f"  [{idx+1}/{n_eval}] manifold={n_manifold}  "
-                  f"parse_fail={n_parse_fail}  "
-                  f"iou={np.mean(sil_ious):.3f}  ({elapsed:.0f}s)")
+        # Release cached blocks: 4000-step no-KV-cache sampling allocates
+        # thousands of distinct-size buffers → allocator fragmentation OOMs
+        # the 32 GB card after ~1.5 h without this.
+        torch.cuda.empty_cache()
+
+        elapsed = time.time() - t0
+        print(f"  [{idx+1}/{n_eval}] len={len(generated_ids)}  "
+              f"manifold={n_manifold}  parse_fail={n_parse_fail}  "
+              f"iou={np.mean(sil_ious):.3f}  ({elapsed:.0f}s, "
+              f"{elapsed/(idx+1):.0f}s/sample)", flush=True)
 
     # ── Aggregate ──────────────────────────────────────────────────────
     n_decoded        = n_eval - n_parse_fail
