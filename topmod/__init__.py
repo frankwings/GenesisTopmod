@@ -20,7 +20,7 @@ from .remeshing import (dual, doo_sabin, simplest_subdivide,
                         pentagonal_subdivide, pentagonal2_subdivide,
                         dual1264_subdivide, root4_subdivide,
                         checkerboard_remesh, ds_bc_new_subdivide,
-                        dome_subdivide)
+                        dome_subdivide, create_crust)
 from .tokenizer import (
     TopModToken,
     quantize_coord, dequantize_coord,
@@ -52,6 +52,7 @@ __all__ = [
     "pentagonal_subdivide", "pentagonal2_subdivide",
     "dual1264_subdivide", "root4_subdivide",
     "checkerboard_remesh", "ds_bc_new_subdivide", "dome_subdivide",
+    "create_crust",
     # Tokenizer
     "TopModToken",
     "quantize_coord", "dequantize_coord",

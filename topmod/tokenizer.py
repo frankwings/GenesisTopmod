@@ -35,6 +35,8 @@ Token vocabulary
   CHKB ()                        — checkerboard (V'=V+4E, F'=F+4E)
   DSBC ()                        — Doo-Sabin BC-new (V'=V+4E, F'=F+2E)
   DOME ()                        — dome (V'=V+59E, E'=116E, F'=F+56E)
+  CRUST()                        — crust/shell (V'=2V, E'=2E, F'=2F, 2 comps;
+                                   punch holes with HDL on mirror pairs i↔F+i)
   CV   (qx, qy, qz)             — set next vertex position (quantized)
   EOS  ()                        — end-of-sequence
 
@@ -80,7 +82,7 @@ from .remeshing import (dual, doo_sabin, simplest_subdivide,
                         pentagonal_subdivide, pentagonal2_subdivide,
                         dual1264_subdivide, root4_subdivide,
                         checkerboard_remesh, ds_bc_new_subdivide,
-                        dome_subdivide)
+                        dome_subdivide, create_crust)
 from .high_level_ops import stellate_all
 from .primitives import make_icosahedron
 from .validate import is_manifold, check_all
@@ -379,6 +381,14 @@ def _dome(mesh: DLFLMesh) -> DLFLMesh:
     return mesh
 
 
+def _crust(mesh: DLFLMesh) -> DLFLMesh:
+    # Mirror-pair face ordinals are deterministic (outer i ↔ inner F+i),
+    # so hole punching is expressible with existing HDL(face1, face2)
+    # tokens after CRUST.
+    out, _pairs = create_crust(mesh)
+    return out
+
+
 # Zero-argument global remeshing opcodes → executor.
 # LOOP / SQRT3 raise ValueError on non-triangular meshes (documented
 # precondition); a generative model emitting them on invalid state gets a
@@ -403,6 +413,7 @@ _GLOBAL_OPS = {
     'CHKB':  checkerboard_remesh,
     'DSBC':  ds_bc_new_subdivide,
     'DOME':  _dome,
+    'CRUST': _crust,
 }
 
 def detokenize(
@@ -585,7 +596,8 @@ def build_vocabulary(
     # sequences and checkpoints encoded with the old vocabulary stay valid.
     for op in ('DUAL', 'DS', 'STA', 'SIMP', 'VC', 'LOOP', 'SQRT3',
                'HONEY', 'STAR', 'CCUT', 'LSTYLE', 'FRAC',
-               'PENT', 'PENT2', 'D1264', 'ROOT4', 'CHKB', 'DSBC', 'DOME'):
+               'PENT', 'PENT2', 'D1264', 'ROOT4', 'CHKB', 'DSBC', 'DOME',
+               'CRUST'):
         vocab[op] = idx
         idx += 1
 
