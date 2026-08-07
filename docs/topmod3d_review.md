@@ -20,7 +20,10 @@ Structure (173 C++ files):
 
 ## Why It Is Unsuitable as Our Substrate
 
-1. **GPL v2 contagion.** The entire codebase is GPL v2+. Linking or porting
+1. **GPL v2 contagion.** The entire codebase is GPL v2+ (verified
+   2026-08-06: no root LICENSE file, but source files carry full
+   "GPL v2 or later" header blocks — per-file headers are the only safe
+   interpretation). Linking or porting
    its code would force GenesisTopmod (and anything shipping it) under GPL,
    blocking future commercial licensing. We may read it for *semantics*,
    never copy implementation.
@@ -49,12 +52,21 @@ Structure (173 C++ files):
 1. **Semantic oracle.** Reference implementation to cross-validate our
    operators: same mesh, same operation, compare V/E/F/genus against ours.
 
-2. **Vocabulary roadmap.** Each of its ~20 subdivision/remeshing schemes is
-   a candidate token for our tokenizer (currently 6 ops). It proves the
+2. **Vocabulary roadmap.** Its subdivision/remeshing schemes are candidate
+   tokens for our tokenizer (currently 6 ops). Verified count (2026-08-06,
+   shallow clone): `DLFLSubdiv.hh` exposes **22 subdivision functions**
+   (loop, honeycomb, pentagonal ×2, doo-sabin BC ×2, corner-cutting ×3,
+   root4, catmull-clark, star, sqrt3, fractal, stellate ×2, dome, dual1264,
+   checkerboard, simplest, vertex-cutting, loop-style). It proves the
    operator algebra scales to 30+ ops — a much higher expressiveness
    ceiling for the generative model. When we extend the vocabulary
    (e.g. a Doo-Sabin token), we re-implement from its documented semantics
    in `DLFLSubdiv.hh` — clean-room, no code copied.
+
+   Beyond subdivision, `dlflaux` also contains standalone high-value token
+   candidates: `DLFLConvexHull`, `DLFLCrust` (crust/shell modeling),
+   `DLFLMultiConnect`, and `DLFLCubicBezierConnect` (Bezier handles) —
+   richer connect operators beyond our current `add_handle`.
 
 3. **Positioning evidence.** Confirms the original is C++/GPL/GUI-bound,
    which is precisely why a from-scratch, ML-native Python reimplementation
