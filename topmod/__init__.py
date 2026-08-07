@@ -16,7 +16,9 @@ from .subdivision import catmull_clark
 from .remeshing import (dual, doo_sabin, simplest_subdivide,
                         vertex_cutting, loop_subdivide, sqrt3_subdivide,
                         honeycomb_subdivide, star_subdivide, corner_cutting,
-                        loop_style_subdivide, fractal_subdivide)
+                        loop_style_subdivide, fractal_subdivide,
+                        pentagonal_subdivide, pentagonal2_subdivide,
+                        dual1264_subdivide, root4_subdivide)
 from .tokenizer import (
     TopModToken,
     quantize_coord, dequantize_coord,
@@ -45,6 +47,8 @@ __all__ = [
     "vertex_cutting", "loop_subdivide", "sqrt3_subdivide",
     "honeycomb_subdivide", "star_subdivide", "corner_cutting",
     "loop_style_subdivide", "fractal_subdivide",
+    "pentagonal_subdivide", "pentagonal2_subdivide",
+    "dual1264_subdivide", "root4_subdivide",
     # Tokenizer
     "TopModToken",
     "quantize_coord", "dequantize_coord",

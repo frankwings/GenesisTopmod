@@ -28,6 +28,10 @@ Token vocabulary
   CCUT ()                        — corner cutting (DS topology, α default)
   LSTYLE()                       — loop-style split (V'=V+E, F'=F+2E)
   FRAC ()                        — fractal = loop_style + apex (V'=V+E+F)
+  PENT ()                        — pentagonal (V'=V+2E+F, all pentagons)
+  PENT2()                        — pentagonal variant 2 (V'=V+3E)
+  D1264()                        — dual 12.6.4 (V'=4E, F'=F+E+V)
+  ROOT4()                        — root-4 (V'=V+2E, F'=F+E)
   CV   (qx, qy, qz)             — set next vertex position (quantized)
   EOS  ()                        — end-of-sequence
 
@@ -69,7 +73,9 @@ from .subdivision import catmull_clark
 from .remeshing import (dual, doo_sabin, simplest_subdivide,
                         vertex_cutting, loop_subdivide, sqrt3_subdivide,
                         honeycomb_subdivide, star_subdivide, corner_cutting,
-                        loop_style_subdivide, fractal_subdivide)
+                        loop_style_subdivide, fractal_subdivide,
+                        pentagonal_subdivide, pentagonal2_subdivide,
+                        dual1264_subdivide, root4_subdivide)
 from .high_level_ops import stellate_all
 from .primitives import make_icosahedron
 from .validate import is_manifold, check_all
@@ -380,6 +386,10 @@ _GLOBAL_OPS = {
     'CCUT':  corner_cutting,
     'LSTYLE': loop_style_subdivide,
     'FRAC':  fractal_subdivide,
+    'PENT':  pentagonal_subdivide,
+    'PENT2': pentagonal2_subdivide,
+    'D1264': dual1264_subdivide,
+    'ROOT4': root4_subdivide,
 }
 
 def detokenize(
@@ -561,7 +571,8 @@ def build_vocabulary(
     # (EOS/CC/CV/IE/DE/HDL, COORD_*, REF_*) keep their values —
     # sequences and checkpoints encoded with the old vocabulary stay valid.
     for op in ('DUAL', 'DS', 'STA', 'SIMP', 'VC', 'LOOP', 'SQRT3',
-               'HONEY', 'STAR', 'CCUT', 'LSTYLE', 'FRAC'):
+               'HONEY', 'STAR', 'CCUT', 'LSTYLE', 'FRAC',
+               'PENT', 'PENT2', 'D1264', 'ROOT4'):
         vocab[op] = idx
         idx += 1
 
