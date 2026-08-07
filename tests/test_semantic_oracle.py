@@ -514,3 +514,134 @@ class TestSqrt3Oracle:
         twice = sqrt3_subdivide(once)
         assert counts(twice) == (V + F, 3 * E, 3 * F)
         assert_valid(twice, "sqrt3 ×2 on octahedron")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 2 (reference_semantics.md): honeycomb, star, corner_cutting,
+# loop_style, fractal — compositions / geometric variants of existing ops
+# ─────────────────────────────────────────────────────────────────────────────
+
+from topmod.remeshing import (   # noqa: E402
+    honeycomb_subdivide, star_subdivide, corner_cutting,
+    loop_style_subdivide, fractal_subdivide,
+)
+
+
+class TestHoneycombOracle:
+    """honeycomb = dual ∘ stellate_all topologically: V'=2E, E'=3E, F'=F+V."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = honeycomb_subdivide(mesh)
+        assert counts(out) == (2 * E, 3 * E, F + V), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"honeycomb on {name}")
+
+    def test_cube_face_types(self):
+        """Cube → 6 quads (per face) + 8 hexagons (per valence-3 vertex)."""
+        out = honeycomb_subdivide(make_cube())
+        assert counts(out) == (24, 36, 14)
+        degs = sorted(f.degree() for f in out.faces.values())
+        assert degs == [4] * 6 + [6] * 8
+
+    def test_matches_dual_stellate_composition(self):
+        """Same element counts as dual(stellate_all(M))."""
+        m1 = make_icosahedron()
+        out = honeycomb_subdivide(m1)
+        m2 = make_icosahedron()
+        stellate_all(m2)
+        comp = dual(m2)
+        assert counts(out) == counts(comp)
+        assert (sorted(f.degree() for f in out.faces.values())
+                == sorted(f.degree() for f in comp.faces.values()))
+
+
+class TestStarOracle:
+    """star = stellate_all ∘ stellate_all: V'=V+F+2E, E'=9E, F'=6E."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        chi0 = mesh.euler_characteristic()
+        star_subdivide(mesh)
+        assert counts(mesh) == (V + F + 2 * E, 9 * E, 6 * E), name
+        assert mesh.euler_characteristic() == chi0, name
+        assert all(f.degree() == 3 for f in mesh.faces.values()), name
+        assert_valid(mesh, f"star on {name}")
+
+    def test_cube(self):
+        mesh = make_cube()
+        star_subdivide(mesh, offset=0.3)
+        assert counts(mesh) == (38, 108, 72)
+
+
+class TestCornerCuttingOracle:
+    """corner_cutting(alpha): geometric variant of doo_sabin — same topology."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = corner_cutting(mesh, alpha=0.5)
+        assert counts(out) == (2 * E, 4 * E, V + E + F), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"corner_cutting on {name}")
+
+    def test_same_topology_as_doo_sabin(self):
+        mesh = make_cube()
+        cc = corner_cutting(mesh, alpha=0.7)
+        ds = doo_sabin(mesh)
+        assert counts(cc) == counts(ds)
+        assert (sorted(f.degree() for f in cc.faces.values())
+                == sorted(f.degree() for f in ds.faces.values()))
+
+    def test_alpha_changes_geometry_not_topology(self):
+        a = corner_cutting(make_cube(), alpha=0.3)
+        b = corner_cutting(make_cube(), alpha=0.9)
+        assert counts(a) == counts(b)
+        pa = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in a.vertices.values())
+        pb = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in b.vertices.values())
+        assert pa != pb
+
+
+class TestLoopStyleOracle:
+    """loop_style: polygonal Loop connectivity: V'=V+E, E'=4E, F'=F+2E."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = loop_style_subdivide(mesh)
+        assert counts(out) == (V + E, 4 * E, F + 2 * E), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"loop_style on {name}")
+
+    def test_cube(self):
+        out = loop_style_subdivide(make_cube())
+        assert counts(out) == (20, 48, 30)
+        degs = sorted(f.degree() for f in out.faces.values())
+        assert degs == [3] * 24 + [4] * 6   # 24 corner tris + 6 central quads
+
+    def test_matches_loop_counts_on_triangles(self):
+        """On an all-tri mesh, connectivity counts equal Loop's."""
+        m = make_icosahedron()
+        assert counts(loop_style_subdivide(m)) == counts(loop_subdivide(m))
+
+
+class TestFractalOracle:
+    """fractal = loop_style split + stellate central faces:
+    V'=V+E+F, E'=6E, F'=4E, all-tri."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = fractal_subdivide(mesh, offset=1.0)
+        assert counts(out) == (V + E + F, 6 * E, 4 * E), name
+        assert out.genus() == mesh.genus(), name
+        assert all(f.degree() == 3 for f in out.faces.values()), name
+        assert_valid(out, f"fractal on {name}")
+
+    def test_cube(self):
+        out = fractal_subdivide(make_cube())
+        assert counts(out) == (26, 72, 48)
