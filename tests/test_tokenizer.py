@@ -579,8 +579,8 @@ class TestVocabulary:
         max_ref = 128
         vocab   = build_vocabulary(n_position_bins=n_bins, max_ordinal=max_ref)
         # 6 op tokens + n_bins coord tokens + max_ref ref tokens
-        # + 7 extension ops (DUAL, DS, STA, SIMP, VC, LOOP, SQRT3)
-        assert len(vocab) == 6 + n_bins + max_ref + 7
+        # + 12 extension ops (DUAL..SQRT3 + HONEY/STAR/CCUT/LSTYLE/FRAC)
+        assert len(vocab) == 6 + n_bins + max_ref + 12
 
     def test_encode_eos(self):
         vocab  = build_vocabulary(n_position_bins=32, max_ordinal=64)
@@ -793,7 +793,8 @@ class TestDualDsTokens:
         assert vocab['DUAL'] == 6 + 128 + 100
         assert vocab['DS'] == 6 + 128 + 100 + 1
         # later extensions keep appending in fixed order
-        for i, op in enumerate(('STA', 'SIMP', 'VC', 'LOOP', 'SQRT3')):
+        for i, op in enumerate(('STA', 'SIMP', 'VC', 'LOOP', 'SQRT3',
+                                'HONEY', 'STAR', 'CCUT', 'LSTYLE', 'FRAC')):
             assert vocab[op] == 6 + 128 + 100 + 2 + i
 
     def test_encode_decode_roundtrip(self):
@@ -881,3 +882,30 @@ class TestGlobalOpTokens:
                 TopModToken(op='LOOP'),
                 TopModToken(op='EOS'),
             ])
+
+
+class TestBatch2Tokens:
+    """HONEY / STAR / CCUT / LSTYLE / FRAC extension tokens."""
+
+    def test_encode_decode_roundtrip(self):
+        vocab = build_vocabulary(n_position_bins=128, max_ordinal=100)
+        vocab_inv = {v: k for k, v in vocab.items()}
+        ops = ['HONEY', 'STAR', 'CCUT', 'LSTYLE', 'FRAC', 'EOS']
+        tokens = [TopModToken(op=o) for o in ops]
+        back = decode_sequence(encode_sequence(tokens, vocab), vocab_inv)
+        assert [t.op for t in back] == ops
+
+    def test_detokenize_each(self):
+        """Each opcode executes on the icosahedron base (V12 E30 F20)."""
+        expected = {
+            'HONEY':  (60, 90, 32),     # 2E, 3E, F+V
+            'STAR':   (92, 270, 180),   # V+F+2E, 9E, 6E
+            'CCUT':   (60, 120, 62),    # 2E, 4E, V+E+F
+            'LSTYLE': (42, 120, 80),    # V+E, 4E, F+2E
+            'FRAC':   (62, 180, 120),   # V+E+F, 6E, 4E
+        }
+        for op, cnt in expected.items():
+            mesh = detokenize([TopModToken(op=op), TopModToken(op='EOS')],
+                              validate_steps=True)
+            assert (mesh.V(), mesh.E(), mesh.F()) == cnt, op
+            assert is_manifold(mesh), op

@@ -52,42 +52,25 @@ def dual(mesh: DLFLMesh) -> DLFLMesh:
 # Doo-Sabin
 # ─────────────────────────────────────────────────────────────────────────────
 
-def doo_sabin(mesh: DLFLMesh) -> DLFLMesh:
+def _corner_cut_topology(
+    mesh: DLFLMesh,
+    corner_pos: Dict[int, Tuple[float, float, float]],
+) -> DLFLMesh:
     """
-    One round of Doo-Sabin subdivision (corner-cutting).
+    Shared topology builder for Doo-Sabin-class corner-cutting schemes.
 
-    For every corner (half-edge he = corner of he.face at he.origin) a new
-    vertex is created at the average of: the corner vertex, the face
-    centroid, and the midpoints of the two face edges incident to that
-    corner.
-
-    New faces:
-      face-face   : per primal face, its corner points in face order
-      edge-face   : per primal edge, quad joining the 4 corner points of
-                    the two incident half-edges
-      vertex-face : per primal vertex, its corner points around the vertex
-
-    Oracle: V' = 2E (one per half-edge), E' = 4E, F' = V + E + F;
-    χ and genus preserved.
+    *corner_pos* maps each half-edge id (= corner of he.face at he.origin)
+    to the position of that corner's new vertex.  The output topology is
+    always: face-faces + edge-quads + vertex-faces →
+    V' = 2E, E' = 4E, F' = V + E + F.
     """
     positions: List[Tuple[float, float, float]] = []
     corner_idx: Dict[int, int] = {}   # halfedge id -> new vertex index
 
-    # ── Corner points ──────────────────────────────────────────────────
     for f in mesh.iter_faces():
-        cx, cy, cz = f.centroid()
         for he in f.halfedges():
-            v = he.origin
-            p = he.prev.origin          # previous vertex in face loop
-            nx = he.twin.origin         # next vertex (= he.destination)
-            m1 = ((v.x + p.x) / 2, (v.y + p.y) / 2, (v.z + p.z) / 2)
-            m2 = ((v.x + nx.x) / 2, (v.y + nx.y) / 2, (v.z + nx.z) / 2)
             corner_idx[he.id] = len(positions)
-            positions.append((
-                (v.x + cx + m1[0] + m2[0]) / 4.0,
-                (v.y + cy + m1[1] + m2[1]) / 4.0,
-                (v.z + cz + m1[2] + m2[2]) / 4.0,
-            ))
+            positions.append(corner_pos[he.id])
 
     faces: List[List[int]] = []
 
@@ -118,6 +101,33 @@ def doo_sabin(mesh: DLFLMesh) -> DLFLMesh:
         faces.append(ring)
 
     return _build_mesh(positions, faces)
+
+
+def doo_sabin(mesh: DLFLMesh) -> DLFLMesh:
+    """
+    One round of Doo-Sabin subdivision (corner-cutting).
+
+    Each corner's new vertex is the average of: the corner vertex, the
+    face centroid, and the midpoints of the two face edges incident to
+    that corner.
+
+    Oracle: V' = 2E, E' = 4E, F' = V + E + F; χ and genus preserved.
+    """
+    corner_pos: Dict[int, Tuple[float, float, float]] = {}
+    for f in mesh.iter_faces():
+        cx, cy, cz = f.centroid()
+        for he in f.halfedges():
+            v = he.origin
+            p = he.prev.origin
+            nx = he.twin.origin
+            m1 = ((v.x + p.x) / 2, (v.y + p.y) / 2, (v.z + p.z) / 2)
+            m2 = ((v.x + nx.x) / 2, (v.y + nx.y) / 2, (v.z + nx.z) / 2)
+            corner_pos[he.id] = (
+                (v.x + cx + m1[0] + m2[0]) / 4.0,
+                (v.y + cy + m1[1] + m2[1]) / 4.0,
+                (v.z + cz + m1[2] + m2[2]) / 4.0,
+            )
+    return _corner_cut_topology(mesh, corner_pos)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -324,5 +334,210 @@ def sqrt3_subdivide(mesh: DLFLMesh) -> DLFLMesh:
         w = vid_to_idx[t.origin.id]
         faces.append([u, cb, ca])
         faces.append([w, ca, cb])
+
+    return _build_mesh(positions, faces)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 2 — schemes from docs/reference_semantics.md (clean-room)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _copy_mesh(mesh: DLFLMesh) -> DLFLMesh:
+    """Rebuild an identical DLFLMesh (fresh ids)."""
+    positions: List[Tuple[float, float, float]] = []
+    vid_to_idx: Dict[int, int] = {}
+    for v in mesh.iter_vertices():
+        vid_to_idx[v.id] = len(positions)
+        positions.append((v.x, v.y, v.z))
+    faces = [[vid_to_idx[v.id] for v in f.vertices()] for f in mesh.iter_faces()]
+    return _build_mesh(positions, faces)
+
+
+def honeycomb_subdivide(mesh: DLFLMesh) -> DLFLMesh:
+    """
+    Honeycomb subdivision (TopMod honeycombSubdivide).
+
+    Topologically identical to dual(stellate_all(M)) — per reference
+    semantics (docs/reference_semantics.md §1); implemented as exactly
+    that composition.  Geometry uses stellated-triangle centroids
+    (the reference uses a trigonometric averaging mask — geometric
+    difference only, topology identical).
+
+    Oracle: V' = 2E, E' = 3E, F' = F + V; χ and genus preserved.
+    """
+    from .high_level_ops import stellate_all
+    tmp = _copy_mesh(mesh)
+    stellate_all(tmp)
+    return dual(tmp)
+
+
+def star_subdivide(mesh: DLFLMesh, offset: float = 0.0) -> None:
+    """
+    Star subdivision (TopMod starSubdivide), in place.
+
+    = stellate_all applied twice; the first-round apexes are then
+    displaced by *offset* along their original face normals.
+
+    Oracle: V' = V + F + 2E, E' = 9E, F' = 6E (all-tri);
+    χ and genus preserved.
+    """
+    from .high_level_ops import stellate_all
+    normals = [f.normal() for f in mesh.iter_faces()]
+    apexes = stellate_all(mesh)           # aligned with the face order above
+    stellate_all(mesh)
+    if offset:
+        for apex, n in zip(apexes, normals):
+            apex.x += offset * n[0]
+            apex.y += offset * n[1]
+            apex.z += offset * n[2]
+
+
+def corner_cutting(mesh: DLFLMesh, alpha: float = 0.5) -> DLFLMesh:
+    """
+    Corner-cutting subdivision (TopMod cornerCuttingSubdivide).
+
+    Geometric variant of Doo-Sabin: identical topology, but each face's
+    new corner i is a weighted average of the face's vertices with the
+    diagonal weight exposed as the tension parameter *alpha*:
+
+        w_ii = alpha
+        w_ij = (1 - alpha) * (3 + 2 cos(2π(i-j)/d)) / (3d - 5)
+
+    Oracle: V' = 2E, E' = 4E, F' = V + E + F; χ and genus preserved.
+    *alpha* affects geometry only.
+    """
+    import math
+    corner_pos: Dict[int, Tuple[float, float, float]] = {}
+    for f in mesh.iter_faces():
+        hes = f.halfedges()
+        verts = [he.origin for he in hes]
+        d = len(verts)
+        denom = 3 * d - 5
+        for i, he in enumerate(hes):
+            x = y = z = 0.0
+            for j, v in enumerate(verts):
+                if i == j:
+                    w = alpha
+                else:
+                    w = (1.0 - alpha) * (3.0 + 2.0 * math.cos(
+                        2.0 * math.pi * (i - j) / d)) / denom
+                x += w * v.x
+                y += w * v.y
+                z += w * v.z
+            corner_pos[he.id] = (x, y, z)
+    return _corner_cut_topology(mesh, corner_pos)
+
+
+def _split_faces_positions(
+    mesh: DLFLMesh, length: float,
+) -> Tuple[List[Tuple[float, float, float]], Dict[int, int], Dict[int, int]]:
+    """
+    Shared vertex layout for loop_style / fractal: blended original
+    vertices + one midpoint per edge.
+
+    Returns (positions, vid_to_idx, eid_to_idx).
+    """
+    positions: List[Tuple[float, float, float]] = []
+    vid_to_idx: Dict[int, int] = {}
+    for v in mesh.iter_vertices():
+        mids = []
+        for he in v.outgoing_halfedges():
+            w = he.twin.origin
+            mids.append(((v.x + w.x) / 2, (v.y + w.y) / 2, (v.z + w.z) / 2))
+        n = len(mids)
+        ax = sum(m[0] for m in mids) / n
+        ay = sum(m[1] for m in mids) / n
+        az = sum(m[2] for m in mids) / n
+        vid_to_idx[v.id] = len(positions)
+        positions.append((length * v.x + (1 - length) * ax,
+                          length * v.y + (1 - length) * ay,
+                          length * v.z + (1 - length) * az))
+
+    eid_to_idx: Dict[int, int] = {}
+    for e in mesh.iter_edges():
+        v0, v1 = e.vertices()
+        eid_to_idx[e.id] = len(positions)
+        positions.append(((v0.x + v1.x) / 2,
+                          (v0.y + v1.y) / 2,
+                          (v0.z + v1.z) / 2))
+    return positions, vid_to_idx, eid_to_idx
+
+
+def loop_style_subdivide(mesh: DLFLMesh, length: float = 1.0) -> DLFLMesh:
+    """
+    Loop-style subdivision (TopMod loopStyleSubdivide) — the polygonal
+    generalization of Loop connectivity: split every edge at its
+    midpoint; per d-gon face cut off each old-vertex corner as a
+    triangle, leaving a central midpoint d-gon.
+
+    Original vertices are blended: length·p + (1−length)·avg(midpoints).
+
+    Oracle: V' = V + E, E' = 4E, F' = F + 2E; χ and genus preserved.
+    On all-tri input the connectivity equals Loop's (geometry differs).
+    """
+    positions, vid_to_idx, eid_to_idx = _split_faces_positions(mesh, length)
+
+    faces: List[List[int]] = []
+    for f in mesh.iter_faces():
+        hes = f.halfedges()
+        # corner triangle per old vertex: [m(prev), v, m(cur)]
+        for he in hes:
+            faces.append([eid_to_idx[he.prev.edge.id],
+                          vid_to_idx[he.origin.id],
+                          eid_to_idx[he.edge.id]])
+        # central midpoint d-gon
+        faces.append([eid_to_idx[he.edge.id] for he in hes])
+
+    return _build_mesh(positions, faces)
+
+
+def fractal_subdivide(mesh: DLFLMesh, offset: float = 1.0) -> DLFLMesh:
+    """
+    Fractal subdivision (TopMod fractalSubdivide).
+
+    = loop_style split, then stellate each central midpoint polygon with
+    an apex displaced along the face normal by
+    h = offset · sqrt(max(L2² − L1², 0)), where L2 = distance between
+    consecutive midpoints and L1 = half the across-face corner distance
+    (reference heuristic; geometric only).
+
+    Oracle: V' = V + E + F, E' = 6E, F' = 4E (all-tri);
+    χ and genus preserved.
+    """
+    import math
+    positions, vid_to_idx, eid_to_idx = _split_faces_positions(mesh, 1.0)
+
+    # Apex per face
+    fid_to_idx: Dict[int, int] = {}
+    for f in mesh.iter_faces():
+        cx, cy, cz = f.centroid()
+        nx, ny, nz = f.normal()
+        verts = f.vertices()
+        d = len(verts)
+        # L2: distance between two consecutive edge midpoints
+        e0, e1 = f.halfedges()[0], f.halfedges()[1]
+        m0 = positions[eid_to_idx[e0.edge.id]]
+        m1 = positions[eid_to_idx[e1.edge.id]]
+        L2 = math.dist(m0, m1)
+        # L1: half the distance between opposite corners
+        va, vb = verts[0], verts[d // 2]
+        L1 = math.dist((va.x, va.y, va.z), (vb.x, vb.y, vb.z)) / 2.0
+        h = offset * math.sqrt(max(L2 * L2 - L1 * L1, 0.0))
+        fid_to_idx[f.id] = len(positions)
+        positions.append((cx + h * nx, cy + h * ny, cz + h * nz))
+
+    faces: List[List[int]] = []
+    for f in mesh.iter_faces():
+        hes = f.halfedges()
+        apex = fid_to_idx[f.id]
+        for he in hes:
+            # corner triangle
+            faces.append([eid_to_idx[he.prev.edge.id],
+                          vid_to_idx[he.origin.id],
+                          eid_to_idx[he.edge.id]])
+            # apex triangle (stellated central polygon)
+            faces.append([eid_to_idx[he.prev.edge.id],
+                          eid_to_idx[he.edge.id],
+                          apex])
 
     return _build_mesh(positions, faces)

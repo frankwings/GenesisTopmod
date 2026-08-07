@@ -14,7 +14,9 @@ from .high_level_ops import (extrude_face, add_handle, stellate, stellate_all,
                              subdivide_edge, subdivide_face)
 from .subdivision import catmull_clark
 from .remeshing import (dual, doo_sabin, simplest_subdivide,
-                        vertex_cutting, loop_subdivide, sqrt3_subdivide)
+                        vertex_cutting, loop_subdivide, sqrt3_subdivide,
+                        honeycomb_subdivide, star_subdivide, corner_cutting,
+                        loop_style_subdivide, fractal_subdivide)
 from .tokenizer import (
     TopModToken,
     quantize_coord, dequantize_coord,
@@ -41,6 +43,8 @@ __all__ = [
     # Subdivision / remeshing
     "catmull_clark", "dual", "doo_sabin", "simplest_subdivide",
     "vertex_cutting", "loop_subdivide", "sqrt3_subdivide",
+    "honeycomb_subdivide", "star_subdivide", "corner_cutting",
+    "loop_style_subdivide", "fractal_subdivide",
     # Tokenizer
     "TopModToken",
     "quantize_coord", "dequantize_coord",
