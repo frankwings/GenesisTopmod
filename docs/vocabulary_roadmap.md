@@ -14,7 +14,13 @@ no GPL code is copied.*
 | `stellate` / `subdivide_face` | (+1, +n, +n−1) | ✅ |
 | `subdivide_edge` | (+1, +1, 0) | ✅ |
 | `catmull_clark` | V'=V+E+F, E'=4E, F'=2E, all-quad | ✅ |
+| `dual` (token `DUAL`) | V'=F, E'=E, F'=V; involution | ✅ 2026-08-06, topmod/remeshing.py |
+| `doo_sabin` (token `DS`) | V'=2E, E'=4E, F'=V+E+F | ✅ 2026-08-06, topmod/remeshing.py |
 | 4 fundamental ops (create/delete vertex, insert/delete edge) | per Akleman & Chen 2003 | ✅ |
+
+Tokenizer note: `DUAL`/`DS` vocabulary IDs are appended AFTER the REF block,
+so all legacy IDs (EOS/CC/CV/IE/DE/HDL, COORD_*, REF_*) are unchanged —
+sequences and Phase A/B checkpoints encoded with the old vocabulary stay valid.
 
 ## Tier 1 — High value, low risk (next)
 
@@ -23,11 +29,9 @@ directly useful in both the generative pipeline and the Blender add-on.
 
 | Token candidate | Reference | Oracle (closed form) | Why first |
 |---|---|---|---|
-| `doo_sabin` | `dooSabinSubdivideBC` | V'=Σn(f)=2E, E'=2E+? (dual-of-dual; χ preserved) | Classic; pairs with CC; advisor's signature scheme family |
 | `simplest_subdivide` | `simplestSubdivide` | mid-edge scheme: V'=V+E, faces split | Trivial oracle, cheap win |
 | `vertex_cutting` | `vertexCuttingSubdivide` | truncation: V'=Σ valence, per-vertex n-gon added | Dual flavor of CC |
 | `stellate_all` | `stellateSubdivide` (global) | per face: (+1, +n, +n−1) summed | Already have per-face version |
-| `dual` | `DLFLDual` | V'=F, F'=V, E'=E | Involution — excellent invariant test |
 
 ## Tier 2 — Medium (distinct topology flavors)
 
@@ -63,6 +67,6 @@ From `dlflaux` standalone modules (verified present 2026-08-06):
 
 ## Ceiling
 
-6 current + 5 (T1) + ~9 (T2) + 4 (T3) ≈ **24-op vocabulary**, matching the
+8 current + 3 (T1) + ~9 (T2) + 4 (T3) ≈ **24-op vocabulary**, matching the
 original TopMod's expressive range while remaining differentiable-pipeline-
 and Blender-embeddable.

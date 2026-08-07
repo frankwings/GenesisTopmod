@@ -12,6 +12,7 @@ from .primitives import make_cube, make_tetrahedron, make_icosahedron, make_octa
 from .io import to_obj, from_obj, to_triangle_arrays
 from .high_level_ops import extrude_face, add_handle, stellate, subdivide_edge, subdivide_face
 from .subdivision import catmull_clark
+from .remeshing import dual, doo_sabin
 from .tokenizer import (
     TopModToken,
     quantize_coord, dequantize_coord,
@@ -34,8 +35,8 @@ __all__ = [
     "to_obj", "from_obj", "to_triangle_arrays",
     # High-level ops
     "extrude_face", "add_handle", "stellate", "subdivide_edge", "subdivide_face",
-    # Subdivision
-    "catmull_clark",
+    # Subdivision / remeshing
+    "catmull_clark", "dual", "doo_sabin",
     # Tokenizer
     "TopModToken",
     "quantize_coord", "dequantize_coord",

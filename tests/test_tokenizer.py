@@ -579,7 +579,8 @@ class TestVocabulary:
         max_ref = 128
         vocab   = build_vocabulary(n_position_bins=n_bins, max_ordinal=max_ref)
         # 6 op tokens + n_bins coord tokens + max_ref ref tokens
-        assert len(vocab) == 6 + n_bins + max_ref
+        # + 2 extension ops (DUAL, DS) appended at the end
+        assert len(vocab) == 6 + n_bins + max_ref + 2
 
     def test_encode_eos(self):
         vocab  = build_vocabulary(n_position_bins=32, max_ordinal=64)
@@ -776,3 +777,56 @@ class TestEdgeCases:
         all_vids = {v.id for v in mesh.vertices.values()}
         with pytest.raises(ValueError, match="compatible"):
             _find_compatible_face_pair(mesh, all_vids)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DUAL / DS extension tokens (added after semantic-oracle validation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDualDsTokens:
+    def test_vocab_backward_compatible(self):
+        """Extension ops append at the END: all legacy IDs unchanged."""
+        vocab = build_vocabulary(n_position_bins=128, max_ordinal=100)
+        assert [vocab[o] for o in ('EOS', 'CC', 'CV', 'IE', 'DE', 'HDL')] == [0, 1, 2, 3, 4, 5]
+        assert vocab['COORD_0'] == 6
+        assert vocab['REF_0'] == 6 + 128
+        assert vocab['DUAL'] == 6 + 128 + 100
+        assert vocab['DS'] == 6 + 128 + 100 + 1
+
+    def test_encode_decode_roundtrip(self):
+        vocab = build_vocabulary(n_position_bins=128, max_ordinal=100)
+        vocab_inv = {v: k for k, v in vocab.items()}
+        tokens = [
+            TopModToken(op='DUAL'),
+            TopModToken(op='DS'),
+            TopModToken(op='CC'),
+            TopModToken(op='EOS'),
+        ]
+        ids = encode_sequence(tokens, vocab)
+        back = decode_sequence(ids, vocab_inv)
+        assert [t.op for t in back] == ['DUAL', 'DS', 'CC', 'EOS']
+
+    def test_detokenize_executes_dual(self):
+        """DUAL on icosahedron base -> dodecahedron counts (20V 30E 12F)."""
+        mesh = detokenize([TopModToken(op='DUAL'), TopModToken(op='EOS')])
+        assert (mesh.V(), mesh.E(), mesh.F()) == (20, 30, 12)
+        assert is_manifold(mesh)
+
+    def test_detokenize_executes_ds(self):
+        """DS on icosahedron base: V'=2E=60, E'=4E=120, F'=V+E+F=62."""
+        mesh = detokenize([TopModToken(op='DS'), TopModToken(op='EOS')])
+        assert (mesh.V(), mesh.E(), mesh.F()) == (60, 120, 62)
+        assert is_manifold(mesh)
+
+    def test_detokenize_mixed_sequence_manifold(self):
+        mesh = detokenize([
+            TopModToken(op='DUAL'),
+            TopModToken(op='CC'),
+            TopModToken(op='DS'),
+            TopModToken(op='EOS'),
+        ], validate_steps=True)
+        assert is_manifold(mesh)
+
+    def test_sequence_length_single_slot(self):
+        toks = [TopModToken(op='DUAL'), TopModToken(op='DS'), TopModToken(op='EOS')]
+        assert sequence_length(toks) == 3
