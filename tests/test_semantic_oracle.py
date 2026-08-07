@@ -645,3 +645,116 @@ class TestFractalOracle:
     def test_cube(self):
         out = fractal_subdivide(make_cube())
         assert counts(out) == (26, 72, 48)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 3 — pentagonal / pentagonal2 / dual1264 / root4
+# (docs/reference_semantics.md §§2a, 2b, 8, 4)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from topmod.remeshing import (   # noqa: E402
+    pentagonal_subdivide, pentagonal2_subdivide,
+    dual1264_subdivide, root4_subdivide,
+)
+
+
+class TestPentagonalOracle:
+    """pentagonal: trisect edges + centroid spokes to every third corner:
+    V'=V+2E+F, E'=5E, F'=2E, all pentagons."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = pentagonal_subdivide(mesh)
+        assert counts(out) == (V + 2 * E + F, 5 * E, 2 * E), name
+        assert out.genus() == mesh.genus(), name
+        assert all(f.degree() == 5 for f in out.faces.values()), name
+        assert_valid(out, f"pentagonal on {name}")
+
+    def test_cube(self):
+        out = pentagonal_subdivide(make_cube())
+        assert counts(out) == (38, 60, 24)
+
+    def test_tetrahedron_is_dodecahedron(self):
+        """Reference semantics: tetra → dodecahedron combinatorics."""
+        out = pentagonal_subdivide(make_tetrahedron())
+        assert counts(out) == (20, 30, 12)
+        assert all(f.degree() == 5 for f in out.faces.values())
+
+    def test_offset_changes_geometry_not_topology(self):
+        a = pentagonal_subdivide(make_cube(), offset=0.0)
+        b = pentagonal_subdivide(make_cube(), offset=0.5)
+        assert counts(a) == counts(b)
+        pa = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in a.vertices.values())
+        pb = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in b.vertices.values())
+        assert pa != pb
+
+
+class TestPentagonal2Oracle:
+    """pentagonal2: midpoint split + scaled inner d-gon + connectors:
+    V'=V+3E, E'=6E, F'=F+2E (inner d-gons + pentagons)."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = pentagonal2_subdivide(mesh)
+        assert counts(out) == (V + 3 * E, 6 * E, F + 2 * E), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"pentagonal2 on {name}")
+
+    def test_cube_face_degrees(self):
+        out = pentagonal2_subdivide(make_cube())
+        assert counts(out) == (44, 72, 30)
+        degs = sorted(f.degree() for f in out.faces.values())
+        assert degs == [4] * 6 + [5] * 24   # 6 inner quads + 24 pentagons
+
+
+class TestDual1264Oracle:
+    """dual1264: DS-like with a 2d-gon inner face per old face:
+    V'=4E, E'=6E, F'=F+E+V."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = dual1264_subdivide(mesh)
+        assert counts(out) == (4 * E, 6 * E, F + E + V), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"dual1264 on {name}")
+
+    def test_cube_face_degrees(self):
+        out = dual1264_subdivide(make_cube())
+        assert counts(out) == (48, 72, 26)
+        degs = sorted(f.degree() for f in out.faces.values())
+        # 12 edge quads + 8 vertex hexagons (valence 3 → 2n=6) + 6 face octagons
+        assert degs == [4] * 12 + [6] * 8 + [8] * 6
+
+
+class TestRoot4Oracle:
+    """root4: inner d-gon + prism bridge, old edges deleted:
+    V'=V+2E, E'=4E, F'=F+E (inner d-gons + edge hexagons)."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = root4_subdivide(mesh)
+        assert counts(out) == (V + 2 * E, 4 * E, F + E), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"root4 on {name}")
+
+    def test_cube_face_degrees(self):
+        out = root4_subdivide(make_cube())
+        assert counts(out) == (32, 48, 18)
+        degs = sorted(f.degree() for f in out.faces.values())
+        assert degs == [4] * 6 + [6] * 12   # 6 inner quads + 12 edge hexagons
+
+    def test_params_change_geometry_not_topology(self):
+        a = root4_subdivide(make_cube(), a=0.0, twist=0.0)
+        b = root4_subdivide(make_cube(), a=0.5, twist=0.3)
+        assert counts(a) == counts(b)
+        pa = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in a.vertices.values())
+        pb = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in b.vertices.values())
+        assert pa != pb

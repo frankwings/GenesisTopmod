@@ -541,3 +541,311 @@ def fractal_subdivide(mesh: DLFLMesh, offset: float = 1.0) -> DLFLMesh:
                           apex])
 
     return _build_mesh(positions, faces)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 3 — schemes from docs/reference_semantics.md §§2a, 2b, 8, 4
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _honeycomb_mask_weights(d: int) -> List[List[float]]:
+    """Honeycomb averaging mask (docs/reference_semantics.md §1):
+    diagonal α = 1/√2 − 1/4 + 5/(4d); off-diag (1−α)(3+2cos(2π(i−j)/d))/(3d−5)."""
+    import math
+    alpha = 1.0 / math.sqrt(2.0) - 0.25 + 5.0 / (4.0 * d)
+    denom = 3 * d - 5
+    rows: List[List[float]] = []
+    for i in range(d):
+        row = []
+        for j in range(d):
+            if i == j:
+                row.append(alpha)
+            else:
+                row.append((1.0 - alpha)
+                           * (3.0 + 2.0 * math.cos(2.0 * math.pi * (i - j) / d))
+                           / denom)
+        rows.append(row)
+    return rows
+
+
+def pentagonal_subdivide(mesh: DLFLMesh, offset: float = 0.0) -> DLFLMesh:
+    """
+    Pentagonal subdivision (TopMod pentagonalSubdivide).
+
+    Trisect every edge, add a centroid vertex per face, and fan spokes
+    from the centroid to one trisection point per boundary edge (the one
+    nearer each corner, chosen consistently so adjacent faces never pick
+    the same point).  Every old d-gon becomes d pentagons.
+
+    Oracle: V' = V + 2E + F, E' = 5E, F' = 2E (all pentagons);
+    χ and genus preserved.  (tetrahedron → dodecahedron combinatorics)
+
+    *offset* pulls each face's spoke-target trisection point toward that
+    face's centroid — geometric only.
+    """
+    positions: List[Tuple[float, float, float]] = []
+
+    vid_to_idx: Dict[int, int] = {}
+    for v in mesh.iter_vertices():
+        vid_to_idx[v.id] = len(positions)
+        positions.append((v.x, v.y, v.z))
+
+    # Two trisection points per edge, keyed by half-edge:
+    # near(he) = point at 1/3 from he.origin (shared: near(he) is the
+    # same vertex as the point at 2/3 along the twin).
+    near: Dict[int, int] = {}
+    for e in mesh.iter_edges():
+        h, t = e.he0, e.he1
+        u, w = h.origin, t.origin
+        near[h.id] = len(positions)
+        positions.append((u.x + (w.x - u.x) / 3.0,
+                          u.y + (w.y - u.y) / 3.0,
+                          u.z + (w.z - u.z) / 3.0))
+        near[t.id] = len(positions)
+        positions.append((w.x + (u.x - w.x) / 3.0,
+                          w.y + (u.y - w.y) / 3.0,
+                          w.z + (u.z - w.z) / 3.0))
+
+    fid_to_idx: Dict[int, int] = {}
+    for f in mesh.iter_faces():
+        fid_to_idx[f.id] = len(positions)
+        positions.append(f.centroid())
+
+    # offset: each face pulls its own spoke targets (near(he) for its
+    # half-edges) toward its centroid.  Each trisection point is the
+    # spoke target of exactly one face, so this is well defined.
+    if offset:
+        for f in mesh.iter_faces():
+            cx, cy, cz = positions[fid_to_idx[f.id]]
+            for he in f.halfedges():
+                i = near[he.id]
+                x, y, z = positions[i]
+                positions[i] = (x + offset * (cx - x),
+                                y + offset * (cy - y),
+                                z + offset * (cz - z))
+
+    # Face boundary (CCW) reads per half-edge: origin, near(he), far(he)
+    # where far(he) = near(he.twin).  Pentagon between consecutive spokes
+    # at near(he) and near(he.next):
+    #   [near(he), far(he), he.next.origin, near(he.next), centroid]
+    faces: List[List[int]] = []
+    for f in mesh.iter_faces():
+        c = fid_to_idx[f.id]
+        for he in f.halfedges():
+            faces.append([near[he.id],
+                          near[he.twin.id],
+                          vid_to_idx[he.next.origin.id],
+                          near[he.next.id],
+                          c])
+
+    return _build_mesh(positions, faces)
+
+
+def pentagonal2_subdivide(mesh: DLFLMesh, scale_factor: float = 0.75) -> DLFLMesh:
+    """
+    Pentagonal subdivision, variant 2 (TopMod pentagonalSubdivide2).
+
+    Split every edge at its midpoint; per face insert a scaled inner
+    d-gon at the edge midpoints (new vertices) and connect each midpoint
+    to its inner copy.  Yields the inner d-gon plus d pentagons per face.
+
+    Oracle: V' = V + 3E, E' = 6E, F' = F + 2E; χ and genus preserved.
+    *scale_factor* shrinks the inner polygon about its centroid
+    (geometric only).
+    """
+    positions: List[Tuple[float, float, float]] = []
+
+    vid_to_idx: Dict[int, int] = {}
+    for v in mesh.iter_vertices():
+        vid_to_idx[v.id] = len(positions)
+        positions.append((v.x, v.y, v.z))
+
+    eid_to_idx: Dict[int, int] = {}
+    for e in mesh.iter_edges():
+        v0, v1 = e.vertices()
+        eid_to_idx[e.id] = len(positions)
+        positions.append(((v0.x + v1.x) / 2,
+                          (v0.y + v1.y) / 2,
+                          (v0.z + v1.z) / 2))
+
+    # Per-face inner corners: scaled copies of the edge midpoints,
+    # keyed by half-edge (inner corner matching midpoint of he.edge).
+    inner: Dict[int, int] = {}
+    for f in mesh.iter_faces():
+        hes = f.halfedges()
+        mids = [positions[eid_to_idx[he.edge.id]] for he in hes]
+        d = len(mids)
+        cx = sum(m[0] for m in mids) / d
+        cy = sum(m[1] for m in mids) / d
+        cz = sum(m[2] for m in mids) / d
+        for he, m in zip(hes, mids):
+            inner[he.id] = len(positions)
+            positions.append((cx + scale_factor * (m[0] - cx),
+                              cy + scale_factor * (m[1] - cy),
+                              cz + scale_factor * (m[2] - cz)))
+
+    faces: List[List[int]] = []
+    for f in mesh.iter_faces():
+        hes = f.halfedges()
+        # inner d-gon, same winding as the face
+        faces.append([inner[he.id] for he in hes])
+        # pentagons: outer arc m(he) → v(he.next) → m(he.next), then
+        # inward to inner(he.next) and back along the inner polygon.
+        for he in hes:
+            faces.append([eid_to_idx[he.edge.id],
+                          vid_to_idx[he.next.origin.id],
+                          eid_to_idx[he.next.edge.id],
+                          inner[he.next.id],
+                          inner[he.id]])
+
+    return _build_mesh(positions, faces)
+
+
+def dual1264_subdivide(mesh: DLFLMesh, sf: float = 1.0) -> DLFLMesh:
+    """
+    Dual 12.6.4 subdivision (TopMod dual1264Subdivide).
+
+    Doo-Sabin-like, but the inner face per old d-gon is a 2d-gon whose
+    corners sit at 1/3 and 2/3 along each boundary edge (per-face
+    copies), scaled by *sf* about their centroid.
+
+    Faces: one 2d-gon per old face, one quad per old edge, one 2n-gon
+    per old valence-n vertex.
+
+    Oracle: V' = 4E, E' = 6E, F' = F + E + V; χ and genus preserved.
+    """
+    positions: List[Tuple[float, float, float]] = []
+    a_idx: Dict[int, int] = {}   # per half-edge: point at 1/3 from origin
+    b_idx: Dict[int, int] = {}   # per half-edge: point at 2/3 from origin
+
+    for f in mesh.iter_faces():
+        hes = f.halfedges()
+        pts: List[Tuple[float, float, float]] = []
+        for he in hes:
+            u, w = he.origin, he.twin.origin
+            pts.append((u.x + (w.x - u.x) / 3.0,
+                        u.y + (w.y - u.y) / 3.0,
+                        u.z + (w.z - u.z) / 3.0))
+            pts.append((u.x + 2.0 * (w.x - u.x) / 3.0,
+                        u.y + 2.0 * (w.y - u.y) / 3.0,
+                        u.z + 2.0 * (w.z - u.z) / 3.0))
+        n = len(pts)
+        cx = sum(p[0] for p in pts) / n
+        cy = sum(p[1] for p in pts) / n
+        cz = sum(p[2] for p in pts) / n
+        for he, k in zip(hes, range(0, n, 2)):
+            pa, pb = pts[k], pts[k + 1]
+            a_idx[he.id] = len(positions)
+            positions.append((cx + sf * (pa[0] - cx),
+                              cy + sf * (pa[1] - cy),
+                              cz + sf * (pa[2] - cz)))
+            b_idx[he.id] = len(positions)
+            positions.append((cx + sf * (pb[0] - cx),
+                              cy + sf * (pb[1] - cy),
+                              cz + sf * (pb[2] - cz)))
+
+    faces: List[List[int]] = []
+
+    # Face-faces: 2d-gon per old face, same winding
+    for f in mesh.iter_faces():
+        ring: List[int] = []
+        for he in f.halfedges():
+            ring.append(a_idx[he.id])
+            ring.append(b_idx[he.id])
+        faces.append(ring)
+
+    # Edge-faces: quad bridging the two aligned inner segments.
+    # Face A's inner polygon uses a(h)→b(h); the quad traverses b(h)→a(h),
+    # crossing to the twin side at matching ends: a(h)~b(t) near h.origin.
+    for e in mesh.iter_edges():
+        h, t = e.he0, e.he1
+        faces.append([b_idx[h.id], a_idx[h.id], b_idx[t.id], a_idx[t.id]])
+
+    # Vertex-faces: 2n-gon per old vertex.  Walk outgoing half-edges in
+    # CCW order (reversed fan, as in dual()); per corner append
+    # [a(he), b(he.prev)] — the inner-polygon corner-span reversed plus
+    # the cross edge to the next corner.
+    for v in mesh.iter_vertices():
+        ring = []
+        outgoing = v.outgoing_halfedges()
+        outgoing.reverse()
+        for he in outgoing:
+            ring.append(a_idx[he.id])
+            ring.append(b_idx[he.prev.id])
+        faces.append(ring)
+
+    return _build_mesh(positions, faces)
+
+
+def root4_subdivide(mesh: DLFLMesh, a: float = 0.0, twist: float = 0.0) -> DLFLMesh:
+    """
+    Root-4 subdivision (TopMod root4Subdivide).
+
+    Per face: inner d-gon from the honeycomb mask applied to twisted
+    boundary samples; bridge to the old boundary with a prism ring; then
+    delete all original edges (each deletion merges the two flanking
+    bridge quads into a hexagon).  Old vertices survive with unchanged
+    valence and are smoothed by blend *a* toward their neighbor average.
+
+    Oracle: V' = V + 2E, E' = 4E, F' = F + E (inner d-gons + edge
+    hexagons); χ and genus preserved.
+
+    *twist* slides the inner-ring samples along the boundary edges;
+    *a* is the old-vertex smoothing blend.  Both geometric only.
+    """
+    positions: List[Tuple[float, float, float]] = []
+
+    # Old vertices, smoothed: p' = a·q + (1−a)·p with q = average of the
+    # opposite endpoints of the incident edges.
+    vid_to_idx: Dict[int, int] = {}
+    for v in mesh.iter_vertices():
+        ring = [he.twin.origin for he in v.outgoing_halfedges()]
+        n = len(ring)
+        qx = sum(u.x for u in ring) / n
+        qy = sum(u.y for u in ring) / n
+        qz = sum(u.z for u in ring) / n
+        vid_to_idx[v.id] = len(positions)
+        positions.append((a * qx + (1 - a) * v.x,
+                          a * qy + (1 - a) * v.y,
+                          a * qz + (1 - a) * v.z))
+
+    # Inner d-gon corners per face (keyed by half-edge: corner at
+    # he.origin): honeycomb mask over twisted samples
+    # m_i = (1−twist)·p_i + twist·p_{i+1}.
+    inner: Dict[int, int] = {}
+    for f in mesh.iter_faces():
+        hes = f.halfedges()
+        d = len(hes)
+        samples = []
+        for he in hes:
+            u, w = he.origin, he.twin.origin
+            samples.append(((1 - twist) * u.x + twist * w.x,
+                            (1 - twist) * u.y + twist * w.y,
+                            (1 - twist) * u.z + twist * w.z))
+        weights = _honeycomb_mask_weights(d)
+        for i, he in enumerate(hes):
+            x = sum(weights[i][j] * samples[j][0] for j in range(d))
+            y = sum(weights[i][j] * samples[j][1] for j in range(d))
+            z = sum(weights[i][j] * samples[j][2] for j in range(d))
+            inner[he.id] = len(positions)
+            positions.append((x, y, z))
+
+    faces: List[List[int]] = []
+
+    # Inner d-gon per face, same winding
+    for f in mesh.iter_faces():
+        faces.append([inner[he.id] for he in f.halfedges()])
+
+    # Hexagon per old edge: the two zero-height-extrusion side quads
+    # merged by deleting the old edge u—w:
+    # [u, n_B(t.next), n_B(t), w, n_A(h.next), n_A(h)]
+    for e in mesh.iter_edges():
+        h, t = e.he0, e.he1
+        u, w = h.origin, t.origin
+        faces.append([vid_to_idx[u.id],
+                      inner[t.next.id],
+                      inner[t.id],
+                      vid_to_idx[w.id],
+                      inner[h.next.id],
+                      inner[h.id]])
+
+    return _build_mesh(positions, faces)

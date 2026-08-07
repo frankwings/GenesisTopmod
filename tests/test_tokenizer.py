@@ -579,8 +579,9 @@ class TestVocabulary:
         max_ref = 128
         vocab   = build_vocabulary(n_position_bins=n_bins, max_ordinal=max_ref)
         # 6 op tokens + n_bins coord tokens + max_ref ref tokens
-        # + 12 extension ops (DUAL..SQRT3 + HONEY/STAR/CCUT/LSTYLE/FRAC)
-        assert len(vocab) == 6 + n_bins + max_ref + 12
+        # + 16 extension ops (DUAL..SQRT3 + HONEY/STAR/CCUT/LSTYLE/FRAC
+        #   + PENT/PENT2/D1264/ROOT4)
+        assert len(vocab) == 6 + n_bins + max_ref + 16
 
     def test_encode_eos(self):
         vocab  = build_vocabulary(n_position_bins=32, max_ordinal=64)
@@ -903,6 +904,38 @@ class TestBatch2Tokens:
             'CCUT':   (60, 120, 62),    # 2E, 4E, V+E+F
             'LSTYLE': (42, 120, 80),    # V+E, 4E, F+2E
             'FRAC':   (62, 180, 120),   # V+E+F, 6E, 4E
+        }
+        for op, cnt in expected.items():
+            mesh = detokenize([TopModToken(op=op), TopModToken(op='EOS')],
+                              validate_steps=True)
+            assert (mesh.V(), mesh.E(), mesh.F()) == cnt, op
+            assert is_manifold(mesh), op
+
+
+class TestBatch3Tokens:
+    """PENT / PENT2 / D1264 / ROOT4 extension tokens."""
+
+    def test_vocab_backward_compatible(self):
+        vocab = build_vocabulary(n_position_bins=128, max_ordinal=100)
+        base = 6 + 128 + 100 + 12   # after DUAL..FRAC
+        for i, op in enumerate(('PENT', 'PENT2', 'D1264', 'ROOT4')):
+            assert vocab[op] == base + i
+
+    def test_encode_decode_roundtrip(self):
+        vocab = build_vocabulary(n_position_bins=128, max_ordinal=100)
+        vocab_inv = {v: k for k, v in vocab.items()}
+        ops = ['PENT', 'PENT2', 'D1264', 'ROOT4', 'EOS']
+        tokens = [TopModToken(op=o) for o in ops]
+        back = decode_sequence(encode_sequence(tokens, vocab), vocab_inv)
+        assert [t.op for t in back] == ops
+
+    def test_detokenize_each(self):
+        """Each opcode executes on the icosahedron base (V12 E30 F20)."""
+        expected = {
+            'PENT':  (92, 150, 60),    # V+2E+F, 5E, 2E
+            'PENT2': (102, 180, 80),   # V+3E, 6E, F+2E
+            'D1264': (120, 180, 62),   # 4E, 6E, F+E+V
+            'ROOT4': (72, 120, 50),    # V+2E, 4E, F+E
         }
         for op, cnt in expected.items():
             mesh = detokenize([TopModToken(op=op), TopModToken(op='EOS')],
