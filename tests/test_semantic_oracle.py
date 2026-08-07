@@ -758,3 +758,71 @@ class TestRoot4Oracle:
         pb = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
                     for v in b.vertices.values())
         assert pa != pb
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 4a — checkerboard / doo-sabin BC-new
+# (docs/reference_semantics.md §§9, 11)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from topmod.remeshing import (   # noqa: E402
+    checkerboard_remesh, ds_bc_new_subdivide,
+)
+
+
+class TestCheckerboardOracle:
+    """checkerboard: inset + edge trisection + corner chords − spokes:
+    V'=V+4E, E'=9E, F'=F+4E; all-quad on quad input."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = checkerboard_remesh(mesh)
+        assert counts(out) == (V + 4 * E, 9 * E, F + 4 * E), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"checkerboard on {name}")
+
+    def test_cube_all_quads(self):
+        out = checkerboard_remesh(make_cube())
+        assert counts(out) == (56, 108, 54)
+        assert all(f.degree() == 4 for f in out.faces.values())
+
+    def test_thickness_changes_geometry_not_topology(self):
+        a = checkerboard_remesh(make_cube(), thickness=0.2)
+        b = checkerboard_remesh(make_cube(), thickness=0.4)
+        assert counts(a) == counts(b)
+        pa = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in a.vertices.values())
+        pb = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in b.vertices.values())
+        assert pa != pb
+
+
+class TestDsBCNewOracle:
+    """ds_bc_new: DS on the mid-edge-refined boundary, old vertices
+    survive: V'=V+4E, E'=7E, F'=F+2E (2d-gon per face + 2 pentagons
+    per edge)."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = ds_bc_new_subdivide(mesh)
+        assert counts(out) == (V + 4 * E, 7 * E, F + 2 * E), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"ds_bc_new on {name}")
+
+    def test_cube_face_degrees(self):
+        out = ds_bc_new_subdivide(make_cube())
+        assert counts(out) == (56, 84, 30)
+        degs = sorted(f.degree() for f in out.faces.values())
+        assert degs == [5] * 24 + [8] * 6   # 24 pentagons + 6 face octagons
+
+    def test_params_change_geometry_not_topology(self):
+        a = ds_bc_new_subdivide(make_cube(), sf=1.0, length=1.0)
+        b = ds_bc_new_subdivide(make_cube(), sf=0.7, length=0.5)
+        assert counts(a) == counts(b)
+        pa = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in a.vertices.values())
+        pb = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
+                    for v in b.vertices.values())
+        assert pa != pb
