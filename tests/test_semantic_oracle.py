@@ -380,3 +380,137 @@ class TestDooSabinOracle:
         """DS is self-dual in counts: DS(M) and DS(dual(M)) have equal V/E/F."""
         mesh = make_cube()
         assert counts(doo_sabin(mesh)) == counts(doo_sabin(dual(mesh)))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# stellate_all: per n-gon (+1, +n, +n−1) summed → V'=V+F, E'=3E, F'=2E, all-tri
+# ─────────────────────────────────────────────────────────────────────────────
+
+from topmod.high_level_ops import stellate_all  # noqa: E402
+from topmod.remeshing import (                   # noqa: E402
+    simplest_subdivide, vertex_cutting, loop_subdivide, sqrt3_subdivide,
+)
+
+
+class TestStellateAllOracle:
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        chi0 = mesh.euler_characteristic()
+        stellate_all(mesh)
+        assert counts(mesh) == (V + F, 3 * E, 2 * E), name
+        assert mesh.euler_characteristic() == chi0, name
+        assert all(f.degree() == 3 for f in mesh.faces.values()), name
+        assert_valid(mesh, f"stellate_all on {name}")
+
+    def test_on_genus_1(self):
+        mesh = make_cube()
+        faces = list(mesh.faces.values())
+        f1 = faces[0]
+        v1 = {v.id for v in f1.vertices()}
+        f2 = next(f for f in faces[1:]
+                  if not (v1 & {v.id for v in f.vertices()}))
+        add_handle(mesh, f1, f2)
+        V, E, F = counts(mesh)
+        stellate_all(mesh)
+        assert counts(mesh) == (V + F, 3 * E, 2 * E)
+        assert mesh.genus() == 1
+        assert_valid(mesh, "stellate_all on genus-1")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# simplest_subdivide (mid-edge / Peters-Reif): V'=E, E'=2E, F'=F+V
+# cube → cuboctahedron
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSimplestOracle:
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = simplest_subdivide(mesh)
+        assert counts(out) == (E, 2 * E, F + V), name
+        assert out.euler_characteristic() == mesh.euler_characteristic(), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"simplest on {name}")
+
+    def test_cube_gives_cuboctahedron(self):
+        out = simplest_subdivide(make_cube())
+        assert counts(out) == (12, 24, 14)
+        degs = sorted(f.degree() for f in out.faces.values())
+        assert degs == [3] * 8 + [4] * 6   # 8 vertex-tris + 6 face-quads
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# vertex_cutting (truncation): V'=2E, E'=3E, F'=F+V
+# cube → truncated cube
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestVertexCuttingOracle:
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = vertex_cutting(mesh)
+        assert counts(out) == (2 * E, 3 * E, F + V), name
+        assert out.euler_characteristic() == mesh.euler_characteristic(), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"vertex_cutting on {name}")
+
+    def test_cube_gives_truncated_cube(self):
+        out = vertex_cutting(make_cube())
+        assert counts(out) == (24, 36, 14)
+        degs = sorted(f.degree() for f in out.faces.values())
+        assert degs == [3] * 8 + [8] * 6   # 8 vertex-tris + 6 octagons
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# loop_subdivide (triangles only): V'=V+E, E'=4E, F'=4F; precondition all-tri
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestLoopOracle:
+    @pytest.mark.parametrize("prim", ["tetrahedron", "octahedron", "icosahedron"])
+    def test_counts(self, prim):
+        mesh = PRIMITIVES[prim]()
+        V, E, F = counts(mesh)
+        out = loop_subdivide(mesh)
+        assert counts(out) == (V + E, 4 * E, 4 * F), prim
+        assert out.euler_characteristic() == mesh.euler_characteristic(), prim
+        assert all(f.degree() == 3 for f in out.faces.values()), prim
+        assert_valid(out, f"loop on {prim}")
+
+    def test_rejects_non_triangular(self):
+        with pytest.raises(ValueError):
+            loop_subdivide(make_cube())
+
+    def test_two_rounds(self):
+        once = loop_subdivide(make_tetrahedron())
+        V, E, F = counts(once)
+        twice = loop_subdivide(once)
+        assert counts(twice) == (V + E, 4 * E, 4 * F)
+        assert_valid(twice, "loop ×2 on tetrahedron")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# sqrt3_subdivide (triangles only): V'=V+F, E'=3E, F'=3F; precondition all-tri
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestSqrt3Oracle:
+    @pytest.mark.parametrize("prim", ["tetrahedron", "octahedron", "icosahedron"])
+    def test_counts(self, prim):
+        mesh = PRIMITIVES[prim]()
+        V, E, F = counts(mesh)
+        out = sqrt3_subdivide(mesh)
+        assert counts(out) == (V + F, 3 * E, 3 * F), prim
+        assert out.euler_characteristic() == mesh.euler_characteristic(), prim
+        assert all(f.degree() == 3 for f in out.faces.values()), prim
+        assert_valid(out, f"sqrt3 on {prim}")
+
+    def test_rejects_non_triangular(self):
+        with pytest.raises(ValueError):
+            sqrt3_subdivide(make_cube())
+
+    def test_two_rounds(self):
+        once = sqrt3_subdivide(make_octahedron())
+        V, E, F = counts(once)
+        twice = sqrt3_subdivide(once)
+        assert counts(twice) == (V + F, 3 * E, 3 * F)
+        assert_valid(twice, "sqrt3 ×2 on octahedron")

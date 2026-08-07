@@ -579,8 +579,8 @@ class TestVocabulary:
         max_ref = 128
         vocab   = build_vocabulary(n_position_bins=n_bins, max_ordinal=max_ref)
         # 6 op tokens + n_bins coord tokens + max_ref ref tokens
-        # + 2 extension ops (DUAL, DS) appended at the end
-        assert len(vocab) == 6 + n_bins + max_ref + 2
+        # + 7 extension ops (DUAL, DS, STA, SIMP, VC, LOOP, SQRT3)
+        assert len(vocab) == 6 + n_bins + max_ref + 7
 
     def test_encode_eos(self):
         vocab  = build_vocabulary(n_position_bins=32, max_ordinal=64)
@@ -792,6 +792,9 @@ class TestDualDsTokens:
         assert vocab['REF_0'] == 6 + 128
         assert vocab['DUAL'] == 6 + 128 + 100
         assert vocab['DS'] == 6 + 128 + 100 + 1
+        # later extensions keep appending in fixed order
+        for i, op in enumerate(('STA', 'SIMP', 'VC', 'LOOP', 'SQRT3')):
+            assert vocab[op] == 6 + 128 + 100 + 2 + i
 
     def test_encode_decode_roundtrip(self):
         vocab = build_vocabulary(n_position_bins=128, max_ordinal=100)
@@ -830,3 +833,51 @@ class TestDualDsTokens:
     def test_sequence_length_single_slot(self):
         toks = [TopModToken(op='DUAL'), TopModToken(op='DS'), TopModToken(op='EOS')]
         assert sequence_length(toks) == 3
+
+
+class TestGlobalOpTokens:
+    """STA / SIMP / VC / LOOP / SQRT3 extension tokens."""
+
+    def test_encode_decode_roundtrip(self):
+        vocab = build_vocabulary(n_position_bins=128, max_ordinal=100)
+        vocab_inv = {v: k for k, v in vocab.items()}
+        ops = ['STA', 'SIMP', 'VC', 'LOOP', 'SQRT3', 'EOS']
+        tokens = [TopModToken(op=o) for o in ops]
+        back = decode_sequence(encode_sequence(tokens, vocab), vocab_inv)
+        assert [t.op for t in back] == ops
+
+    def test_detokenize_sta(self):
+        """STA on icosahedron: V'=V+F=32, E'=3E=90, F'=2E=60."""
+        mesh = detokenize([TopModToken(op='STA'), TopModToken(op='EOS')])
+        assert (mesh.V(), mesh.E(), mesh.F()) == (32, 90, 60)
+        assert is_manifold(mesh)
+
+    def test_detokenize_simp(self):
+        """SIMP on icosahedron: V'=E=30, E'=2E=60, F'=F+V=32."""
+        mesh = detokenize([TopModToken(op='SIMP'), TopModToken(op='EOS')])
+        assert (mesh.V(), mesh.E(), mesh.F()) == (30, 60, 32)
+        assert is_manifold(mesh)
+
+    def test_detokenize_vc(self):
+        """VC on icosahedron: V'=2E=60, E'=3E=90, F'=F+V=32."""
+        mesh = detokenize([TopModToken(op='VC'), TopModToken(op='EOS')])
+        assert (mesh.V(), mesh.E(), mesh.F()) == (60, 90, 32)
+        assert is_manifold(mesh)
+
+    def test_detokenize_tri_schemes(self):
+        """LOOP then SQRT3 on the all-tri icosahedron base."""
+        mesh = detokenize([
+            TopModToken(op='LOOP'),
+            TopModToken(op='SQRT3'),
+            TopModToken(op='EOS'),
+        ], validate_steps=True)
+        assert is_manifold(mesh)
+
+    def test_loop_on_non_tri_state_raises(self):
+        """LOOP after DS (quads exist) must fail loudly, not corrupt."""
+        with pytest.raises(ValueError):
+            detokenize([
+                TopModToken(op='DS'),
+                TopModToken(op='LOOP'),
+                TopModToken(op='EOS'),
+            ])

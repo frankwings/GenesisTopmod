@@ -476,3 +476,19 @@ def subdivide_face(mesh: DLFLMesh, face: Face) -> Vertex:
     Equivalent to stellate().  Returns the new center vertex.
     """
     return stellate(mesh, face)
+
+
+def stellate_all(mesh: DLFLMesh) -> List[Vertex]:
+    """
+    Stellate every face of the mesh (global stellation).
+
+    Oracle: per n-gon face (+1, +n, +n−1) summed over all faces →
+    V' = V + F, E' = 3E, F' = 2E.  Output is all-triangle.
+    χ and genus preserved.
+
+    Returns the list of new apex vertices (one per original face).
+    """
+    apexes: List[Vertex] = []
+    for face in list(mesh.faces.values()):
+        apexes.append(stellate(mesh, face))
+    return apexes

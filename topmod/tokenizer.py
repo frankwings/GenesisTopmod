@@ -18,6 +18,11 @@ Token vocabulary
   CC   ()                        — one Catmull-Clark subdivision round
   DUAL ()                        — combinatorial dual (V'=F, F'=V, E'=E)
   DS   ()                        — one Doo-Sabin subdivision round
+  STA  ()                        — stellate all faces (V'=V+F, E'=3E, F'=2E)
+  SIMP ()                        — mid-edge subdivision (V'=E, E'=2E, F'=F+V)
+  VC   ()                        — vertex cutting (V'=2E, E'=3E, F'=F+V)
+  LOOP ()                        — Loop subdivision (tri only; V'=V+E)
+  SQRT3()                        — sqrt(3) subdivision (tri only; V'=V+F)
   CV   (qx, qy, qz)             — set next vertex position (quantized)
   EOS  ()                        — end-of-sequence
 
@@ -56,7 +61,9 @@ from .dlfl import DLFLMesh, Face, HalfEdge, Vertex
 from .operators import insert_edge, delete_edge
 from .high_level_ops import add_handle
 from .subdivision import catmull_clark
-from .remeshing import dual, doo_sabin
+from .remeshing import (dual, doo_sabin, simplest_subdivide,
+                        vertex_cutting, loop_subdivide, sqrt3_subdivide)
+from .high_level_ops import stellate_all
 from .primitives import make_icosahedron
 from .validate import is_manifold, check_all
 
@@ -339,6 +346,25 @@ def tokenize(
 # Detokenize — token sequence → mesh
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _sta(mesh: DLFLMesh) -> DLFLMesh:
+    stellate_all(mesh)
+    return mesh
+
+
+# Zero-argument global remeshing opcodes → executor.
+# LOOP / SQRT3 raise ValueError on non-triangular meshes (documented
+# precondition); a generative model emitting them on invalid state gets a
+# hard failure rather than a silent corruption.
+_GLOBAL_OPS = {
+    'DUAL':  dual,
+    'DS':    doo_sabin,
+    'STA':   _sta,
+    'SIMP':  simplest_subdivide,
+    'VC':    vertex_cutting,
+    'LOOP':  loop_subdivide,
+    'SQRT3': sqrt3_subdivide,
+}
+
 def detokenize(
     tokens:          List[TopModToken],
     n_position_bins: int   = 128,
@@ -388,8 +414,8 @@ def detokenize(
             if validate_steps and not is_manifold(mesh):
                 raise RuntimeError("Mesh became non-manifold after CC")
 
-        elif op in ('DUAL', 'DS'):
-            mesh     = dual(mesh) if op == 'DUAL' else doo_sabin(mesh)
+        elif op in _GLOBAL_OPS:
+            mesh     = _GLOBAL_OPS[op](mesh)
             cv_verts = None   # vertex list becomes invalid
             cv_idx   = 0
 
@@ -517,7 +543,7 @@ def build_vocabulary(
     # Extension ops appended at the END so all pre-existing IDs
     # (EOS/CC/CV/IE/DE/HDL, COORD_*, REF_*) keep their values —
     # sequences and checkpoints encoded with the old vocabulary stay valid.
-    for op in ('DUAL', 'DS'):
+    for op in ('DUAL', 'DS', 'STA', 'SIMP', 'VC', 'LOOP', 'SQRT3'):
         vocab[op] = idx
         idx += 1
 
@@ -548,7 +574,7 @@ def encode_sequence(
         if op == 'EOS':
             ids.append(vocab['EOS'])
 
-        elif op in ('CC', 'DUAL', 'DS'):
+        elif op == 'CC' or op in _GLOBAL_OPS:
             ids.append(vocab[op])
 
         elif op == 'CV':
@@ -596,7 +622,7 @@ def decode_sequence(
 
     Raises ValueError on any unrecognised ID or malformed sequence.
     """
-    OP_TOKENS  = {'EOS', 'CC', 'CV', 'IE', 'DE', 'HDL', 'DUAL', 'DS'}
+    OP_TOKENS  = {'EOS', 'CC', 'CV', 'IE', 'DE', 'HDL'} | set(_GLOBAL_OPS)
     tokens: List[TopModToken] = []
     it = iter(ids)
 
@@ -631,7 +657,7 @@ def decode_sequence(
             tokens.append(TopModToken(op='EOS'))
             break
 
-        elif sym in ('CC', 'DUAL', 'DS'):
+        elif sym == 'CC' or sym in _GLOBAL_OPS:
             tokens.append(TopModToken(op=sym))
 
         elif sym == 'CV':
@@ -684,5 +710,5 @@ def sequence_length(tokens: List[TopModToken]) -> int:
         elif tok.op == 'DE':
             length += 2   # opcode + 1 ref
         else:
-            length += 1   # EOS, CC, DUAL, DS
+            length += 1   # EOS, CC and zero-arg global ops
     return length

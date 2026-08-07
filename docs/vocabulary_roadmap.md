@@ -16,22 +16,20 @@ no GPL code is copied.*
 | `catmull_clark` | V'=V+E+F, E'=4E, F'=2E, all-quad | ✅ |
 | `dual` (token `DUAL`) | V'=F, E'=E, F'=V; involution | ✅ 2026-08-06, topmod/remeshing.py |
 | `doo_sabin` (token `DS`) | V'=2E, E'=4E, F'=V+E+F | ✅ 2026-08-06, topmod/remeshing.py |
+| `stellate_all` (token `STA`) | V'=V+F, E'=3E, F'=2E, all-tri | ✅ 2026-08-06, topmod/high_level_ops.py |
+| `simplest_subdivide` (token `SIMP`) | V'=E, E'=2E, F'=F+V (cube→cuboctahedron) | ✅ 2026-08-06, topmod/remeshing.py |
+| `vertex_cutting` (token `VC`) | V'=2E, E'=3E, F'=F+V (cube→truncated cube) | ✅ 2026-08-06, topmod/remeshing.py |
+| `loop_subdivide` (token `LOOP`) | tri-only: V'=V+E, E'=4E, F'=4F | ✅ 2026-08-06, topmod/remeshing.py |
+| `sqrt3_subdivide` (token `SQRT3`) | tri-only: V'=V+F, E'=3E, F'=3F | ✅ 2026-08-06, topmod/remeshing.py |
 | 4 fundamental ops (create/delete vertex, insert/delete edge) | per Akleman & Chen 2003 | ✅ |
 
 Tokenizer note: `DUAL`/`DS` vocabulary IDs are appended AFTER the REF block,
 so all legacy IDs (EOS/CC/CV/IE/DE/HDL, COORD_*, REF_*) are unchanged —
 sequences and Phase A/B checkpoints encoded with the old vocabulary stay valid.
 
-## Tier 1 — High value, low risk (next)
+## Tier 1 — DONE (2026-08-06)
 
-Global schemes with clean closed-form oracles; each is one new token and
-directly useful in both the generative pipeline and the Blender add-on.
-
-| Token candidate | Reference | Oracle (closed form) | Why first |
-|---|---|---|---|
-| `simplest_subdivide` | `simplestSubdivide` | mid-edge scheme: V'=V+E, faces split | Trivial oracle, cheap win |
-| `vertex_cutting` | `vertexCuttingSubdivide` | truncation: V'=Σ valence, per-vertex n-gon added | Dual flavor of CC |
-| `stellate_all` | `stellateSubdivide` (global) | per face: (+1, +n, +n−1) summed | Already have per-face version |
+All Tier-1 candidates implemented and oracle-validated; see the table above.
 
 ## Tier 2 — Medium (distinct topology flavors)
 
@@ -40,9 +38,13 @@ directly useful in both the generative pipeline and the Blender add-on.
 | `honeycomb` | `honeycombSubdivide` | Hexagonal-dominant remeshing |
 | `pentagonal` | `pentagonalSubdivide` ×2 | Pentagon-dominant |
 | `corner_cutting` | `cornerCuttingSubdivide` ×3 (α variants) | Parametric — first token with a continuous parameter |
-| `root4` / `sqrt3` | `root4Subdivide`, `sqrt3Subdivide` | Triangle schemes |
-| `loop_subdivide` | `loopSubdivide` | Requires all-tri input — first token with a precondition |
+| `root4` | `root4Subdivide` | Triangle scheme (parametric: a, twist) |
 | `star` / `fractal` / `dome` | `starSubdivide` etc. | Ornamental; showcase value for Blender demo |
+
+Note: honeycomb / pentagonal / corner_cutting / star / fractal / dome /
+dual1264 are TopMod-specific — their exact semantics must first be
+extracted from the reference headers/papers (read for semantics only,
+clean-room re-implementation) before oracles can be written.
 
 ## Tier 3 — Structural operators (beyond subdivision)
 
@@ -67,6 +69,6 @@ From `dlflaux` standalone modules (verified present 2026-08-06):
 
 ## Ceiling
 
-8 current + 3 (T1) + ~9 (T2) + 4 (T3) ≈ **24-op vocabulary**, matching the
+13 current + ~7 (T2) + 4 (T3) ≈ **24-op vocabulary**, matching the
 original TopMod's expressive range while remaining differentiable-pipeline-
 and Blender-embeddable.
