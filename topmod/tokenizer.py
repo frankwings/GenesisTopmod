@@ -16,6 +16,8 @@ Token vocabulary
   IE   (f_ord, he_pos, f_ord2, he_pos2) — single insert_edge
   DE   (edge_ord,)               — single delete_edge
   CC   ()                        — one Catmull-Clark subdivision round
+  DUAL ()                        — combinatorial dual (V'=F, F'=V, E'=E)
+  DS   ()                        — one Doo-Sabin subdivision round
   CV   (qx, qy, qz)             — set next vertex position (quantized)
   EOS  ()                        — end-of-sequence
 
@@ -54,6 +56,7 @@ from .dlfl import DLFLMesh, Face, HalfEdge, Vertex
 from .operators import insert_edge, delete_edge
 from .high_level_ops import add_handle
 from .subdivision import catmull_clark
+from .remeshing import dual, doo_sabin
 from .primitives import make_icosahedron
 from .validate import is_manifold, check_all
 
@@ -83,7 +86,7 @@ class TopModToken:
     edge_ord : int | None
         DE only: index of the edge in insertion-order edge list.
     """
-    op: str   # 'CV' | 'IE' | 'DE' | 'CC' | 'HDL' | 'EOS'
+    op: str   # 'CV' | 'IE' | 'DE' | 'CC' | 'DUAL' | 'DS' | 'HDL' | 'EOS'
 
     pos:      Optional[Tuple[int, int, int]] = None   # CV
     corner1:  Optional[Tuple[int, int]]      = None   # IE / HDL
@@ -385,6 +388,14 @@ def detokenize(
             if validate_steps and not is_manifold(mesh):
                 raise RuntimeError("Mesh became non-manifold after CC")
 
+        elif op in ('DUAL', 'DS'):
+            mesh     = dual(mesh) if op == 'DUAL' else doo_sabin(mesh)
+            cv_verts = None   # vertex list becomes invalid
+            cv_idx   = 0
+
+            if validate_steps and not is_manifold(mesh):
+                raise RuntimeError(f"Mesh became non-manifold after {op}")
+
         elif op == 'HDL':
             if token.corner1 is None or token.corner2 is None:
                 raise ValueError(f"HDL token missing corner parameters: {token}")
@@ -503,6 +514,13 @@ def build_vocabulary(
         vocab[f'REF_{i}'] = idx
         idx += 1
 
+    # Extension ops appended at the END so all pre-existing IDs
+    # (EOS/CC/CV/IE/DE/HDL, COORD_*, REF_*) keep their values —
+    # sequences and checkpoints encoded with the old vocabulary stay valid.
+    for op in ('DUAL', 'DS'):
+        vocab[op] = idx
+        idx += 1
+
     return vocab
 
 
@@ -530,8 +548,8 @@ def encode_sequence(
         if op == 'EOS':
             ids.append(vocab['EOS'])
 
-        elif op == 'CC':
-            ids.append(vocab['CC'])
+        elif op in ('CC', 'DUAL', 'DS'):
+            ids.append(vocab[op])
 
         elif op == 'CV':
             ids.append(vocab['CV'])
@@ -578,7 +596,7 @@ def decode_sequence(
 
     Raises ValueError on any unrecognised ID or malformed sequence.
     """
-    OP_TOKENS  = {'EOS', 'CC', 'CV', 'IE', 'DE', 'HDL'}
+    OP_TOKENS  = {'EOS', 'CC', 'CV', 'IE', 'DE', 'HDL', 'DUAL', 'DS'}
     tokens: List[TopModToken] = []
     it = iter(ids)
 
@@ -613,8 +631,8 @@ def decode_sequence(
             tokens.append(TopModToken(op='EOS'))
             break
 
-        elif sym == 'CC':
-            tokens.append(TopModToken(op='CC'))
+        elif sym in ('CC', 'DUAL', 'DS'):
+            tokens.append(TopModToken(op=sym))
 
         elif sym == 'CV':
             qx, qy, qz = _next_coord(), _next_coord(), _next_coord()
@@ -666,5 +684,5 @@ def sequence_length(tokens: List[TopModToken]) -> int:
         elif tok.op == 'DE':
             length += 2   # opcode + 1 ref
         else:
-            length += 1   # EOS, CC
+            length += 1   # EOS, CC, DUAL, DS
     return length

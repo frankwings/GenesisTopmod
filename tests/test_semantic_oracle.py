@@ -270,3 +270,113 @@ class TestSequenceOracle:
         assert counts(mesh) == (V0, E0 + m, F0 + m - 2)
         assert mesh.genus() == 1
         assert_valid(mesh, "composed sequence")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# dual: V'=F, E'=E, F'=V; χ & genus preserved; involution dual(dual(M)) ≅ M
+# (DLFLDual.hh: createDual)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from topmod.remeshing import dual, doo_sabin  # noqa: E402
+
+
+class TestDualOracle:
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = dual(mesh)
+        assert counts(out) == (F, E, V), name
+        assert out.euler_characteristic() == mesh.euler_characteristic(), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"dual of {name}")
+
+    def test_degree_valence_swap(self, named_mesh):
+        """Face degrees of dual == vertex valences of primal (as multisets)."""
+        name, mesh = named_mesh
+        primal_valences = sorted(v.degree() for v in mesh.vertices.values())
+        out = dual(mesh)
+        dual_degrees = sorted(f.degree() for f in out.faces.values())
+        assert dual_degrees == primal_valences, name
+
+    def test_involution_counts(self, named_mesh):
+        """dual(dual(M)) has exactly M's element counts and degree spectrum."""
+        name, mesh = named_mesh
+        dd = dual(dual(mesh))
+        assert counts(dd) == counts(mesh), name
+        assert (sorted(f.degree() for f in dd.faces.values())
+                == sorted(f.degree() for f in mesh.faces.values())), name
+        assert_valid(dd, f"dual^2 of {name}")
+
+    def test_cube_octahedron_duality(self):
+        """dual(cube) is combinatorially an octahedron (8 tri faces, 6 verts)."""
+        out = dual(make_cube())
+        assert counts(out) == (6, 12, 8)
+        assert all(f.degree() == 3 for f in out.faces.values())
+
+    def test_on_genus_1(self):
+        mesh = make_cube()
+        faces = list(mesh.faces.values())
+        f1 = faces[0]
+        v1 = {v.id for v in f1.vertices()}
+        f2 = next(f for f in faces[1:]
+                  if not (v1 & {v.id for v in f.vertices()}))
+        add_handle(mesh, f1, f2)
+        V, E, F = counts(mesh)
+        out = dual(mesh)
+        assert counts(out) == (F, E, V)
+        assert out.genus() == 1
+        assert_valid(out, "dual of genus-1")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# doo_sabin: V'=2E, E'=4E, F'=V+E+F; χ & genus preserved
+# (DLFLSubdiv.hh: dooSabinSubdivideBC — face-face + edge-face + vertex-face)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDooSabinOracle:
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        out = doo_sabin(mesh)
+        assert counts(out) == (2 * E, 4 * E, V + E + F), name
+        assert out.euler_characteristic() == mesh.euler_characteristic(), name
+        assert out.genus() == mesh.genus(), name
+        assert_valid(out, f"doo_sabin on {name}")
+
+    def test_cube_known_counts(self):
+        """DS on cube: 24 verts, 48 edges, 26 faces (classic result)."""
+        out = doo_sabin(make_cube())
+        assert counts(out) == (24, 48, 26)
+
+    def test_face_types(self):
+        """DS on cube: 6 quads (face-face) + 12 quads (edge) + 8 tris (vertex)."""
+        out = doo_sabin(make_cube())
+        degs = sorted(f.degree() for f in out.faces.values())
+        assert degs == [3] * 8 + [4] * 18
+
+    def test_on_genus_1(self):
+        mesh = make_cube()
+        faces = list(mesh.faces.values())
+        f1 = faces[0]
+        v1 = {v.id for v in f1.vertices()}
+        f2 = next(f for f in faces[1:]
+                  if not (v1 & {v.id for v in f.vertices()}))
+        add_handle(mesh, f1, f2)
+        V, E, F = counts(mesh)
+        out = doo_sabin(mesh)
+        assert counts(out) == (2 * E, 4 * E, V + E + F)
+        assert out.genus() == 1
+        assert_valid(out, "doo_sabin on genus-1")
+
+    def test_two_rounds(self):
+        mesh = make_tetrahedron()
+        once = doo_sabin(mesh)
+        V, E, F = counts(once)
+        twice = doo_sabin(once)
+        assert counts(twice) == (2 * E, 4 * E, V + E + F)
+        assert_valid(twice, "doo_sabin ×2 on tetrahedron")
+
+    def test_ds_of_dual_equals_ds_counts(self):
+        """DS is self-dual in counts: DS(M) and DS(dual(M)) have equal V/E/F."""
+        mesh = make_cube()
+        assert counts(doo_sabin(mesh)) == counts(doo_sabin(dual(mesh)))
