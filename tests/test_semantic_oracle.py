@@ -826,3 +826,29 @@ class TestDsBCNewOracle:
         pb = sorted((round(v.x, 6), round(v.y, 6), round(v.z, 6))
                     for v in b.vertices.values())
         assert pa != pb
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 4b — dome (docs/reference_semantics.md §7)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from topmod.remeshing import dome_subdivide   # noqa: E402
+
+
+class TestDomeOracle:
+    """dome = subdivide_all_edges(4) + 7 DS-extrusions per old face:
+    V'=V+59E, E'=116E, F'=F+56E (in place)."""
+
+    def test_counts(self, named_mesh):
+        name, mesh = named_mesh
+        V, E, F = counts(mesh)
+        g = mesh.genus()
+        dome_subdivide(mesh)
+        assert counts(mesh) == (V + 59 * E, 116 * E, F + 56 * E), name
+        assert mesh.genus() == g, name
+        assert_valid(mesh, f"dome on {name}")
+
+    def test_cube(self):
+        mesh = make_cube()
+        dome_subdivide(mesh)
+        assert counts(mesh) == (716, 1392, 678)

@@ -19,7 +19,8 @@ from .remeshing import (dual, doo_sabin, simplest_subdivide,
                         loop_style_subdivide, fractal_subdivide,
                         pentagonal_subdivide, pentagonal2_subdivide,
                         dual1264_subdivide, root4_subdivide,
-                        checkerboard_remesh, ds_bc_new_subdivide)
+                        checkerboard_remesh, ds_bc_new_subdivide,
+                        dome_subdivide)
 from .tokenizer import (
     TopModToken,
     quantize_coord, dequantize_coord,
@@ -50,7 +51,7 @@ __all__ = [
     "loop_style_subdivide", "fractal_subdivide",
     "pentagonal_subdivide", "pentagonal2_subdivide",
     "dual1264_subdivide", "root4_subdivide",
-    "checkerboard_remesh", "ds_bc_new_subdivide",
+    "checkerboard_remesh", "ds_bc_new_subdivide", "dome_subdivide",
     # Tokenizer
     "TopModToken",
     "quantize_coord", "dequantize_coord",

@@ -34,6 +34,7 @@ Token vocabulary
   ROOT4()                        — root-4 (V'=V+2E, F'=F+E)
   CHKB ()                        — checkerboard (V'=V+4E, F'=F+4E)
   DSBC ()                        — Doo-Sabin BC-new (V'=V+4E, F'=F+2E)
+  DOME ()                        — dome (V'=V+59E, E'=116E, F'=F+56E)
   CV   (qx, qy, qz)             — set next vertex position (quantized)
   EOS  ()                        — end-of-sequence
 
@@ -78,7 +79,8 @@ from .remeshing import (dual, doo_sabin, simplest_subdivide,
                         loop_style_subdivide, fractal_subdivide,
                         pentagonal_subdivide, pentagonal2_subdivide,
                         dual1264_subdivide, root4_subdivide,
-                        checkerboard_remesh, ds_bc_new_subdivide)
+                        checkerboard_remesh, ds_bc_new_subdivide,
+                        dome_subdivide)
 from .high_level_ops import stellate_all
 from .primitives import make_icosahedron
 from .validate import is_manifold, check_all
@@ -372,6 +374,11 @@ def _star(mesh: DLFLMesh) -> DLFLMesh:
     return mesh
 
 
+def _dome(mesh: DLFLMesh) -> DLFLMesh:
+    dome_subdivide(mesh)
+    return mesh
+
+
 # Zero-argument global remeshing opcodes → executor.
 # LOOP / SQRT3 raise ValueError on non-triangular meshes (documented
 # precondition); a generative model emitting them on invalid state gets a
@@ -395,6 +402,7 @@ _GLOBAL_OPS = {
     'ROOT4': root4_subdivide,
     'CHKB':  checkerboard_remesh,
     'DSBC':  ds_bc_new_subdivide,
+    'DOME':  _dome,
 }
 
 def detokenize(
@@ -577,7 +585,7 @@ def build_vocabulary(
     # sequences and checkpoints encoded with the old vocabulary stay valid.
     for op in ('DUAL', 'DS', 'STA', 'SIMP', 'VC', 'LOOP', 'SQRT3',
                'HONEY', 'STAR', 'CCUT', 'LSTYLE', 'FRAC',
-               'PENT', 'PENT2', 'D1264', 'ROOT4', 'CHKB', 'DSBC'):
+               'PENT', 'PENT2', 'D1264', 'ROOT4', 'CHKB', 'DSBC', 'DOME'):
         vocab[op] = idx
         idx += 1
 

@@ -579,9 +579,9 @@ class TestVocabulary:
         max_ref = 128
         vocab   = build_vocabulary(n_position_bins=n_bins, max_ordinal=max_ref)
         # 6 op tokens + n_bins coord tokens + max_ref ref tokens
-        # + 18 extension ops (DUAL..SQRT3 + HONEY/STAR/CCUT/LSTYLE/FRAC
-        #   + PENT/PENT2/D1264/ROOT4 + CHKB/DSBC)
-        assert len(vocab) == 6 + n_bins + max_ref + 18
+        # + 19 extension ops (DUAL..SQRT3 + HONEY/STAR/CCUT/LSTYLE/FRAC
+        #   + PENT/PENT2/D1264/ROOT4 + CHKB/DSBC/DOME)
+        assert len(vocab) == 6 + n_bins + max_ref + 19
 
     def test_encode_eos(self):
         vocab  = build_vocabulary(n_position_bins=32, max_ordinal=64)
@@ -918,7 +918,7 @@ class TestBatch4Tokens:
     def test_vocab_backward_compatible(self):
         vocab = build_vocabulary(n_position_bins=128, max_ordinal=100)
         base = 6 + 128 + 100 + 16   # after DUAL..ROOT4
-        for i, op in enumerate(('CHKB', 'DSBC')):
+        for i, op in enumerate(('CHKB', 'DSBC', 'DOME')):
             assert vocab[op] == base + i
 
     def test_detokenize_each(self):
@@ -926,6 +926,7 @@ class TestBatch4Tokens:
         expected = {
             'CHKB': (132, 270, 140),   # V+4E, 9E, F+4E
             'DSBC': (132, 210, 80),    # V+4E, 7E, F+2E
+            'DOME': (1782, 3480, 1700),  # V+59E, 116E, F+56E
         }
         for op, cnt in expected.items():
             mesh = detokenize([TopModToken(op=op), TopModToken(op='EOS')],

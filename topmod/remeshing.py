@@ -1025,3 +1025,80 @@ def ds_bc_new_subdivide(mesh: DLFLMesh, sf: float = 1.0,
                       tv_idx[t.id]])
 
     return _build_mesh(positions, faces)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch 4b — dome (docs/reference_semantics.md §7); in place
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Reference hard-coded dome profile: per-round extrusion heights (×length)
+# and ring scale factors (×sf).
+_DOME_HEIGHTS = (0.0, 0.3, 0.18, 0.1, 0.05, 0.025, 0.01)
+_DOME_SCALES  = (1.6, 1.7, 1.6, 1.4, 1.2, 1.1, 0.01)
+
+
+def dome_subdivide(mesh: DLFLMesh, length: float = 1.0,
+                   sf: float = 1.0) -> None:
+    """
+    Dome subdivision (TopMod domeSubdivide), in place.
+
+    Composition: split every edge into 4 equal segments, then perform
+    seven successive Doo-Sabin-style extrusions on every old face with
+    the reference's hard-coded height/scale profile — a rounded dome
+    capped by a tiny near-degenerate face per old face.
+
+    Element counts per DS-extrusion equal a plain extrusion; positions
+    are the DS mask of the ring, scaled per profile.
+
+    Oracle: V' = V + 59E, E' = 116E, F' = F + 56E;
+    χ and genus preserved.  *length*/*sf* scale the profiles (geometric).
+    """
+    import math
+    from .high_level_ops import extrude_face, subdivide_edge
+
+    orig_faces = list(mesh.faces.values())
+
+    # Height unit per face: average boundary edge length before refinement
+    face_unit: Dict[int, float] = {}
+    for f in orig_faces:
+        vs = f.vertices()
+        d = len(vs)
+        per = 0.0
+        for i in range(d):
+            a, b = vs[i], vs[(i + 1) % d]
+            per += math.dist((a.x, a.y, a.z), (b.x, b.y, b.z))
+        face_unit[f.id] = per / d
+
+    # 1. Quadrisect every original edge (subdivide the edge, then both halves)
+    for e in list(mesh.edges.values()):
+        m2 = subdivide_edge(mesh, e)          # e becomes u—m2; new m2—w
+        second = m2.he.edge                   # m2 — w
+        subdivide_edge(mesh, e)               # u — m1 — m2
+        subdivide_edge(mesh, second)          # m2 — m3 — w
+
+    # 2. Seven DS-style extrusions per old face
+    for f in orig_faces:
+        unit = face_unit[f.id]
+        current = f
+        for h, s in zip(_DOME_HEIGHTS, _DOME_SCALES):
+            new_faces = extrude_face(mesh, current, dist=h * length * unit)
+            top = new_faces[0]
+            # Reposition top ring: DS mask, then scale s·sf about centroid
+            ring = top.vertices()
+            n = len(ring)
+            pts = [(v.x, v.y, v.z) for v in ring]
+            cx = sum(p[0] for p in pts) / n
+            cy = sum(p[1] for p in pts) / n
+            cz = sum(p[2] for p in pts) / n
+            scale = s * sf
+            for k, v in enumerate(ring):
+                p = pts[k]
+                a = pts[(k - 1) % n]
+                b = pts[(k + 1) % n]
+                dsx = (p[0] + cx + (p[0] + a[0]) / 2 + (p[0] + b[0]) / 2) / 4.0
+                dsy = (p[1] + cy + (p[1] + a[1]) / 2 + (p[1] + b[1]) / 2) / 4.0
+                dsz = (p[2] + cz + (p[2] + a[2]) / 2 + (p[2] + b[2]) / 2) / 4.0
+                v.x = cx + scale * (dsx - cx)
+                v.y = cy + scale * (dsy - cy)
+                v.z = cz + scale * (dsz - cz)
+            current = top
