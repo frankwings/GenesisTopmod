@@ -32,6 +32,7 @@ no GPL code is copied.*
 | `root4_subdivide` (token `ROOT4`) | V'=V+2E, E'=4E, F'=F+E (params a, twist) | ✅ 2026-08-07 |
 | `checkerboard_remesh` (token `CHKB`) | V'=V+4E, E'=9E, F'=F+4E; all-quad on quad input (param thickness) | ✅ 2026-08-07 |
 | `ds_bc_new_subdivide` (token `DSBC`) | V'=V+4E, E'=7E, F'=F+2E (params sf, length) | ✅ 2026-08-07 |
+| `dome_subdivide` (token `DOME`) | V'=V+59E, E'=116E, F'=F+56E; in-place composition (params length, sf) | ✅ 2026-08-07 |
 | 4 fundamental ops (create/delete vertex, insert/delete edge) | per Akleman & Chen 2003 | ✅ |
 
 Tokenizer note: `DUAL`/`DS` vocabulary IDs are appended AFTER the REF block,
@@ -50,13 +51,10 @@ Semantics for ALL TopMod-specific schemes extracted clean-room into
 DONE (batch 2): honeycomb, star, corner_cutting, loop_style, fractal.
 DONE (batch 3): pentagonal, pentagonal2, dual1264, root4.
 DONE (batch 4a): checkerboard, ds_bc_new.
+DONE (batch 4b): dome.
 See the Current Vocabulary table.
 
-Remaining:
-
-| Token candidate | Oracle (V', E', F') | Notes |
-|---|---|---|
-| `dome` | V+59E, 116E, F+56E | needs subdivide_all_edges + DS-extrude (batch 4b) |
+Tier 2 is complete — all 13 reference subdivision schemes implemented.
 
 ## Tier 3 — Structural operators (beyond subdivision)
 
@@ -81,6 +79,6 @@ From `dlflaux` standalone modules (verified present 2026-08-06):
 
 ## Ceiling
 
-24 current + 1 (T2 remaining) + 4 (T3) ≈ **29-op vocabulary**, matching the
+25 current + 4 (T3) ≈ **29-op vocabulary**, matching the
 original TopMod's expressive range while remaining differentiable-pipeline-
 and Blender-embeddable.
