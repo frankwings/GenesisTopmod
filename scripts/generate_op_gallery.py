@@ -137,12 +137,9 @@ _DIFF = {
     "crust":    ("✅ Yes", "dedicated torch implementation in "
                            "`topmod/diffgeo.py`; gradients flow to input "
                            "positions **and** to `thickness`"),
-    "pending":  ("⏳ Not yet", "smooth almost everywhere (face normals / "
-                           "edge lengths) but the torch implementation is "
-                           "phase 2 — not in `topmod/diffgeo.py` yet"),
-    "local":    ("⏳ Not yet", "linear in principle, but local single-element "
-                           "operators are not yet wired into the "
-                           "`topmod/diffgeo.py` tracer (phase 2)"),
+    "nonlinear": ("✅ Yes", "dedicated torch implementation in "
+                           "`topmod/diffgeo.py`; gradients flow to input "
+                           "vertex positions and continuous parameters"),
     "none":     ("—", "no geometry to differentiate"),
 }
 
@@ -536,10 +533,10 @@ _DIFF_BY_NAME = {
     "delete_vertex":        "none",
     "insert_edge":          "identity",
     "delete_edge":          "identity",
-    "extrude_face":         "pending",   # displacement along face normal
-    "stellate":             "pending",   # apex displacement along face normal
-    "subdivide_edge":       "local",
-    "subdivide_face":       "local",
+    "extrude_face":         "nonlinear",
+    "stellate":             "nonlinear",
+    "subdivide_edge":       "nonlinear",
+    "subdivide_face":       "nonlinear",
     "add_handle":           "identity",
     "stellate_all":         "linear",
     "catmull_clark":        "linear",
@@ -550,17 +547,17 @@ _DIFF_BY_NAME = {
     "loop_subdivide":       "linear",
     "sqrt3_subdivide":      "linear",
     "honeycomb_subdivide":  "linear",
-    "star_subdivide":       "pending",
+    "star_subdivide":       "nonlinear",
     "corner_cutting":       "linear",
     "loop_style_subdivide": "linear",
-    "fractal_subdivide":    "pending",
+    "fractal_subdivide":    "nonlinear",
     "pentagonal_subdivide": "linear",
     "pentagonal2_subdivide": "linear",
     "dual1264_subdivide":   "linear",
     "root4_subdivide":      "linear",
     "checkerboard_remesh":  "linear",
     "ds_bc_new_subdivide":  "linear",
-    "dome_subdivide":       "pending",
+    "dome_subdivide":       "nonlinear",
     "create_crust":         "crust",
 }
 for _op in OPS:
@@ -593,9 +590,9 @@ every step (the constructive DLFL guarantee of Akleman & Chen 2003).
   *position map* (output vertex coordinates as a function of input
   coordinates, with the operator sequence held fixed) via
   `topmod/diffgeo.py`. Topology itself is always discrete and carries no
-  gradient. ✅ = supported today (18 traced/implemented ops + 3
-  identity-geometry ops + free-parameter positions), ⏳ = planned phase 2
-  (normal-based schemes and local single-element operators). See
+  gradient. ✅ = all 29 operators are now differentiable (17 linear via
+  sparse-matrix trace + 7 dedicated torch implementations + 3
+  identity-geometry + 1 free-parameter + 1 no-geometry). See
   `docs/diffgeo.md` for the API.
 
 ## Quick Reference

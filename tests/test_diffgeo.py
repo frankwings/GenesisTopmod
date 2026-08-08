@@ -7,11 +7,11 @@ TestOracleParity     — torch forward == existing float implementation
                        (positions AND face rings) for every supported op
 TestGradients        — gradcheck / gradient-flow for representative ops
 TestCrust            — nonlinear crust path: parity + thickness gradient
+TestNonlinear        — STAR / FRAC / DOME / EXTRUDE / STELLATE / SUBDIVIDE
 TestDiffSequence     — composed sequences: parity, gradient flow, export
 TestLinearityGuard   — nonlinear ops are rejected by the tracer
 
-All CPU, float64.  The float implementations are the ground truth: the
-torch path must reproduce them to tight tolerance.
+All CPU, float64.  The float implementations are the ground truth.
 """
 
 from __future__ import annotations
@@ -21,12 +21,14 @@ import sys
 
 import pytest
 import torch
+import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from topmod import (
     make_cube, make_tetrahedron, make_icosahedron,
-    create_crust,
+    create_crust, star_subdivide, fractal_subdivide, dome_subdivide,
+    extrude_face, stellate, subdivide_edge, subdivide_face,
 )
 from topmod.primitives import _build_mesh
 from topmod.diffgeo import (
@@ -59,6 +61,20 @@ def _bases_for(op_name):
     if op_name in TRIANGLE_ONLY:
         return ["tetrahedron", "icosahedron"]
     return ["cube", "tetrahedron", "icosahedron"]
+
+
+def _positions_match_unordered(a: torch.Tensor, b: torch.Tensor,
+                               atol: float = 1e-9) -> bool:
+    """Check that two point sets match up to permutation."""
+    if a.shape != b.shape:
+        return False
+    from scipy.spatial import cKDTree
+    tree = cKDTree(b.detach().numpy())
+    dists, indices = tree.query(a.detach().numpy())
+    if max(dists) > atol:
+        return False
+    # Check bijection (each used exactly once)
+    return len(set(indices)) == a.shape[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -105,9 +121,6 @@ class TestOracleParity:
         assert op.faces == ref_faces
 
     def test_trace_is_topology_only(self):
-        """The traced matrix depends on topology, not on the positions —
-        applying it to *different* positions must equal the float op run
-        on those positions."""
         positions, faces = mesh_to_arrays(make_cube())
         op = trace_op("CC", len(positions), faces)
 
@@ -190,6 +203,210 @@ class TestCrust:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Nonlinear ops: STAR / FRAC / DOME / EXTRUDE / STELLATE / SUBDIVIDE
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestNonlinear:
+
+    # -- STAR --
+
+    @pytest.mark.parametrize("offset", [0.0, 0.15, 0.3])
+    def test_star_matches_float(self, offset):
+        positions, faces = mesh_to_arrays(make_cube())
+        mesh = make_cube()
+        star_subdivide(mesh, offset=offset)
+        ref_pos, _ = mesh_to_arrays(mesh)
+        ref_t = torch.tensor(ref_pos, dtype=torch.float64)
+
+        op = trace_op("STAR", len(positions), faces, offset=offset)
+        out = op.apply(torch.tensor(positions, dtype=torch.float64))
+        assert torch.allclose(out, ref_t, atol=1e-9)
+
+    def test_star_gradient_flows(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        verts = torch.tensor(positions, dtype=torch.float64,
+                             requires_grad=True)
+        op = trace_op("STAR", len(positions), faces, offset=0.15)
+        loss = (op.apply(verts) ** 2).sum()
+        loss.backward()
+        assert verts.grad is not None
+        assert torch.isfinite(verts.grad).all()
+        assert verts.grad.abs().sum() > 0
+
+    # -- FRAC --
+
+    @pytest.mark.parametrize("offset", [0.0, 0.5, 1.0])
+    def test_frac_matches_float(self, offset):
+        positions, faces = mesh_to_arrays(make_cube())
+        mesh = make_cube()
+        frac = fractal_subdivide(mesh, offset=offset)
+        ref_pos, _ = mesh_to_arrays(frac)
+        ref_t = torch.tensor(ref_pos, dtype=torch.float64)
+
+        op = trace_op("FRAC", len(positions), faces, offset=offset)
+        out = op.apply(torch.tensor(positions, dtype=torch.float64))
+        assert torch.allclose(out, ref_t, atol=1e-9)
+
+    def test_frac_gradient_flows(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        verts = torch.tensor(positions, dtype=torch.float64,
+                             requires_grad=True)
+        op = trace_op("FRAC", len(positions), faces, offset=1.0)
+        loss = (op.apply(verts) ** 2).sum()
+        loss.backward()
+        assert verts.grad is not None
+        assert torch.isfinite(verts.grad).all()
+
+    # -- DOME --
+
+    def test_dome_positions_match_float(self):
+        """Dome vertex order differs from float (in-place vs rebuild);
+        verify positions match up to permutation."""
+        positions, faces = mesh_to_arrays(make_cube())
+        mesh = make_cube()
+        dome_subdivide(mesh)
+        ref_pos, _ = mesh_to_arrays(mesh)
+        ref_t = torch.tensor(ref_pos, dtype=torch.float64)
+
+        op = trace_op("DOME", len(positions), faces)
+        out = op.apply(torch.tensor(positions, dtype=torch.float64))
+        assert out.shape == ref_t.shape
+        assert _positions_match_unordered(out, ref_t, atol=1e-8)
+
+    def test_dome_element_counts(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        op = trace_op("DOME", len(positions), faces)
+        V, E, F_orig = 8, 12, 6
+        assert op.n_out == V + 59 * E  # 716
+        assert len(op.faces) == F_orig + 56 * E  # 678
+
+    def test_dome_gradient_flows(self):
+        positions, faces = mesh_to_arrays(make_tetrahedron())
+        verts = torch.tensor(positions, dtype=torch.float64,
+                             requires_grad=True)
+        op = trace_op("DOME", len(positions), faces)
+        loss = (op.apply(verts) ** 2).sum()
+        loss.backward()
+        assert verts.grad is not None
+        assert torch.isfinite(verts.grad).all()
+        assert verts.grad.abs().sum() > 0
+
+    # -- EXTRUDE_FACE --
+
+    def test_extrude_face_matches_float(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        mesh = make_cube()
+        face_list = list(mesh.faces.values())
+        extrude_face(mesh, face_list[0], dist=0.6)
+        ref_pos, ref_faces = mesh_to_arrays(mesh)
+        ref_t = torch.tensor(ref_pos, dtype=torch.float64)
+
+        op = trace_op("EXTRUDE_FACE", len(positions), faces,
+                       face_idx=0, dist=0.6)
+        out = op.apply(torch.tensor(positions, dtype=torch.float64))
+        assert torch.allclose(out, ref_t, atol=1e-9)
+        assert op.faces == ref_faces
+
+    def test_extrude_face_gradient(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        verts = torch.tensor(positions, dtype=torch.float64,
+                             requires_grad=True)
+        op = trace_op("EXTRUDE_FACE", len(positions), faces,
+                       face_idx=0, dist=0.6)
+        loss = (op.apply(verts) ** 2).sum()
+        loss.backward()
+        assert verts.grad is not None and torch.isfinite(verts.grad).all()
+
+    def test_extrude_face_dist_gradient(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        d = torch.tensor(0.6, dtype=torch.float64, requires_grad=True)
+        op = trace_op("EXTRUDE_FACE", len(positions), faces,
+                       face_idx=0, dist=d)
+        verts = torch.tensor(positions, dtype=torch.float64,
+                             requires_grad=True)
+        loss = (op.apply(verts) ** 2).sum()
+        loss.backward()
+        assert d.grad is not None and abs(float(d.grad)) > 0
+
+    # -- STELLATE --
+
+    def test_stellate_matches_float(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        mesh = make_cube()
+        face_list = list(mesh.faces.values())
+        stellate(mesh, face_list[0])
+        ref_pos, ref_faces = mesh_to_arrays(mesh)
+        ref_t = torch.tensor(ref_pos, dtype=torch.float64)
+
+        op = trace_op("STELLATE", len(positions), faces, face_idx=0)
+        out = op.apply(torch.tensor(positions, dtype=torch.float64))
+        assert torch.allclose(out, ref_t, atol=1e-9)
+
+    def test_stellate_gradient(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        verts = torch.tensor(positions, dtype=torch.float64,
+                             requires_grad=True)
+        op = trace_op("STELLATE", len(positions), faces, face_idx=0)
+        loss = (op.apply(verts) ** 2).sum()
+        loss.backward()
+        assert verts.grad is not None and torch.isfinite(verts.grad).all()
+
+    # -- SUBDIVIDE_EDGE --
+
+    def test_subdivide_edge_matches_float(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        mesh = make_cube()
+        e = list(mesh.edges.values())[0]
+        v0, v1 = e.vertices()
+        vid_list = list(mesh.vertices.keys())
+        i0 = vid_list.index(v0.id)
+        i1 = vid_list.index(v1.id)
+        subdivide_edge(mesh, e)
+        ref_pos, ref_faces = mesh_to_arrays(mesh)
+        ref_t = torch.tensor(ref_pos, dtype=torch.float64)
+
+        op = trace_op("SUBDIVIDE_EDGE", len(positions), faces,
+                       edge_verts=(i0, i1))
+        out = op.apply(torch.tensor(positions, dtype=torch.float64))
+        assert torch.allclose(out, ref_t, atol=1e-9)
+        assert op.faces == ref_faces
+
+    def test_subdivide_edge_gradient(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        mesh = make_cube()
+        e = list(mesh.edges.values())[0]
+        v0, v1 = e.vertices()
+        vid_list = list(mesh.vertices.keys())
+        i0 = vid_list.index(v0.id)
+        i1 = vid_list.index(v1.id)
+
+        verts = torch.tensor(positions, dtype=torch.float64,
+                             requires_grad=True)
+        op = trace_op("SUBDIVIDE_EDGE", len(positions), faces,
+                       edge_verts=(i0, i1))
+        loss = (op.apply(verts) ** 2).sum()
+        loss.backward()
+        assert verts.grad is not None and torch.isfinite(verts.grad).all()
+        # Only endpoint vertices should have gradient
+        assert verts.grad[i0].abs().sum() > 0
+        assert verts.grad[i1].abs().sum() > 0
+
+    # -- SUBDIVIDE_FACE --
+
+    def test_subdivide_face_matches_float(self):
+        positions, faces = mesh_to_arrays(make_cube())
+        mesh = make_cube()
+        face_list = list(mesh.faces.values())
+        subdivide_face(mesh, face_list[0])
+        ref_pos, ref_faces = mesh_to_arrays(mesh)
+        ref_t = torch.tensor(ref_pos, dtype=torch.float64)
+
+        op = trace_op("SUBDIVIDE_FACE", len(positions), faces, face_idx=0)
+        out = op.apply(torch.tensor(positions, dtype=torch.float64))
+        assert torch.allclose(out, ref_t, atol=1e-9)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Sequences
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -199,7 +416,6 @@ class TestDiffSequence:
         seq = DiffSequence("cube").append("DS").append("CC")
         out = seq.forward()
 
-        # float reference: DS then CC via the real implementations
         positions, faces = mesh_to_arrays(make_cube())
         mid_pos, mid_faces = _float_reference("DS", positions, faces)
         ref_pos, ref_faces = _float_reference("CC", mid_pos, mid_faces)
@@ -226,19 +442,24 @@ class TestDiffSequence:
         assert seq.verts0.grad is not None
         assert torch.isfinite(seq.verts0.grad).all()
 
+    def test_sequence_with_star(self):
+        seq = DiffSequence("cube").append("STAR", offset=0.15)
+        loss = (seq.forward() ** 2).sum()
+        loss.backward()
+        assert seq.verts0.grad is not None
+        assert torch.isfinite(seq.verts0.grad).all()
+
     def test_triangles_export(self):
         seq = DiffSequence("cube").append("CC")
         tris = seq.triangles()
         assert tris.dtype == torch.long
         assert tris.shape[1] == 3
-        # CC on cube: 24 quads -> 48 triangles
-        assert tris.shape[0] == 48
+        assert tris.shape[0] == 48  # 24 quads → 48 triangles
         n_verts = seq.forward().shape[0]
         assert int(tris.max()) < n_verts
         assert int(tris.min()) >= 0
 
     def test_element_counts_against_closed_form(self):
-        # CC on cube: V' = V+E+F = 8+12+6 = 26, F' = 2E = 24
         seq = DiffSequence("cube").append("CC")
         assert seq.forward().shape[0] == 26
         assert len(seq.faces) == 24
@@ -261,10 +482,8 @@ class TestLinearityGuard:
     def test_unsupported_op_raises(self):
         positions, faces = mesh_to_arrays(make_cube())
         with pytest.raises(ValueError):
-            trace_op("DOME", len(positions), faces)
+            trace_op("NONEXISTENT_OP", len(positions), faces)
 
-    def test_star_not_silently_traced(self):
-        """STAR (normal displacement) must not be in the linear registry."""
-        assert "STAR" not in LINEAR_OPS
-        assert "FRAC" not in LINEAR_OPS
-        assert "DOME" not in LINEAR_OPS
+    def test_nonlinear_ops_are_not_in_linear_registry(self):
+        for op in NONLINEAR_OPS:
+            assert op not in LINEAR_OPS
