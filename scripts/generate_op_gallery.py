@@ -126,20 +126,57 @@ class OpEntry:
 # (output vertex coordinates as a function of input coordinates) with the
 # operator sequence held fixed.
 _DIFF = {
-    "linear":   ("✅ Yes", "linear — traced to a sparse matrix in "
-                           "`topmod/diffgeo.py`; gradients flow to input "
-                           "vertex positions (op parameters baked as "
-                           "constants)"),
-    "identity": ("✅ Yes", "pure topology, no coordinates created — the "
-                           "position map is the identity"),
-    "param":    ("✅ Yes", "the position is itself a free parameter (leaf "
-                           "tensor)"),
-    "crust":    ("✅ Yes", "dedicated torch implementation in "
-                           "`topmod/diffgeo.py`; gradients flow to input "
-                           "positions **and** to `thickness`"),
-    "nonlinear": ("✅ Yes", "dedicated torch implementation in "
-                           "`topmod/diffgeo.py`; gradients flow to input "
-                           "vertex positions and continuous parameters"),
+    "linear":   ("✅ Yes", "linear — traced to a sparse matrix `W` in "
+                           "`topmod/diffgeo.py` (`new_verts = W @ old_verts`); "
+                           "gradients flow to input vertex positions. Op "
+                           "parameters are baked into the traced weights as "
+                           "constants. Oracle: torch output matches float "
+                           "implementation to 1e-9; verified by "
+                           "`torch.autograd.gradcheck`"),
+    "identity": ("✅ Yes", "pure topology — no new vertex coordinates are "
+                           "created, so the position map is the identity and "
+                           "gradients pass through unchanged"),
+    "param":    ("✅ Yes", "the vertex position is itself a free parameter "
+                           "(leaf tensor); gradients flow directly"),
+    "crust":    ("✅ Yes", "dedicated torch implementation: Newell face "
+                           "normals → per-vertex averaged normal (eps-guarded "
+                           "normalization) → inner shell = verts − thickness "
+                           "× normal. Gradients flow to input positions **and** "
+                           "`thickness` (pass as `torch.tensor`). Oracle: "
+                           "matches float path to 1e-9"),
+    "star":     ("✅ Yes", "decomposed as linear STA×2 (traced sparse "
+                           "matrices) + post-hoc offset · face-normal "
+                           "correction on first-round apexes. Gradients "
+                           "flow to input positions and `offset`. Oracle: "
+                           "matches float path to 1e-9"),
+    "frac":     ("✅ Yes", "decomposed as linear LSTYLE trace (shared "
+                           "vertex positions) + torch apex computation: "
+                           "centroid + h · normal, where h = offset · "
+                           "√max(L2²−L1², 0) with gradient-safe sqrt guard. "
+                           "Gradients flow to input positions and `offset`. "
+                           "Oracle: matches float path to 1e-9"),
+    "dome":     ("✅ Yes", "full torch reconstruction: quadrisection "
+                           "(linear midpoints) + 7 rounds of Newell-normal "
+                           "extrusion + DS-mask ring repositioning + centroid "
+                           "scaling. Gradients flow to input positions, "
+                           "`length` and `sf`. Oracle: position-matched to "
+                           "7.6e-18 (vertex order differs from float in-place "
+                           "path, verified by bijective nearest-neighbor)"),
+    "extrude":  ("✅ Yes", "dedicated torch implementation: Newell face "
+                           "normal of the target face → new verts = old + "
+                           "dist × normal. Gradients flow to input positions "
+                           "and `dist`. Oracle: matches float path to 1e-9"),
+    "stellate_t": ("✅ Yes", "dedicated torch implementation: centroid of "
+                           "the target face + optional dist × face normal. "
+                           "Gradients flow to input positions and `dist`. "
+                           "Oracle: matches float path to 1e-9"),
+    "subdiv_e": ("✅ Yes", "dedicated torch implementation: midpoint = "
+                           "(v0 + v1) / 2. Gradients flow to the two "
+                           "endpoint vertices. Oracle: matches float path "
+                           "to 1e-9"),
+    "subdiv_f": ("✅ Yes", "identical to stellate at dist=0: centroid of "
+                           "the target face. Gradients flow to all face "
+                           "vertices. Oracle: matches float path to 1e-9"),
     "none":     ("—", "no geometry to differentiate"),
 }
 
@@ -533,10 +570,10 @@ _DIFF_BY_NAME = {
     "delete_vertex":        "none",
     "insert_edge":          "identity",
     "delete_edge":          "identity",
-    "extrude_face":         "nonlinear",
-    "stellate":             "nonlinear",
-    "subdivide_edge":       "nonlinear",
-    "subdivide_face":       "nonlinear",
+    "extrude_face":         "extrude",
+    "stellate":             "stellate_t",
+    "subdivide_edge":       "subdiv_e",
+    "subdivide_face":       "subdiv_f",
     "add_handle":           "identity",
     "stellate_all":         "linear",
     "catmull_clark":        "linear",
@@ -547,17 +584,17 @@ _DIFF_BY_NAME = {
     "loop_subdivide":       "linear",
     "sqrt3_subdivide":      "linear",
     "honeycomb_subdivide":  "linear",
-    "star_subdivide":       "nonlinear",
+    "star_subdivide":       "star",
     "corner_cutting":       "linear",
     "loop_style_subdivide": "linear",
-    "fractal_subdivide":    "nonlinear",
+    "fractal_subdivide":    "frac",
     "pentagonal_subdivide": "linear",
     "pentagonal2_subdivide": "linear",
     "dual1264_subdivide":   "linear",
     "root4_subdivide":      "linear",
     "checkerboard_remesh":  "linear",
     "ds_bc_new_subdivide":  "linear",
-    "dome_subdivide":       "nonlinear",
+    "dome_subdivide":       "dome",
     "create_crust":         "crust",
 }
 for _op in OPS:

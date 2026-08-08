@@ -72,7 +72,7 @@ Creates an isolated *point sphere*: a single vertex that forms its own connected
 - **Token**: `CV`
 - **Oracle**: V+1, E+0, F+1 (point sphere)
 - **Parameters**: x, y, z — coordinates
-- **Differentiable (PyTorch)**: ✅ Yes — the position is itself a free parameter (leaf tensor)
+- **Differentiable (PyTorch)**: ✅ Yes — the vertex position is itself a free parameter (leaf tensor); gradients flow directly
 - **Example primitive**: cube
 
 ```python
@@ -106,7 +106,7 @@ Inserts a new edge between two corners. If both corners lie on the *same* face, 
 - **Token**: `IE`
 - **Oracle**: E+1; same face → F+1 (split), different faces → F−1 (merge components / open handle)
 - **Parameters**: he1, he2 — two corners (half-edges)
-- **Differentiable (PyTorch)**: ✅ Yes — pure topology, no coordinates created — the position map is the identity
+- **Differentiable (PyTorch)**: ✅ Yes — pure topology — no new vertex coordinates are created, so the position map is the identity and gradients pass through unchanged
 - **Example primitive**: cube
 
 ```python
@@ -124,7 +124,7 @@ Deletes an edge. When the two sides of the edge belong to different faces, those
 - **Token**: `DE`
 - **Oracle**: E−1; two distinct sides → F−1 (merge), same face both sides → F+1
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — pure topology, no coordinates created — the position map is the identity
+- **Differentiable (PyTorch)**: ✅ Yes — pure topology — no new vertex coordinates are created, so the position map is the identity and gradients pass through unchanged
 - **Example primitive**: cube
 
 ```python
@@ -145,7 +145,7 @@ Extrudes a face along its normal, creating a lifted copy of the face (the *top*)
 - **Token**: `—`
 - **Oracle**: V+n, E+2n, F+n (n = face degree)
 - **Parameters**: dist — extrusion distance along the face normal
-- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation in `topmod/diffgeo.py`; gradients flow to input vertex positions and continuous parameters
+- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation: Newell face normal of the target face → new verts = old + dist × normal. Gradients flow to input positions and `dist`. Oracle: matches float path to 1e-9
 - **Example primitive**: cube
 
 ```python
@@ -163,7 +163,7 @@ Stellates one face: adds an apex vertex at the face centroid (optionally raised 
 - **Token**: `—`
 - **Oracle**: V+1, E+n, F+n−1
 - **Parameters**: dist — apex displacement along the face normal
-- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation in `topmod/diffgeo.py`; gradients flow to input vertex positions and continuous parameters
+- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation: centroid of the target face + optional dist × face normal. Gradients flow to input positions and `dist`. Oracle: matches float path to 1e-9
 - **Example primitive**: cube
 
 ```python
@@ -180,7 +180,7 @@ Splits an edge at its midpoint and returns the new midpoint vertex. The two flan
 - **Token**: `—`
 - **Oracle**: V+1, E+1, F+0
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation in `topmod/diffgeo.py`; gradients flow to input vertex positions and continuous parameters
+- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation: midpoint = (v0 + v1) / 2. Gradients flow to the two endpoint vertices. Oracle: matches float path to 1e-9
 - **Example primitive**: cube
 
 ```python
@@ -197,7 +197,7 @@ Fans a face from its centroid: a center vertex is added and connected to every c
 - **Token**: `—`
 - **Oracle**: V+1, E+n, F+n−1
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation in `topmod/diffgeo.py`; gradients flow to input vertex positions and continuous parameters
+- **Differentiable (PyTorch)**: ✅ Yes — identical to stellate at dist=0: centroid of the target face. Gradients flow to all face vertices. Oracle: matches float path to 1e-9
 - **Example primitive**: cube
 
 ```python
@@ -214,7 +214,7 @@ Connects two faces of equal degree with a tunnel (handle): both faces are consum
 - **Token**: `HDL`
 - **Oracle**: V+0, E+n, F+n−2, χ−2, genus+1 (same component)
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — pure topology, no coordinates created — the position map is the identity
+- **Differentiable (PyTorch)**: ✅ Yes — pure topology — no new vertex coordinates are created, so the position map is the identity and gradients pass through unchanged
 - **Example primitive**: cube
 
 ```python
@@ -231,7 +231,7 @@ Stellates every face of the mesh at once, producing an all-triangle mesh (a pyra
 - **Token**: `STA`
 - **Oracle**: V'=V+F, E'=3E, F'=2E
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -252,7 +252,7 @@ Catmull-Clark subdivision, the industry-standard smoothing scheme: face points, 
 - **Token**: `CC`
 - **Oracle**: V'=V+E+F, E'=4E, F'=2E (all quads)
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -269,7 +269,7 @@ Takes the combinatorial dual: every face becomes a vertex (at its centroid) and 
 - **Token**: `DUAL`
 - **Oracle**: V'=F, E'=E, F'=V
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -286,7 +286,7 @@ Doo-Sabin subdivision (corner-cutting family): one new vertex per face corner, p
 - **Token**: `DS`
 - **Oracle**: V'=2E, E'=4E, F'=V+E+F
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -303,7 +303,7 @@ Mid-edge (simplest / Peters-Reif) subdivision: edge midpoints become the only ve
 - **Token**: `SIMP`
 - **Oracle**: V'=E, E'=2E, F'=F+V
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -320,7 +320,7 @@ Vertex truncation: every vertex is sliced off, leaving a small polygon where the
 - **Token**: `VC`
 - **Oracle**: V'=2E, E'=3E, F'=F+V
 - **Parameters**: offset ∈ (0, 0.5) — corner-cut depth
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -337,7 +337,7 @@ Loop subdivision: every triangle is split 1-into-4 at edge midpoints, with β-we
 - **Token**: `LOOP`
 - **Oracle**: V'=V+E, E'=4E, F'=4F
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: icosahedron
 
 ```python
@@ -354,7 +354,7 @@ out = loop_subdivide(make_icosahedron())
 - **Token**: `SQRT3`
 - **Oracle**: V'=V+F, E'=3E, F'=3F
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: icosahedron
 
 ```python
@@ -375,7 +375,7 @@ Honeycomb subdivision, defined as `dual ∘ stellate_all`: stellate every face, 
 - **Token**: `HONEY`
 - **Oracle**: V'=2E, E'=3E, F'=F+V
 - **Parameters**: —
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -392,7 +392,7 @@ Star subdivision: `stellate_all` applied twice. A positive offset lifts the firs
 - **Token**: `STAR`
 - **Oracle**: V'=V+F+2E, E'=9E, F'=6E (all triangles)
 - **Parameters**: offset — first-round apex lift along original face normals
-- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation in `topmod/diffgeo.py`; gradients flow to input vertex positions and continuous parameters
+- **Differentiable (PyTorch)**: ✅ Yes — decomposed as linear STA×2 (traced sparse matrices) + post-hoc offset · face-normal correction on first-round apexes. Gradients flow to input positions and `offset`. Oracle: matches float path to 1e-9
 - **Example primitive**: cube
 
 ```python
@@ -409,7 +409,7 @@ Corner-cutting subdivision: a parameterized geometric variant of Doo-Sabin with 
 - **Token**: `CCUT`
 - **Oracle**: V'=2E, E'=4E, F'=V+E+F (same topology as Doo-Sabin)
 - **Parameters**: alpha ∈ (0, 1) — tension (diagonal weight)
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -426,7 +426,7 @@ Loop connectivity generalized to arbitrary polygons: each face gets its corner t
 - **Token**: `LSTYLE`
 - **Oracle**: V'=V+E, E'=4E, F'=F+2E
 - **Parameters**: length ∈ [0, 1] — old-vertex blend (1 = keep position)
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -443,7 +443,7 @@ Fractal subdivision: `loop_style` followed by stellating every central polygon w
 - **Token**: `FRAC`
 - **Oracle**: V'=V+E+F, E'=6E, F'=4E (all triangles)
 - **Parameters**: offset — spike height factor
-- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation in `topmod/diffgeo.py`; gradients flow to input vertex positions and continuous parameters
+- **Differentiable (PyTorch)**: ✅ Yes — decomposed as linear LSTYLE trace (shared vertex positions) + torch apex computation: centroid + h · normal, where h = offset · √max(L2²−L1², 0) with gradient-safe sqrt guard. Gradients flow to input positions and `offset`. Oracle: matches float path to 1e-9
 - **Example primitive**: cube
 
 ```python
@@ -460,7 +460,7 @@ Pentagonal subdivision: every edge is trisected and every face gets a centroid s
 - **Token**: `PENT`
 - **Oracle**: V'=V+2E+F, E'=5E, F'=2E (all pentagons)
 - **Parameters**: offset ∈ [0, 1] — pull spoke neighbors toward the centroid
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -477,7 +477,7 @@ Second pentagonal variant: edges are split at midpoints and a scaled inner copy 
 - **Token**: `PENT2`
 - **Oracle**: V'=V+3E, E'=6E, F'=F+2E
 - **Parameters**: scale_factor — inner-polygon shrink
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -494,7 +494,7 @@ Dual 12.6.4 subdivision: Doo-Sabin-like, but each face's inner polygon is a 2d-g
 - **Token**: `D1264`
 - **Oracle**: V'=4E, E'=6E, F'=F+E+V
 - **Parameters**: sf — inner-polygon scale
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -511,7 +511,7 @@ Root-4 subdivision: an inner polygon (honeycomb-mask weighted) is inserted in ev
 - **Token**: `ROOT4`
 - **Oracle**: V'=V+2E, E'=4E, F'=F+E
 - **Parameters**: a — old-vertex smoothing blend; twist — inner-ring sampling shift
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -528,7 +528,7 @@ Checkerboard remeshing: each face is inset, each edge trisected, and corners are
 - **Token**: `CHKB`
 - **Oracle**: V'=V+4E, E'=9E, F'=F+4E
 - **Parameters**: thickness ∈ (0, 0.5) — inset / trisection ratio
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -545,7 +545,7 @@ Doo-Sabin "BC new" variant: a Doo-Sabin pass is applied to the midpoint-refined 
 - **Token**: `DSBC`
 - **Oracle**: V'=V+4E, E'=7E, F'=F+2E
 - **Parameters**: sf — DS corner scale; length — old-vertex blend
-- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix `W` in `topmod/diffgeo.py` (`new_verts = W @ old_verts`); gradients flow to input vertex positions. Op parameters are baked into the traced weights as constants. Oracle: torch output matches float implementation to 1e-9; verified by `torch.autograd.gradcheck`
 - **Example primitive**: cube
 
 ```python
@@ -562,7 +562,7 @@ Dome subdivision: every edge is split into quarters, then every original face is
 - **Token**: `DOME`
 - **Oracle**: V'=V+59E, E'=116E, F'=F+56E
 - **Parameters**: length — height profile scale; sf — ring scale profile
-- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation in `topmod/diffgeo.py`; gradients flow to input vertex positions and continuous parameters
+- **Differentiable (PyTorch)**: ✅ Yes — full torch reconstruction: quadrisection (linear midpoints) + 7 rounds of Newell-normal extrusion + DS-mask ring repositioning + centroid scaling. Gradients flow to input positions, `length` and `sf`. Oracle: position-matched to 7.6e-18 (vertex order differs from float in-place path, verified by bijective nearest-neighbor)
 - **Example primitive**: cube
 
 ```python
@@ -583,7 +583,7 @@ Turns a surface into a hollow shell: the whole mesh is duplicated with reversed 
 - **Token**: `CRUST`
 - **Oracle**: V'=2V, E'=2E, F'=2F, 2 components; after punching k holes: genus' = 2g+k−1
 - **Parameters**: thickness — shell thickness (negative offsets outward)
-- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation in `topmod/diffgeo.py`; gradients flow to input positions **and** to `thickness`
+- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation: Newell face normals → per-vertex averaged normal (eps-guarded normalization) → inner shell = verts − thickness × normal. Gradients flow to input positions **and** `thickness` (pass as `torch.tensor`). Oracle: matches float path to 1e-9
 - **Example primitive**: cube
 
 ```python
