@@ -32,9 +32,11 @@ class Vertex:
 
     def __init__(self, x: float = 0.0, y: float = 0.0, z: float = 0.0):
         self.id: int = next(_vertex_id_counter)
-        self.x  = float(x)
-        self.y  = float(y)
-        self.z  = float(z)
+        # Coerce plain numbers to float; pass symbolic coordinate objects
+        # through untouched (used by topmod.diffgeo's linear-map tracer).
+        self.x  = float(x) if isinstance(x, (int, float)) else x
+        self.y  = float(y) if isinstance(y, (int, float)) else y
+        self.z  = float(z) if isinstance(z, (int, float)) else z
         self.he: Optional[HalfEdge] = None   # any outgoing half-edge
 
     # ------------------------------------------------------------------
@@ -44,7 +46,11 @@ class Vertex:
 
     @position.setter
     def position(self, xyz: Tuple[float, float, float]) -> None:
-        self.x, self.y, self.z = float(xyz[0]), float(xyz[1]), float(xyz[2])
+        self.x, self.y, self.z = (
+            float(xyz[0]) if isinstance(xyz[0], (int, float)) else xyz[0],
+            float(xyz[1]) if isinstance(xyz[1], (int, float)) else xyz[1],
+            float(xyz[2]) if isinstance(xyz[2], (int, float)) else xyz[2],
+        )
 
     # ------------------------------------------------------------------
     def outgoing_halfedges(self) -> List[HalfEdge]:
