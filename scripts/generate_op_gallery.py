@@ -117,6 +117,34 @@ class OpEntry:
     alpha_after: float = 0.92
     no_image: bool = False
     no_image_reason: str = ""
+    # differentiability status key (see _DIFF table below)
+    diff: str = "pending"
+
+
+# Differentiability display strings (torch support via topmod/diffgeo.py).
+# Topology is always discrete; "differentiable" refers to the position map
+# (output vertex coordinates as a function of input coordinates) with the
+# operator sequence held fixed.
+_DIFF = {
+    "linear":   ("✅ Yes", "linear — traced to a sparse matrix in "
+                           "`topmod/diffgeo.py`; gradients flow to input "
+                           "vertex positions (op parameters baked as "
+                           "constants)"),
+    "identity": ("✅ Yes", "pure topology, no coordinates created — the "
+                           "position map is the identity"),
+    "param":    ("✅ Yes", "the position is itself a free parameter (leaf "
+                           "tensor)"),
+    "crust":    ("✅ Yes", "dedicated torch implementation in "
+                           "`topmod/diffgeo.py`; gradients flow to input "
+                           "positions **and** to `thickness`"),
+    "pending":  ("⏳ Not yet", "smooth almost everywhere (face normals / "
+                           "edge lengths) but the torch implementation is "
+                           "phase 2 — not in `topmod/diffgeo.py` yet"),
+    "local":    ("⏳ Not yet", "linear in principle, but local single-element "
+                           "operators are not yet wired into the "
+                           "`topmod/diffgeo.py` tracer (phase 2)"),
+    "none":     ("—", "no geometry to differentiate"),
+}
 
 
 def _first_face(m): return next(iter(m.faces.values()))
@@ -502,6 +530,43 @@ OPS: List[OpEntry] = [
 ]
 
 
+# Differentiability status per operator (keys of _DIFF).
+_DIFF_BY_NAME = {
+    "create_vertex":        "param",
+    "delete_vertex":        "none",
+    "insert_edge":          "identity",
+    "delete_edge":          "identity",
+    "extrude_face":         "pending",   # displacement along face normal
+    "stellate":             "pending",   # apex displacement along face normal
+    "subdivide_edge":       "local",
+    "subdivide_face":       "local",
+    "add_handle":           "identity",
+    "stellate_all":         "linear",
+    "catmull_clark":        "linear",
+    "dual":                 "linear",
+    "doo_sabin":            "linear",
+    "simplest_subdivide":   "linear",
+    "vertex_cutting":       "linear",
+    "loop_subdivide":       "linear",
+    "sqrt3_subdivide":      "linear",
+    "honeycomb_subdivide":  "linear",
+    "star_subdivide":       "pending",
+    "corner_cutting":       "linear",
+    "loop_style_subdivide": "linear",
+    "fractal_subdivide":    "pending",
+    "pentagonal_subdivide": "linear",
+    "pentagonal2_subdivide": "linear",
+    "dual1264_subdivide":   "linear",
+    "root4_subdivide":      "linear",
+    "checkerboard_remesh":  "linear",
+    "ds_bc_new_subdivide":  "linear",
+    "dome_subdivide":       "pending",
+    "create_crust":         "crust",
+}
+for _op in OPS:
+    _op.diff = _DIFF_BY_NAME[_op.name]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Markdown generation
 # ─────────────────────────────────────────────────────────────────────────────
@@ -524,11 +589,19 @@ every step (the constructive DLFL guarantee of Akleman & Chen 2003).
   by `detokenize` (the basis for autoregressive mesh generation).
 - All images are rendered by this script; both sides are annotated with
   V/E/F counts.
+- The **Diff** column reports PyTorch differentiability of the operator's
+  *position map* (output vertex coordinates as a function of input
+  coordinates, with the operator sequence held fixed) via
+  `topmod/diffgeo.py`. Topology itself is always discrete and carries no
+  gradient. ✅ = supported today (18 traced/implemented ops + 3
+  identity-geometry ops + free-parameter positions), ⏳ = planned phase 2
+  (normal-based schemes and local single-element operators). See
+  `docs/diffgeo.md` for the API.
 
 ## Quick Reference
 
-| # | Operator | Token | Oracle (V', E', F') | Image |
-|---|---|---|---|---|
+| # | Operator | Token | Oracle (V', E', F') | Diff | Image |
+|---|---|---|---|---|---|
 """
 
 MD_USAGE_FOOTER = """
@@ -556,6 +629,25 @@ tokens = [TopModToken(op='CRUST'),
           TopModToken(op='HDL', refs=(0, 20)),   # icosahedron: F=20
           TopModToken(op='EOS')]
 ```
+
+## Differentiable Geometry Usage
+
+Operators marked ✅ in the Diff column can be composed into an end-to-end
+differentiable map (topology fixed, gradients w.r.t. base-primitive
+positions and, for `create_crust`, its `thickness`):
+
+```python
+import torch
+from topmod.diffgeo import DiffSequence
+
+seq = DiffSequence("cube").append("DS").append("CC") \
+                          .append("CRUST", thickness=0.1)
+final_verts = seq.forward()      # differentiable w.r.t. seq.verts0
+tris        = seq.triangles()    # for nvdiffrast / pipeline.geometry_optimizer
+(final_verts ** 2).sum().backward()
+```
+
+Full API and correctness contract: `docs/diffgeo.md`.
 
 ## Testing
 
@@ -586,8 +678,9 @@ def gen_markdown() -> None:
     for i, op in enumerate(OPS, start=1):
         img = (f"[img](assets/ops/{op.name}.png)"
                if not op.no_image else "—")
+        diff_short = _DIFF[op.diff][0]
         lines.append(f"| #{i} | [`{op.name}`](#{_anchor(i, op.name)}) "
-                     f"| {op.token} | {op.oracle} | {img} |\n")
+                     f"| {op.token} | {op.oracle} | {diff_short} | {img} |\n")
 
     cat = None
     for i, op in enumerate(OPS, start=1):
@@ -600,6 +693,9 @@ def gen_markdown() -> None:
         lines.append(f"- **Token**: `{op.token}`\n")
         lines.append(f"- **Oracle**: {op.oracle}\n")
         lines.append(f"- **Parameters**: {op.params}\n")
+        diff_short, diff_long = _DIFF[op.diff]
+        lines.append(f"- **Differentiable (PyTorch)**: {diff_short} — "
+                     f"{diff_long}\n")
         lines.append(f"- **Example primitive**: {op.base_name}\n\n")
         lines.append("```python\n" + op.example + "\n```\n")
         if op.no_image:

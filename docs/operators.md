@@ -16,41 +16,49 @@ every step (the constructive DLFL guarantee of Akleman & Chen 2003).
   by `detokenize` (the basis for autoregressive mesh generation).
 - All images are rendered by this script; both sides are annotated with
   V/E/F counts.
+- The **Diff** column reports PyTorch differentiability of the operator's
+  *position map* (output vertex coordinates as a function of input
+  coordinates, with the operator sequence held fixed) via
+  `topmod/diffgeo.py`. Topology itself is always discrete and carries no
+  gradient. ✅ = supported today (18 traced/implemented ops + 3
+  identity-geometry ops + free-parameter positions), ⏳ = planned phase 2
+  (normal-based schemes and local single-element operators). See
+  `docs/diffgeo.md` for the API.
 
 ## Quick Reference
 
-| # | Operator | Token | Oracle (V', E', F') | Image |
-|---|---|---|---|---|
-| #1 | [`create_vertex`](#1-create_vertex) | CV | V+1, E+0, F+1 (point sphere) | — |
-| #2 | [`delete_vertex`](#2-delete_vertex) | — | V−1, E+0, F−1 | — |
-| #3 | [`insert_edge`](#3-insert_edge) | IE | E+1; same face → F+1 (split), different faces → F−1 (merge components / open handle) | [img](assets/ops/insert_edge.png) |
-| #4 | [`delete_edge`](#4-delete_edge) | DE | E−1; two distinct sides → F−1 (merge), same face both sides → F+1 | [img](assets/ops/delete_edge.png) |
-| #5 | [`extrude_face`](#5-extrude_face) | — | V+n, E+2n, F+n (n = face degree) | [img](assets/ops/extrude_face.png) |
-| #6 | [`stellate`](#6-stellate) | — | V+1, E+n, F+n−1 | [img](assets/ops/stellate.png) |
-| #7 | [`subdivide_edge`](#7-subdivide_edge) | — | V+1, E+1, F+0 | [img](assets/ops/subdivide_edge.png) |
-| #8 | [`subdivide_face`](#8-subdivide_face) | — | V+1, E+n, F+n−1 | [img](assets/ops/subdivide_face.png) |
-| #9 | [`add_handle`](#9-add_handle) | HDL | V+0, E+n, F+n−2, χ−2, genus+1 (same component) | [img](assets/ops/add_handle.png) |
-| #10 | [`stellate_all`](#10-stellate_all) | STA | V'=V+F, E'=3E, F'=2E | [img](assets/ops/stellate_all.png) |
-| #11 | [`catmull_clark`](#11-catmull_clark) | CC | V'=V+E+F, E'=4E, F'=2E (all quads) | [img](assets/ops/catmull_clark.png) |
-| #12 | [`dual`](#12-dual) | DUAL | V'=F, E'=E, F'=V | [img](assets/ops/dual.png) |
-| #13 | [`doo_sabin`](#13-doo_sabin) | DS | V'=2E, E'=4E, F'=V+E+F | [img](assets/ops/doo_sabin.png) |
-| #14 | [`simplest_subdivide`](#14-simplest_subdivide) | SIMP | V'=E, E'=2E, F'=F+V | [img](assets/ops/simplest_subdivide.png) |
-| #15 | [`vertex_cutting`](#15-vertex_cutting) | VC | V'=2E, E'=3E, F'=F+V | [img](assets/ops/vertex_cutting.png) |
-| #16 | [`loop_subdivide`](#16-loop_subdivide) | LOOP | V'=V+E, E'=4E, F'=4F | [img](assets/ops/loop_subdivide.png) |
-| #17 | [`sqrt3_subdivide`](#17-sqrt3_subdivide) | SQRT3 | V'=V+F, E'=3E, F'=3F | [img](assets/ops/sqrt3_subdivide.png) |
-| #18 | [`honeycomb_subdivide`](#18-honeycomb_subdivide) | HONEY | V'=2E, E'=3E, F'=F+V | [img](assets/ops/honeycomb_subdivide.png) |
-| #19 | [`star_subdivide`](#19-star_subdivide) | STAR | V'=V+F+2E, E'=9E, F'=6E (all triangles) | [img](assets/ops/star_subdivide.png) |
-| #20 | [`corner_cutting`](#20-corner_cutting) | CCUT | V'=2E, E'=4E, F'=V+E+F (same topology as Doo-Sabin) | [img](assets/ops/corner_cutting.png) |
-| #21 | [`loop_style_subdivide`](#21-loop_style_subdivide) | LSTYLE | V'=V+E, E'=4E, F'=F+2E | [img](assets/ops/loop_style_subdivide.png) |
-| #22 | [`fractal_subdivide`](#22-fractal_subdivide) | FRAC | V'=V+E+F, E'=6E, F'=4E (all triangles) | [img](assets/ops/fractal_subdivide.png) |
-| #23 | [`pentagonal_subdivide`](#23-pentagonal_subdivide) | PENT | V'=V+2E+F, E'=5E, F'=2E (all pentagons) | [img](assets/ops/pentagonal_subdivide.png) |
-| #24 | [`pentagonal2_subdivide`](#24-pentagonal2_subdivide) | PENT2 | V'=V+3E, E'=6E, F'=F+2E | [img](assets/ops/pentagonal2_subdivide.png) |
-| #25 | [`dual1264_subdivide`](#25-dual1264_subdivide) | D1264 | V'=4E, E'=6E, F'=F+E+V | [img](assets/ops/dual1264_subdivide.png) |
-| #26 | [`root4_subdivide`](#26-root4_subdivide) | ROOT4 | V'=V+2E, E'=4E, F'=F+E | [img](assets/ops/root4_subdivide.png) |
-| #27 | [`checkerboard_remesh`](#27-checkerboard_remesh) | CHKB | V'=V+4E, E'=9E, F'=F+4E | [img](assets/ops/checkerboard_remesh.png) |
-| #28 | [`ds_bc_new_subdivide`](#28-ds_bc_new_subdivide) | DSBC | V'=V+4E, E'=7E, F'=F+2E | [img](assets/ops/ds_bc_new_subdivide.png) |
-| #29 | [`dome_subdivide`](#29-dome_subdivide) | DOME | V'=V+59E, E'=116E, F'=F+56E | [img](assets/ops/dome_subdivide.png) |
-| #30 | [`create_crust`](#30-create_crust) | CRUST | V'=2V, E'=2E, F'=2F, 2 components; after punching k holes: genus' = 2g+k−1 | [img](assets/ops/create_crust.png) |
+| # | Operator | Token | Oracle (V', E', F') | Diff | Image |
+|---|---|---|---|---|---|
+| #1 | [`create_vertex`](#1-create_vertex) | CV | V+1, E+0, F+1 (point sphere) | ✅ Yes | — |
+| #2 | [`delete_vertex`](#2-delete_vertex) | — | V−1, E+0, F−1 | — | — |
+| #3 | [`insert_edge`](#3-insert_edge) | IE | E+1; same face → F+1 (split), different faces → F−1 (merge components / open handle) | ✅ Yes | [img](assets/ops/insert_edge.png) |
+| #4 | [`delete_edge`](#4-delete_edge) | DE | E−1; two distinct sides → F−1 (merge), same face both sides → F+1 | ✅ Yes | [img](assets/ops/delete_edge.png) |
+| #5 | [`extrude_face`](#5-extrude_face) | — | V+n, E+2n, F+n (n = face degree) | ⏳ Not yet | [img](assets/ops/extrude_face.png) |
+| #6 | [`stellate`](#6-stellate) | — | V+1, E+n, F+n−1 | ⏳ Not yet | [img](assets/ops/stellate.png) |
+| #7 | [`subdivide_edge`](#7-subdivide_edge) | — | V+1, E+1, F+0 | ⏳ Not yet | [img](assets/ops/subdivide_edge.png) |
+| #8 | [`subdivide_face`](#8-subdivide_face) | — | V+1, E+n, F+n−1 | ⏳ Not yet | [img](assets/ops/subdivide_face.png) |
+| #9 | [`add_handle`](#9-add_handle) | HDL | V+0, E+n, F+n−2, χ−2, genus+1 (same component) | ✅ Yes | [img](assets/ops/add_handle.png) |
+| #10 | [`stellate_all`](#10-stellate_all) | STA | V'=V+F, E'=3E, F'=2E | ✅ Yes | [img](assets/ops/stellate_all.png) |
+| #11 | [`catmull_clark`](#11-catmull_clark) | CC | V'=V+E+F, E'=4E, F'=2E (all quads) | ✅ Yes | [img](assets/ops/catmull_clark.png) |
+| #12 | [`dual`](#12-dual) | DUAL | V'=F, E'=E, F'=V | ✅ Yes | [img](assets/ops/dual.png) |
+| #13 | [`doo_sabin`](#13-doo_sabin) | DS | V'=2E, E'=4E, F'=V+E+F | ✅ Yes | [img](assets/ops/doo_sabin.png) |
+| #14 | [`simplest_subdivide`](#14-simplest_subdivide) | SIMP | V'=E, E'=2E, F'=F+V | ✅ Yes | [img](assets/ops/simplest_subdivide.png) |
+| #15 | [`vertex_cutting`](#15-vertex_cutting) | VC | V'=2E, E'=3E, F'=F+V | ✅ Yes | [img](assets/ops/vertex_cutting.png) |
+| #16 | [`loop_subdivide`](#16-loop_subdivide) | LOOP | V'=V+E, E'=4E, F'=4F | ✅ Yes | [img](assets/ops/loop_subdivide.png) |
+| #17 | [`sqrt3_subdivide`](#17-sqrt3_subdivide) | SQRT3 | V'=V+F, E'=3E, F'=3F | ✅ Yes | [img](assets/ops/sqrt3_subdivide.png) |
+| #18 | [`honeycomb_subdivide`](#18-honeycomb_subdivide) | HONEY | V'=2E, E'=3E, F'=F+V | ✅ Yes | [img](assets/ops/honeycomb_subdivide.png) |
+| #19 | [`star_subdivide`](#19-star_subdivide) | STAR | V'=V+F+2E, E'=9E, F'=6E (all triangles) | ⏳ Not yet | [img](assets/ops/star_subdivide.png) |
+| #20 | [`corner_cutting`](#20-corner_cutting) | CCUT | V'=2E, E'=4E, F'=V+E+F (same topology as Doo-Sabin) | ✅ Yes | [img](assets/ops/corner_cutting.png) |
+| #21 | [`loop_style_subdivide`](#21-loop_style_subdivide) | LSTYLE | V'=V+E, E'=4E, F'=F+2E | ✅ Yes | [img](assets/ops/loop_style_subdivide.png) |
+| #22 | [`fractal_subdivide`](#22-fractal_subdivide) | FRAC | V'=V+E+F, E'=6E, F'=4E (all triangles) | ⏳ Not yet | [img](assets/ops/fractal_subdivide.png) |
+| #23 | [`pentagonal_subdivide`](#23-pentagonal_subdivide) | PENT | V'=V+2E+F, E'=5E, F'=2E (all pentagons) | ✅ Yes | [img](assets/ops/pentagonal_subdivide.png) |
+| #24 | [`pentagonal2_subdivide`](#24-pentagonal2_subdivide) | PENT2 | V'=V+3E, E'=6E, F'=F+2E | ✅ Yes | [img](assets/ops/pentagonal2_subdivide.png) |
+| #25 | [`dual1264_subdivide`](#25-dual1264_subdivide) | D1264 | V'=4E, E'=6E, F'=F+E+V | ✅ Yes | [img](assets/ops/dual1264_subdivide.png) |
+| #26 | [`root4_subdivide`](#26-root4_subdivide) | ROOT4 | V'=V+2E, E'=4E, F'=F+E | ✅ Yes | [img](assets/ops/root4_subdivide.png) |
+| #27 | [`checkerboard_remesh`](#27-checkerboard_remesh) | CHKB | V'=V+4E, E'=9E, F'=F+4E | ✅ Yes | [img](assets/ops/checkerboard_remesh.png) |
+| #28 | [`ds_bc_new_subdivide`](#28-ds_bc_new_subdivide) | DSBC | V'=V+4E, E'=7E, F'=F+2E | ✅ Yes | [img](assets/ops/ds_bc_new_subdivide.png) |
+| #29 | [`dome_subdivide`](#29-dome_subdivide) | DOME | V'=V+59E, E'=116E, F'=F+56E | ⏳ Not yet | [img](assets/ops/dome_subdivide.png) |
+| #30 | [`create_crust`](#30-create_crust) | CRUST | V'=2V, E'=2E, F'=2F, 2 components; after punching k holes: genus' = 2g+k−1 | ✅ Yes | [img](assets/ops/create_crust.png) |
 
 ---
 
@@ -64,6 +72,7 @@ Creates an isolated *point sphere*: a single vertex that forms its own connected
 - **Token**: `CV`
 - **Oracle**: V+1, E+0, F+1 (point sphere)
 - **Parameters**: x, y, z — coordinates
+- **Differentiable (PyTorch)**: ✅ Yes — the position is itself a free parameter (leaf tensor)
 - **Example primitive**: cube
 
 ```python
@@ -80,6 +89,7 @@ Removes an isolated point sphere. Only legal on a vertex with no incident edges;
 - **Token**: `—`
 - **Oracle**: V−1, E+0, F−1
 - **Parameters**: —
+- **Differentiable (PyTorch)**: — — no geometry to differentiate
 - **Example primitive**: cube
 
 ```python
@@ -96,6 +106,7 @@ Inserts a new edge between two corners. If both corners lie on the *same* face, 
 - **Token**: `IE`
 - **Oracle**: E+1; same face → F+1 (split), different faces → F−1 (merge components / open handle)
 - **Parameters**: he1, he2 — two corners (half-edges)
+- **Differentiable (PyTorch)**: ✅ Yes — pure topology, no coordinates created — the position map is the identity
 - **Example primitive**: cube
 
 ```python
@@ -113,6 +124,7 @@ Deletes an edge. When the two sides of the edge belong to different faces, those
 - **Token**: `DE`
 - **Oracle**: E−1; two distinct sides → F−1 (merge), same face both sides → F+1
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — pure topology, no coordinates created — the position map is the identity
 - **Example primitive**: cube
 
 ```python
@@ -133,6 +145,7 @@ Extrudes a face along its normal, creating a lifted copy of the face (the *top*)
 - **Token**: `—`
 - **Oracle**: V+n, E+2n, F+n (n = face degree)
 - **Parameters**: dist — extrusion distance along the face normal
+- **Differentiable (PyTorch)**: ⏳ Not yet — smooth almost everywhere (face normals / edge lengths) but the torch implementation is phase 2 — not in `topmod/diffgeo.py` yet
 - **Example primitive**: cube
 
 ```python
@@ -150,6 +163,7 @@ Stellates one face: adds an apex vertex at the face centroid (optionally raised 
 - **Token**: `—`
 - **Oracle**: V+1, E+n, F+n−1
 - **Parameters**: dist — apex displacement along the face normal
+- **Differentiable (PyTorch)**: ⏳ Not yet — smooth almost everywhere (face normals / edge lengths) but the torch implementation is phase 2 — not in `topmod/diffgeo.py` yet
 - **Example primitive**: cube
 
 ```python
@@ -166,6 +180,7 @@ Splits an edge at its midpoint and returns the new midpoint vertex. The two flan
 - **Token**: `—`
 - **Oracle**: V+1, E+1, F+0
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ⏳ Not yet — linear in principle, but local single-element operators are not yet wired into the `topmod/diffgeo.py` tracer (phase 2)
 - **Example primitive**: cube
 
 ```python
@@ -182,6 +197,7 @@ Fans a face from its centroid: a center vertex is added and connected to every c
 - **Token**: `—`
 - **Oracle**: V+1, E+n, F+n−1
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ⏳ Not yet — linear in principle, but local single-element operators are not yet wired into the `topmod/diffgeo.py` tracer (phase 2)
 - **Example primitive**: cube
 
 ```python
@@ -198,6 +214,7 @@ Connects two faces of equal degree with a tunnel (handle): both faces are consum
 - **Token**: `HDL`
 - **Oracle**: V+0, E+n, F+n−2, χ−2, genus+1 (same component)
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — pure topology, no coordinates created — the position map is the identity
 - **Example primitive**: cube
 
 ```python
@@ -214,6 +231,7 @@ Stellates every face of the mesh at once, producing an all-triangle mesh (a pyra
 - **Token**: `STA`
 - **Oracle**: V'=V+F, E'=3E, F'=2E
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -234,6 +252,7 @@ Catmull-Clark subdivision, the industry-standard smoothing scheme: face points, 
 - **Token**: `CC`
 - **Oracle**: V'=V+E+F, E'=4E, F'=2E (all quads)
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -250,6 +269,7 @@ Takes the combinatorial dual: every face becomes a vertex (at its centroid) and 
 - **Token**: `DUAL`
 - **Oracle**: V'=F, E'=E, F'=V
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -266,6 +286,7 @@ Doo-Sabin subdivision (corner-cutting family): one new vertex per face corner, p
 - **Token**: `DS`
 - **Oracle**: V'=2E, E'=4E, F'=V+E+F
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -282,6 +303,7 @@ Mid-edge (simplest / Peters-Reif) subdivision: edge midpoints become the only ve
 - **Token**: `SIMP`
 - **Oracle**: V'=E, E'=2E, F'=F+V
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -298,6 +320,7 @@ Vertex truncation: every vertex is sliced off, leaving a small polygon where the
 - **Token**: `VC`
 - **Oracle**: V'=2E, E'=3E, F'=F+V
 - **Parameters**: offset ∈ (0, 0.5) — corner-cut depth
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -314,6 +337,7 @@ Loop subdivision: every triangle is split 1-into-4 at edge midpoints, with β-we
 - **Token**: `LOOP`
 - **Oracle**: V'=V+E, E'=4E, F'=4F
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: icosahedron
 
 ```python
@@ -330,6 +354,7 @@ out = loop_subdivide(make_icosahedron())
 - **Token**: `SQRT3`
 - **Oracle**: V'=V+F, E'=3E, F'=3F
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: icosahedron
 
 ```python
@@ -350,6 +375,7 @@ Honeycomb subdivision, defined as `dual ∘ stellate_all`: stellate every face, 
 - **Token**: `HONEY`
 - **Oracle**: V'=2E, E'=3E, F'=F+V
 - **Parameters**: —
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -366,6 +392,7 @@ Star subdivision: `stellate_all` applied twice. A positive offset lifts the firs
 - **Token**: `STAR`
 - **Oracle**: V'=V+F+2E, E'=9E, F'=6E (all triangles)
 - **Parameters**: offset — first-round apex lift along original face normals
+- **Differentiable (PyTorch)**: ⏳ Not yet — smooth almost everywhere (face normals / edge lengths) but the torch implementation is phase 2 — not in `topmod/diffgeo.py` yet
 - **Example primitive**: cube
 
 ```python
@@ -382,6 +409,7 @@ Corner-cutting subdivision: a parameterized geometric variant of Doo-Sabin with 
 - **Token**: `CCUT`
 - **Oracle**: V'=2E, E'=4E, F'=V+E+F (same topology as Doo-Sabin)
 - **Parameters**: alpha ∈ (0, 1) — tension (diagonal weight)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -398,6 +426,7 @@ Loop connectivity generalized to arbitrary polygons: each face gets its corner t
 - **Token**: `LSTYLE`
 - **Oracle**: V'=V+E, E'=4E, F'=F+2E
 - **Parameters**: length ∈ [0, 1] — old-vertex blend (1 = keep position)
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -414,6 +443,7 @@ Fractal subdivision: `loop_style` followed by stellating every central polygon w
 - **Token**: `FRAC`
 - **Oracle**: V'=V+E+F, E'=6E, F'=4E (all triangles)
 - **Parameters**: offset — spike height factor
+- **Differentiable (PyTorch)**: ⏳ Not yet — smooth almost everywhere (face normals / edge lengths) but the torch implementation is phase 2 — not in `topmod/diffgeo.py` yet
 - **Example primitive**: cube
 
 ```python
@@ -430,6 +460,7 @@ Pentagonal subdivision: every edge is trisected and every face gets a centroid s
 - **Token**: `PENT`
 - **Oracle**: V'=V+2E+F, E'=5E, F'=2E (all pentagons)
 - **Parameters**: offset ∈ [0, 1] — pull spoke neighbors toward the centroid
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -446,6 +477,7 @@ Second pentagonal variant: edges are split at midpoints and a scaled inner copy 
 - **Token**: `PENT2`
 - **Oracle**: V'=V+3E, E'=6E, F'=F+2E
 - **Parameters**: scale_factor — inner-polygon shrink
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -462,6 +494,7 @@ Dual 12.6.4 subdivision: Doo-Sabin-like, but each face's inner polygon is a 2d-g
 - **Token**: `D1264`
 - **Oracle**: V'=4E, E'=6E, F'=F+E+V
 - **Parameters**: sf — inner-polygon scale
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -478,6 +511,7 @@ Root-4 subdivision: an inner polygon (honeycomb-mask weighted) is inserted in ev
 - **Token**: `ROOT4`
 - **Oracle**: V'=V+2E, E'=4E, F'=F+E
 - **Parameters**: a — old-vertex smoothing blend; twist — inner-ring sampling shift
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -494,6 +528,7 @@ Checkerboard remeshing: each face is inset, each edge trisected, and corners are
 - **Token**: `CHKB`
 - **Oracle**: V'=V+4E, E'=9E, F'=F+4E
 - **Parameters**: thickness ∈ (0, 0.5) — inset / trisection ratio
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -510,6 +545,7 @@ Doo-Sabin "BC new" variant: a Doo-Sabin pass is applied to the midpoint-refined 
 - **Token**: `DSBC`
 - **Oracle**: V'=V+4E, E'=7E, F'=F+2E
 - **Parameters**: sf — DS corner scale; length — old-vertex blend
+- **Differentiable (PyTorch)**: ✅ Yes — linear — traced to a sparse matrix in `topmod/diffgeo.py`; gradients flow to input vertex positions (op parameters baked as constants)
 - **Example primitive**: cube
 
 ```python
@@ -526,6 +562,7 @@ Dome subdivision: every edge is split into quarters, then every original face is
 - **Token**: `DOME`
 - **Oracle**: V'=V+59E, E'=116E, F'=F+56E
 - **Parameters**: length — height profile scale; sf — ring scale profile
+- **Differentiable (PyTorch)**: ⏳ Not yet — smooth almost everywhere (face normals / edge lengths) but the torch implementation is phase 2 — not in `topmod/diffgeo.py` yet
 - **Example primitive**: cube
 
 ```python
@@ -546,6 +583,7 @@ Turns a surface into a hollow shell: the whole mesh is duplicated with reversed 
 - **Token**: `CRUST`
 - **Oracle**: V'=2V, E'=2E, F'=2F, 2 components; after punching k holes: genus' = 2g+k−1
 - **Parameters**: thickness — shell thickness (negative offsets outward)
+- **Differentiable (PyTorch)**: ✅ Yes — dedicated torch implementation in `topmod/diffgeo.py`; gradients flow to input positions **and** to `thickness`
 - **Example primitive**: cube
 
 ```python
@@ -581,6 +619,24 @@ tokens = [TopModToken(op='CRUST'),
           TopModToken(op='HDL', refs=(0, 20)),   # icosahedron: F=20
           TopModToken(op='EOS')]
 ```
+
+## Differentiable Geometry Usage
+
+Operators marked ✅ in the Diff column can be composed into an end-to-end
+differentiable map (topology fixed, gradients w.r.t. base-primitive
+positions and, for `create_crust`, its `thickness`):
+
+```python
+import torch
+from topmod.diffgeo import DiffSequence
+
+seq = DiffSequence("cube").append("DS").append("CC")                           .append("CRUST", thickness=0.1)
+final_verts = seq.forward()      # differentiable w.r.t. seq.verts0
+tris        = seq.triangles()    # for nvdiffrast / pipeline.geometry_optimizer
+(final_verts ** 2).sum().backward()
+```
+
+Full API and correctness contract: `docs/diffgeo.md`.
 
 ## Testing
 
