@@ -119,12 +119,27 @@ def apply_op(context: bpy.types.Context,
     if isinstance(out, tuple):
         out = out[0]
 
-    bm_new = bmesh.new()
-    dlfl_to_bmesh(out, bm_new)
+    # Clear the existing edit-mode BMesh and rebuild from DLFL result
+    bm.clear()
 
-    # Replace edit mesh
-    bm_new.to_mesh(me)
-    bm_new.free()
+    vid_to_bv: Dict[int, bmesh.types.BMVert] = {}
+    for v in out.vertices.values():
+        bv = bm.verts.new((v.x, v.y, v.z))
+        vid_to_bv[v.id] = bv
+    bm.verts.ensure_lookup_table()
+    bm.verts.index_update()
+
+    for f in out.faces.values():
+        verts = f.vertices()
+        if len(verts) < 3:
+            continue
+        try:
+            bm.faces.new([vid_to_bv[v.id] for v in verts])
+        except ValueError:
+            pass
+    bm.faces.ensure_lookup_table()
+    bm.normal_update()
+
     bmesh.update_edit_mesh(me)
 
     return out

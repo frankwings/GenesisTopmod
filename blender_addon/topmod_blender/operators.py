@@ -53,17 +53,24 @@ def _make_global_op(idname: str, label: str, description: str,
     Factory for a Blender operator that applies a global topmod op.
     ``props`` is a dict of {attr_name: bpy.props.*Property(...)}.
     """
+    # Capture op_fn and returns_new in closures — do NOT store as class
+    # attributes, because Python binds functions-as-class-attrs via the
+    # descriptor protocol (self is injected as the first argument).
+    _captured_fn = op_fn
+    _captured_returns_new = returns_new
+
     attrs = {
         "bl_idname": idname,
         "bl_label": label,
         "bl_description": description,
         "bl_options": {'REGISTER', 'UNDO'},
-        "_op_fn": op_fn,
-        "_returns_new": returns_new,
     }
 
+    # Blender 2.8+ uses __annotations__ for property registration.
+    # bpy.props.*Property() returns tuples that Blender's metaclass
+    # picks up from the class __annotations__ dict during register_class.
     if props:
-        attrs.update(props)
+        attrs["__annotations__"] = dict(props)
 
     def execute(self, context):
         kwargs = {}
@@ -71,8 +78,8 @@ def _make_global_op(idname: str, label: str, description: str,
             for k in props:
                 kwargs[k] = getattr(self, k)
         try:
-            result = apply_op(context, self._op_fn,
-                              returns_new=self._returns_new, **kwargs)
+            result = apply_op(context, _captured_fn,
+                              returns_new=_captured_returns_new, **kwargs)
             if result is None:
                 self.report({'ERROR'}, "Failed — is the mesh a closed "
                             "2-manifold?")
