@@ -20,7 +20,7 @@ optimize(ctx, verts_init, faces, target_images, mvps, **kwargs)
 
 from __future__ import annotations
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -309,3 +309,122 @@ def optimize(
             )
 
     return verts.detach(), history
+
+
+# ── Propose-and-optimize: optimize through a DiffSequence chain ───────────────
+
+def multi_view_silhouette_loss(
+    ctx:        dr.RasterizeCudaContext,
+    verts:      torch.Tensor,   # [V, 3]  float32  (differentiable)
+    tris:       torch.Tensor,   # [T, 3]  int32
+    targets:    torch.Tensor,   # [N, H, W, 1]  float32  (1=fg space)
+    mvps:       torch.Tensor,   # [N, 4, 4]
+    resolution: Tuple[int, int] = (128, 128),
+) -> torch.Tensor:
+    """
+    Average L1 silhouette loss across N views.
+
+    Both *verts* and *targets* are in 1=fg space (render_silhouette returns 1=fg).
+
+    Parameters
+    ----------
+    targets : [N, H, W, 1] float32 where 1.0 = foreground.
+              Caller is responsible for converting white-background images
+              (0=fg, 255=bg) to this space: ``targets = 1.0 - img/255.0``.
+
+    Returns
+    -------
+    Scalar tensor — mean L1 silhouette loss over all views.
+    """
+    N = mvps.shape[0]
+    total = torch.tensor(0.0, device=verts.device)
+    for i in range(N):
+        rendered = render_silhouette(ctx, verts, tris, mvps[i], resolution)  # [1,H,W,1]
+        target_i = targets[i:i+1]                                             # [1,H,W,1]
+        total    = total + F.l1_loss(rendered, target_i)
+    return total / N
+
+
+def optimize_through_chain(
+    ctx:         dr.RasterizeCudaContext,
+    seq:         "Any",            # DiffSequence (avoids circular import)
+    targets:     torch.Tensor,     # [N, H, W, 1] float32, 1=fg space
+    mvps:        torch.Tensor,     # [N, 4, 4] float32
+    num_steps:   int   = 500,
+    lr:          float = 1e-2,
+    lambda_lap:  float = 0.05,
+    lambda_edge: float = 0.01,
+    resolution:  Tuple[int, int] = (128, 128),
+    log_every:   int  = 100,
+) -> torch.Tensor:
+    """
+    Refine the DiffSequence cage vertex positions to match target silhouettes.
+
+    Gradients propagate through the full differentiable operator chain
+    (S_k ∘ … ∘ S_1) back to the cage positions ``seq.verts0``.
+
+    Parameters
+    ----------
+    ctx        : nvdiffrast CUDA rasterize context.
+    seq        : DiffSequence with ops already appended.
+                 seq.verts0 is used as the initial cage (copied; not modified).
+    targets    : Target silhouettes in 1=fg space [N, H, W, 1].
+                 Convert white-bg images with: ``targets = 1.0 - img/255.0``.
+    mvps       : MVP matrices [N, 4, 4].
+    num_steps  : Adam optimisation steps.
+    lr         : Adam learning rate.
+    lambda_lap : Laplacian smoothness weight on the FINAL mesh.
+    lambda_edge: Edge-length regularisation weight on the FINAL mesh.
+    resolution : Render resolution (H, W).
+    log_every  : Print progress every N steps (0 = silent).
+
+    Returns
+    -------
+    cage_refined : [V_cage, 3] detached float32 tensor — optimised cage positions.
+    """
+    device = targets.device
+
+    # Precompute final triangulation (topology is fixed throughout)
+    tris = seq.triangles(device=str(device)).to(torch.int32)   # [T, 3] int32
+
+    # Learnable cage: clone seq.verts0, ensure float32 on correct device
+    cage = seq.verts0.clone().detach().to(dtype=torch.float32, device=device)
+    cage.requires_grad_(True)
+
+    optimizer = torch.optim.Adam([cage], lr=lr)
+    sched     = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=num_steps, eta_min=lr * 0.01,
+    )
+
+    for step in range(num_steps):
+        optimizer.zero_grad()
+
+        # Differentiable forward through the full operator chain
+        final_verts = seq.forward(cage)                   # [V_final, 3]
+
+        # Silhouette loss on the final refined mesh
+        sil_loss = multi_view_silhouette_loss(
+            ctx, final_verts, tris, targets, mvps, resolution,
+        )
+
+        # Regularisation on FINAL mesh (gradients backprop through chain)
+        reg_loss = torch.tensor(0.0, device=device)
+        if lambda_lap > 0:
+            reg_loss = reg_loss + lambda_lap  * laplacian_loss(final_verts, tris)
+        if lambda_edge > 0:
+            reg_loss = reg_loss + lambda_edge * edge_length_loss(final_verts, tris)
+
+        total_loss = sil_loss + reg_loss
+        total_loss.backward()
+        optimizer.step()
+        sched.step()
+
+        if log_every > 0 and (step % log_every == 0 or step == num_steps - 1):
+            print(
+                f"  [chain_opt] step {step:4d}/{num_steps}"
+                f"  sil={sil_loss.item():.4f}"
+                f"  reg={reg_loss.item():.4f}"
+                f"  lr={optimizer.param_groups[0]['lr']:.5f}"
+            )
+
+    return cage.detach()

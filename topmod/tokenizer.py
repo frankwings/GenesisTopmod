@@ -64,7 +64,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, Iterator, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Set, Tuple
 
 import sys, os
 _HERE = os.path.dirname(__file__)
@@ -766,3 +766,222 @@ def sequence_length(tokens: List[TopModToken]) -> int:
         else:
             length += 1   # EOS, CC and zero-arg global ops
     return length
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Vocabulary V2 — Propose-and-Optimize paradigm (Phase A')
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# V2 operator list (29 total, IDs 1–29)
+_V2_OPS: Tuple = (
+    'CC', 'DS', 'HDL', 'IE', 'DE',
+    'DUAL', 'STA', 'SIMP', 'VC', 'LOOP', 'SQRT3', 'HONEY', 'STAR',
+    'CCUT', 'LSTYLE', 'FRAC', 'PENT', 'PENT2', 'D1264', 'ROOT4',
+    'CHKB', 'DSBC', 'DOME', 'CRUST',
+    'EXTRUDE_FACE', 'STELLATE', 'SUBDIVIDE_EDGE', 'SUBDIVIDE_FACE', 'CV',
+)
+_V2_OPS_SET: Set[str] = set(_V2_OPS)
+
+# V2 base primitive tokens
+_V2_BASES: Tuple = ('CUBE', 'TETRAHEDRON', 'ICOSAHEDRON')
+
+# SEP token separates topology section from geometry (cage coords) section
+_V2_SEP = 'SEP'
+
+
+def build_vocabulary_v2(
+    n_coord_bins: int = 256,
+    n_ref:        int = 64,
+) -> Dict[str, int]:
+    """
+    Build the 356-token V2 vocabulary for the propose-and-optimize paradigm.
+
+    Layout
+    ------
+    0           : EOS
+    1–29        : Operators (CC, DS, HDL, IE, DE, DUAL, STA, SIMP, VC, LOOP,
+                  SQRT3, HONEY, STAR, CCUT, LSTYLE, FRAC, PENT, PENT2, D1264,
+                  ROOT4, CHKB, DSBC, DOME, CRUST, EXTRUDE_FACE, STELLATE,
+                  SUBDIVIDE_EDGE, SUBDIVIDE_FACE, CV)
+    30–32       : BASE primitives (CUBE=30, TETRAHEDRON=31, ICOSAHEDRON=32)
+    33          : SEP (topology ↔ geometry separator)
+    34–289      : COORD_0 .. COORD_255  (256 quantized cage coordinate bins)
+    290–353     : REF_0 .. REF_63       (face/edge ordinal references, up to 64)
+    354         : BOS  (start token, decoder input only, never predicted)
+    355         : PAD  (padding, ignored in loss)
+
+    Total = 1 + 29 + 3 + 1 + 256 + 64 + 2 = 356
+    """
+    vocab: Dict[str, int] = {}
+    idx = 0
+
+    # EOS
+    vocab['EOS'] = idx; idx += 1
+
+    # 29 operators
+    for op in _V2_OPS:
+        vocab[op] = idx; idx += 1
+
+    # 3 base primitives
+    for base in _V2_BASES:
+        vocab[f'BASE_{base}'] = idx; idx += 1
+
+    # SEP
+    vocab[_V2_SEP] = idx; idx += 1
+
+    # COORD bins
+    for i in range(n_coord_bins):
+        vocab[f'COORD_{i}'] = idx; idx += 1
+
+    # REF ordinals
+    for i in range(n_ref):
+        vocab[f'REF_{i}'] = idx; idx += 1
+
+    # BOS and PAD
+    vocab['BOS'] = idx; idx += 1
+    vocab['PAD'] = idx; idx += 1
+
+    return vocab
+
+
+def encode_v2(
+    base_name:    str,
+    hdl_pairs:    List[Tuple[int, int]],
+    op_names:     List[str],
+    cage_verts:   "Any",  # [V_cage, 3] float array (numpy or sequence)
+    vocab_v2:     Dict[str, int],
+    coord_lo:     float = DEFAULT_COORD_LO,
+    coord_hi:     float = DEFAULT_COORD_HI,
+    n_coord_bins: int   = 256,
+) -> List[int]:
+    """
+    Encode a V2 program + cage into a flat integer ID sequence.
+
+    Parameters
+    ----------
+    base_name    : 'cube' | 'tetrahedron' | 'icosahedron'
+    hdl_pairs    : list of (f1_ordinal, f2_ordinal) for each HDL op
+    op_names     : list of linear/nonlinear operator names applied after HDL
+    cage_verts   : [V_cage, 3] float array of (normalized) cage vertex positions
+    vocab_v2     : vocabulary dict from build_vocabulary_v2()
+    coord_lo/hi  : coordinate quantization range
+    n_coord_bins : number of quantization bins (must match build_vocabulary_v2)
+
+    Returns
+    -------
+    List[int] — flat token IDs, no BOS, includes EOS.
+
+    Sequence layout:
+        BASE_X  [HDL REF_f1 REF_f2]*  OP*  SEP  [Cx Cy Cz]*  EOS
+    """
+    ids: List[int] = []
+
+    # BASE token
+    base_key = f'BASE_{base_name.upper()}'
+    if base_key not in vocab_v2:
+        raise ValueError(f"Unknown base primitive: {base_name!r}")
+    ids.append(vocab_v2[base_key])
+
+    # HDL tokens (each HDL op uses 3 IDs: HDL + REF_f1 + REF_f2)
+    for f1_ord, f2_ord in hdl_pairs:
+        ids.append(vocab_v2['HDL'])
+        ids.append(vocab_v2[f'REF_{f1_ord}'])
+        ids.append(vocab_v2[f'REF_{f2_ord}'])
+
+    # Linear / nonlinear op tokens (zero-argument in V2 topology format)
+    for op in op_names:
+        if op not in vocab_v2:
+            raise ValueError(f"Unknown operator: {op!r}")
+        ids.append(vocab_v2[op])
+
+    # SEP: marks end of topology section
+    ids.append(vocab_v2[_V2_SEP])
+
+    # COORD tokens (flattened cage verts: x, y, z, x, y, z, …)
+    V = cage_verts.shape[0]
+    for i in range(V):
+        x = float(cage_verts[i, 0])
+        y = float(cage_verts[i, 1])
+        z = float(cage_verts[i, 2])
+        qx = quantize_coord(x, coord_lo, coord_hi, n_coord_bins)
+        qy = quantize_coord(y, coord_lo, coord_hi, n_coord_bins)
+        qz = quantize_coord(z, coord_lo, coord_hi, n_coord_bins)
+        ids.append(vocab_v2[f'COORD_{qx}'])
+        ids.append(vocab_v2[f'COORD_{qy}'])
+        ids.append(vocab_v2[f'COORD_{qz}'])
+
+    # EOS
+    ids.append(vocab_v2['EOS'])
+
+    return ids
+
+
+def decode_v2(
+    ids:          List[int],
+    vocab_inv_v2: Dict[int, str],
+) -> Dict:
+    """
+    Decode a flat V2 integer sequence into its components.
+
+    Fault-tolerant: unknown IDs and malformed subsequences are silently skipped
+    so that a partially correct model output still yields a parseable result.
+
+    Parameters
+    ----------
+    ids          : flat integer sequence (may include BOS at position 0)
+    vocab_inv_v2 : {id: symbol_name}, inverse of build_vocabulary_v2()
+
+    Returns
+    -------
+    dict with keys:
+      'base'       : str | None  (base primitive name, lowercase)
+      'hdl_pairs'  : List[Tuple[int, int]]  (face ordinal pairs for HDL ops)
+      'ops'        : List[str]              (operator names, in order)
+      'coord_ints' : List[int]             (raw COORD bin values, flattened xyz)
+    """
+    base:        Optional[str]              = None
+    hdl_pairs:   List[Tuple[int, int]]      = []
+    ops:         List[str]                  = []
+    coord_ints:  List[int]                  = []
+
+    it = iter(ids)
+    in_geometry = False
+
+    for raw_id in it:
+        sym = vocab_inv_v2.get(raw_id)
+        if sym is None:
+            continue
+
+        if sym in ('BOS', 'PAD'):
+            continue
+
+        if sym == 'EOS':
+            break
+
+        if sym == _V2_SEP:
+            in_geometry = True
+            continue
+
+        if in_geometry:
+            if sym.startswith('COORD_'):
+                coord_ints.append(int(sym[6:]))
+        else:
+            # Topology section
+            if sym.startswith('BASE_'):
+                base = sym[5:].lower()   # 'BASE_ICOSAHEDRON' → 'icosahedron'
+            elif sym == 'HDL':
+                # Consume next two tokens as REF ordinals
+                s1 = vocab_inv_v2.get(next(it, None))
+                s2 = vocab_inv_v2.get(next(it, None))
+                f1 = int(s1[4:]) if s1 and s1.startswith('REF_') else 0
+                f2 = int(s2[4:]) if s2 and s2.startswith('REF_') else 0
+                hdl_pairs.append((f1, f2))
+            elif sym in _V2_OPS_SET and sym not in ('HDL', 'EOS', 'CV'):
+                ops.append(sym)
+
+    return {
+        'base':       base,
+        'hdl_pairs':  hdl_pairs,
+        'ops':        ops,
+        'coord_ints': coord_ints,
+    }
