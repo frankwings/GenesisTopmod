@@ -1,6 +1,6 @@
 # GenesisTopmod — Summary Report: Neural Shape Program Synthesis with DLFL Operators
 
-*August 2026*
+*August 9, 2026*
 
 ---
 
