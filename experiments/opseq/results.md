@@ -1,10 +1,10 @@
 # OpSeq Phase A — Evaluation Results
 
-**Checkpoint**: `experiments/opseq/ckpt/best.pt`
+**Checkpoint**: `/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq/ckpt/best.pt`
 
 **Epoch**: 110  |  **Best val loss**: 0.8159
 
-**Samples evaluated**: 100  |  **Eval time**: 157.2s
+**Samples evaluated**: 100  |  **Eval time**: 166.4s
 
 ## Greedy Sampling Metrics
 
@@ -14,7 +14,7 @@
 |     | Parse failures | 0/100 (0.0%) |
 | (ii) | **Token accuracy** | **16.8%** |
 |      | Exact-match rate | 0.0% (0/100) |
-| (iii) | **Silhouette IoU** | **0.9559** |
+| (iii) | **Silhouette IoU** | **0.0128** |
 | (iv) | **Genus accuracy** | **59.0%** (59/100) |
 
 ## Nucleus Sampling (top-p=0.9, first 10 samples)

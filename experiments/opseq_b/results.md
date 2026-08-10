@@ -6,7 +6,7 @@
 
 **Epoch**: 49  |  **Best val loss**: 1.2720
 
-**Samples evaluated**: 100  |  **Eval time**: 5938.9s
+**Samples evaluated**: 100  |  **Eval time**: 3684.7s
 
 **Max seq len**: 5000 (genus=0: ~3852, genus=1: ~4231, genus=2: ~4610 tokens)
 
@@ -18,7 +18,7 @@
 |     | Parse failures | 0/100 (0.0%) |
 | (ii) | **Token accuracy** | **22.5%** |
 |      | Exact-match rate | 0.0% (0/100) |
-| (iii) | **Silhouette IoU** | **0.7029** |
+| (iii) | **Silhouette IoU** | **0.1808** |
 | (iv) | **Genus accuracy** | **62.0%** (62/100) |
 | (v) | **Mean distill IoU** | **0.9363** |
 | (vi) | **Rejection rate** | **13.7%** (274/2000) |
@@ -43,7 +43,7 @@
 | Method | Architecture | Dataset | Manifold% | Coverage | Quality |
 |--------|-------------|---------|-----------|----------|--------|
 | MeshGPT (published) | VQ-VAE + GPT | ShapeNet chairs | ~98% | 85.4% | 93.7% |
-| **Ours (Phase B)** | DLFL + xAttn Transformer | Thingi10K (g=0-2) | **100.0%** | sil-IoU=0.7029 | — |
+| **Ours (Phase B)** | DLFL + xAttn Transformer | Thingi10K (g=0-2) | **100.0%** | sil-IoU=0.1808 | — |
 
 ## Sample Images
 

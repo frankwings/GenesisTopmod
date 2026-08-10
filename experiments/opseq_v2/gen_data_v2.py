@@ -99,6 +99,14 @@ _SAMPLE_OPS = list(LINEAR_OPS)   # ('CC','DUAL','DS','STA','SIMP','VC','LOOP',
                                   #  'SQRT3','HONEY','CCUT','LSTYLE','PENT','PENT2',
                                   #  'D1264','ROOT4','CHKB','DSBC')
 
+# Operators that require all-triangle input — only valid after tri-producing ops
+_TRI_ONLY_OPS = {'LOOP', 'SQRT3'}
+# Operators that always produce all-triangle output
+_TRI_PRODUCING_OPS = {'STA', 'LOOP', 'SQRT3', 'LSTYLE', 'FRAC'}
+# Operators that always produce non-triangle faces (quads, pentagons, etc.)
+_QUAD_PRODUCING_OPS = {'CC', 'DUAL', 'DS', 'PENT', 'PENT2', 'D1264',
+                        'ROOT4', 'CHKB', 'DSBC', 'HONEY', 'CCUT', 'VC', 'SIMP'}
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Smooth vertex deformations
@@ -223,7 +231,26 @@ def generate_sample_v2(
     # Op depth: geometric with mean ~1.5, clipped to [0, 4]
     raw_depth = int(rng.geometric(p=0.4)) - 1
     op_depth  = max(0, min(raw_depth, 4))
-    op_names  = [str(rng.choice(_SAMPLE_OPS)) for _ in range(op_depth)]
+
+    # Sample ops with topology-aware filtering:
+    # tri-only ops (LOOP, SQRT3) can only follow a tri-producing state
+    op_names: List[str] = []
+    # Base primitives: cube=quads, tetrahedron=tris, icosahedron=tris
+    # HDL creates quad faces, so any HDL applied marks mesh as non-all-tri
+    is_all_tri = (base_name != 'cube') and (n_hdl == 0)
+    for _ in range(op_depth):
+        available = [op for op in _SAMPLE_OPS
+                     if not (op in _TRI_ONLY_OPS and not is_all_tri)]
+        if not available:
+            break
+        chosen = str(rng.choice(available))
+        op_names.append(chosen)
+        # Update mesh state for next iteration
+        if chosen in _TRI_PRODUCING_OPS:
+            is_all_tri = True
+        elif chosen in _QUAD_PRODUCING_OPS:
+            is_all_tri = False
+        # STA produces tris; keep is_all_tri as True after it
 
     # ── 2. Build DLFL mesh + HDL ops ─────────────────────────────────────
     mesh = _PRIM_FNS[base_name]()

@@ -122,10 +122,12 @@ def compute_silhouette_iou(
             pred = pred_sil[0, :, :, 0]
             gt   = gt_f[i]
 
-            pred_bin = (pred > 0.5).float()
-            gt_bin   = (gt   > 0.5).float()
-            inter    = (pred_bin * gt_bin).sum().item()
-            union    = ((pred_bin + gt_bin) > 0).float().sum().item()
+            # pred: 1=object, 0=bg (renderer convention)
+            # gt:   0=object, 1=bg (white-background images, /255)
+            pred_fg = (pred > 0.5).float()
+            gt_fg   = (gt   < 0.5).float()   # invert: dark pixels = foreground
+            inter   = (pred_fg * gt_fg).sum().item()
+            union   = ((pred_fg + gt_fg) > 0).float().sum().item()
             ious.append(inter / max(union, 1.0))
 
         return float(np.mean(ious))
