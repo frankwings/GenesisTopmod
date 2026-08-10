@@ -63,6 +63,7 @@ from .remeshing import (
 )
 from .high_level_ops import (
     stellate_all, stellate, extrude_face, subdivide_edge, subdivide_face,
+    add_handle,
 )
 
 
@@ -943,6 +944,43 @@ def _make_dome_op(n_verts: int, faces: List[List[int]],
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# HDL (add_handle) — topology-only, identity on vertex positions
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_hdl_op(n_verts: int, faces: List[List[int]],
+                 face1_ord: int = 0, face2_ord: int = 1) -> DiffOp:
+    """
+    add_handle connects two faces with a tube (genus +1).
+
+    No new vertices are created — only face connectivity changes.
+    The DiffOp is therefore an identity map on positions, with updated faces.
+    """
+    # Build a temporary DLFL mesh to run the float add_handle
+    positions = [(0.0, 0.0, 0.0)] * n_verts  # dummy positions; HDL doesn't use them
+    mesh = _build_mesh(positions, faces)
+
+    # Look up faces by ordinal
+    face_list = list(mesh.faces.values())
+    if face1_ord >= len(face_list) or face2_ord >= len(face_list):
+        raise ValueError(
+            f"HDL face ordinals ({face1_ord}, {face2_ord}) out of range "
+            f"(mesh has {len(face_list)} faces)")
+    f1 = face_list[face1_ord]
+    f2 = face_list[face2_ord]
+
+    add_handle(mesh, f1, f2)
+
+    # Extract updated faces (vertex count unchanged)
+    _, out_faces = mesh_to_arrays(mesh)
+    n_out = n_verts  # HDL never creates new vertices
+
+    # Identity map: output positions = input positions
+    op = DiffOp("HDL", n_verts, n_out, out_faces)
+    op._apply_fn = lambda verts: verts  # identity — pure topology change
+    return op
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public constructors
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -987,9 +1025,18 @@ def trace_op(name: str, positions_or_n, faces: List[List[int]],
         return _make_subdivide_edge_op(n, faces, tuple(ev))
     if name == "SUBDIVIDE_FACE":
         return _make_subdivide_face_op(n, faces, params.get("face_idx", 0))
+    if name == "HDL":
+        return _make_hdl_op(n, faces,
+                            params.get("face1_ord", 0),
+                            params.get("face2_ord", 1))
+    if name in ("IE", "DE"):
+        # IE/DE are topology-only ops; not yet implemented in DiffSequence.
+        raise ValueError(
+            f"IE/DE not yet supported in DiffSequence "
+            f"(topology-only ops require mesh rebuild)")
     raise ValueError(
         f"unsupported op {name!r}; linear={LINEAR_OPS}, "
-        f"nonlinear={NONLINEAR_OPS}")
+        f"nonlinear={NONLINEAR_OPS}, topology=('HDL',)")
 
 
 _BASES: Dict[str, Callable[[], DLFLMesh]] = {
