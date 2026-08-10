@@ -985,3 +985,157 @@ def decode_v2(
         'ops':        ops,
         'coord_ints': coord_ints,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Vocabulary V3 — Topology-only paradigm (Phase A'')
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def build_vocabulary_v3(
+    n_ref: int = 64,
+) -> Dict[str, int]:
+    """
+    Build the 99-token V3 vocabulary for the topology-only paradigm.
+
+    The model predicts ONLY the topology program (base + operators + HDL refs).
+    Geometry comes entirely from direct vertex optimization via nvdiffrast.
+
+    Layout
+    ------
+    0           : EOS
+    1–29        : Operators (same 29 as V2)
+    30–32       : BASE primitives (CUBE=30, TETRAHEDRON=31, ICOSAHEDRON=32)
+    33–(33+R-1) : REF_0 .. REF_{R-1}  (face ordinal references for HDL/IE/DE)
+    33+R        : BOS  (decoder input only, never predicted)
+    33+R+1      : PAD  (padding, ignored in loss)
+
+    With default R=64:  total = 1 + 29 + 3 + 64 + 2 = 99
+
+    Sequence format (very short, ~5–15 tokens):
+        [BOS] [BASE_x] [HDL REF_f1 REF_f2]* [OP]* [EOS]
+    """
+    vocab: Dict[str, int] = {}
+    idx = 0
+
+    # EOS
+    vocab['EOS'] = idx; idx += 1
+
+    # 29 operators (same ordering as V2)
+    for op in _V2_OPS:
+        vocab[op] = idx; idx += 1
+
+    # 3 base primitives
+    for base in _V2_BASES:
+        vocab[f'BASE_{base}'] = idx; idx += 1
+
+    # REF ordinals (no COORD, no SEP)
+    for i in range(n_ref):
+        vocab[f'REF_{i}'] = idx; idx += 1
+
+    # BOS and PAD
+    vocab['BOS'] = idx; idx += 1
+    vocab['PAD'] = idx; idx += 1
+
+    return vocab
+
+
+def encode_v3(
+    base_name:  str,
+    hdl_pairs:  List[Tuple[int, int]],
+    op_names:   List[str],
+    vocab_v3:   Dict[str, int],
+) -> List[int]:
+    """
+    Encode a V3 topology-only program into a flat integer ID sequence.
+
+    Parameters
+    ----------
+    base_name : 'cube' | 'tetrahedron' | 'icosahedron'
+    hdl_pairs : list of (f1_ordinal, f2_ordinal) for each HDL op
+    op_names  : list of zero-argument operator names (e.g. ['CC', 'DS'])
+    vocab_v3  : vocabulary dict from build_vocabulary_v3()
+
+    Returns
+    -------
+    List[int] — flat token IDs, no BOS, includes EOS.
+
+    Sequence layout:
+        BASE_X  [HDL REF_f1 REF_f2]*  OP*  EOS
+    """
+    ids: List[int] = []
+
+    # BASE token
+    base_key = f'BASE_{base_name.upper()}'
+    if base_key not in vocab_v3:
+        raise ValueError(f"Unknown base primitive: {base_name!r}")
+    ids.append(vocab_v3[base_key])
+
+    # HDL tokens
+    for f1_ord, f2_ord in hdl_pairs:
+        ids.append(vocab_v3['HDL'])
+        ids.append(vocab_v3[f'REF_{f1_ord}'])
+        ids.append(vocab_v3[f'REF_{f2_ord}'])
+
+    # Linear/nonlinear op tokens (zero-argument)
+    for op in op_names:
+        if op not in vocab_v3:
+            raise ValueError(f"Unknown operator: {op!r}")
+        ids.append(vocab_v3[op])
+
+    # EOS
+    ids.append(vocab_v3['EOS'])
+
+    return ids
+
+
+def decode_v3(
+    ids:          List[int],
+    vocab_inv_v3: Dict[int, str],
+) -> Dict:
+    """
+    Decode a flat V3 integer sequence into its components.
+
+    Fault-tolerant: unknown IDs and malformed subsequences are silently skipped.
+
+    Returns
+    -------
+    dict with keys:
+      'base'      : str | None (base primitive name, lowercase)
+      'hdl_pairs' : List[Tuple[int, int]]
+      'ops'       : List[str]  (zero-argument operator names)
+    """
+    base:       Optional[str]          = None
+    hdl_pairs:  List[Tuple[int, int]]  = []
+    ops:        List[str]              = []
+
+    it = iter(ids)
+
+    for raw_id in it:
+        sym = vocab_inv_v3.get(raw_id)
+        if sym is None:
+            continue
+
+        if sym in ('BOS', 'PAD'):
+            continue
+
+        if sym == 'EOS':
+            break
+
+        if sym.startswith('BASE_'):
+            base = sym[5:].lower()   # 'BASE_ICOSAHEDRON' → 'icosahedron'
+
+        elif sym == 'HDL':
+            s1 = vocab_inv_v3.get(next(it, None))
+            s2 = vocab_inv_v3.get(next(it, None))
+            f1 = int(s1[4:]) if s1 and s1.startswith('REF_') else 0
+            f2 = int(s2[4:]) if s2 and s2.startswith('REF_') else 0
+            hdl_pairs.append((f1, f2))
+
+        elif sym in _V2_OPS_SET and sym not in ('HDL', 'EOS', 'CV'):
+            ops.append(sym)
+
+    return {
+        'base':      base,
+        'hdl_pairs': hdl_pairs,
+        'ops':       ops,
+    }
