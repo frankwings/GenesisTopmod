@@ -49,6 +49,36 @@ class TOPMOD_MT_remeshing(bpy.types.Menu):
         layout.operator("topmod.checkerboard")
         layout.operator("topmod.ds_bc_new")
         layout.operator("topmod.dome")
+        layout.separator()
+        layout.operator("topmod.stellate_subdivide")
+        layout.operator("topmod.two_stellate")
+        layout.operator("topmod.doo_sabin_bc")
+        layout.operator("topmod.modified_cc")
+        layout.operator("topmod.modified_cc2")
+
+
+class TOPMOD_MT_structural(bpy.types.Menu):
+    bl_idname = "TOPMOD_MT_structural"
+    bl_label = "Structural"
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.operator("topmod.create_crust")
+        layout.operator("topmod.crust_scaling")
+        layout.separator()
+        layout.operator("topmod.make_wireframe")
+
+
+class TOPMOD_MT_tools(bpy.types.Menu):
+    bl_idname = "TOPMOD_MT_tools"
+    bl_label = "Tools"
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.operator("topmod.stellate_all")
+        layout.operator("topmod.subdivide_all_edges")
+        layout.operator("topmod.subdivide_all_faces")
+        layout.operator("topmod.triangulate_all")
 
 
 class TOPMOD_MT_main(bpy.types.Menu):
@@ -57,12 +87,12 @@ class TOPMOD_MT_main(bpy.types.Menu):
 
     def draw(self, _context):
         layout = self.layout
-        layout.operator("topmod.stellate_all")
+        layout.menu("TOPMOD_MT_tools")
         layout.separator()
         layout.menu("TOPMOD_MT_subdivision_classic")
         layout.menu("TOPMOD_MT_remeshing")
         layout.separator()
-        layout.operator("topmod.create_crust")
+        layout.menu("TOPMOD_MT_structural")
 
 
 def _mesh_menu_draw(self, _context):
@@ -85,10 +115,14 @@ class TOPMOD_PT_main(bpy.types.Panel):
     def draw(self, _context):
         layout = self.layout
 
-        # -- High-level --
+        # -- Tools --
         box = layout.box()
-        box.label(text="High-Level", icon='MESH_DATA')
-        box.operator("topmod.stellate_all", icon='MESH_ICOSPHERE')
+        box.label(text="Tools", icon='MESH_DATA')
+        col = box.column(align=True)
+        col.operator("topmod.stellate_all", icon='MESH_ICOSPHERE')
+        col.operator("topmod.subdivide_all_edges")
+        col.operator("topmod.subdivide_all_faces")
+        col.operator("topmod.triangulate_all")
 
         # -- Classic subdivision --
         box = layout.box()
@@ -120,11 +154,21 @@ class TOPMOD_PT_main(bpy.types.Panel):
         col.operator("topmod.checkerboard")
         col.operator("topmod.ds_bc_new")
         col.operator("topmod.dome")
+        col.separator()
+        col.operator("topmod.stellate_subdivide")
+        col.operator("topmod.two_stellate")
+        col.operator("topmod.doo_sabin_bc")
+        col.operator("topmod.modified_cc")
+        col.operator("topmod.modified_cc2")
 
         # -- Structural --
         box = layout.box()
         box.label(text="Structural", icon='MOD_SOLIDIFY')
-        box.operator("topmod.create_crust")
+        col = box.column(align=True)
+        col.operator("topmod.create_crust")
+        col.operator("topmod.crust_scaling")
+        col.separator()
+        col.operator("topmod.make_wireframe")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -134,6 +178,8 @@ class TOPMOD_PT_main(bpy.types.Panel):
 _classes = [
     TOPMOD_MT_subdivision_classic,
     TOPMOD_MT_remeshing,
+    TOPMOD_MT_structural,
+    TOPMOD_MT_tools,
     TOPMOD_MT_main,
     TOPMOD_PT_main,
 ]
