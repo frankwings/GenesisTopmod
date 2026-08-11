@@ -11,7 +11,12 @@ from .validate import is_manifold, check_all, face_loop_check, vertex_fan_check,
 from .primitives import make_cube, make_tetrahedron, make_icosahedron, make_octahedron
 from .io import to_obj, from_obj, to_triangle_arrays
 from .high_level_ops import (extrude_face, add_handle, stellate, stellate_all,
-                             subdivide_edge, subdivide_face)
+                             subdivide_edge, subdivide_face,
+                             collapse_edge, trisect_edge,
+                             subdivide_all_edges, subdivide_all_faces,
+                             triangulate_face, triangulate_all,
+                             double_stellate_face, stellate_subdivide,
+                             punch_hole, extrude_face_dome, make_wireframe)
 from .subdivision import catmull_clark
 from .remeshing import (dual, doo_sabin, simplest_subdivide,
                         vertex_cutting, loop_subdivide, sqrt3_subdivide,
@@ -20,7 +25,10 @@ from .remeshing import (dual, doo_sabin, simplest_subdivide,
                         pentagonal_subdivide, pentagonal2_subdivide,
                         dual1264_subdivide, root4_subdivide,
                         checkerboard_remesh, ds_bc_new_subdivide,
-                        dome_subdivide, create_crust)
+                        dome_subdivide, create_crust,
+                        doo_sabin_bc, two_stellate_subdivide,
+                        create_crust_with_scaling,
+                        modified_corner_cutting, modified_corner_cutting2)
 from .tokenizer import (
     TopModToken,
     quantize_coord, dequantize_coord,
@@ -44,6 +52,15 @@ __all__ = [
     # High-level ops
     "extrude_face", "add_handle", "stellate", "stellate_all",
     "subdivide_edge", "subdivide_face",
+    "collapse_edge", "trisect_edge",
+    "subdivide_all_edges", "subdivide_all_faces",
+    "triangulate_face", "triangulate_all",
+    "double_stellate_face", "stellate_subdivide",
+    "punch_hole", "extrude_face_dome", "make_wireframe",
+    # Remeshing batch 5
+    "doo_sabin_bc", "two_stellate_subdivide",
+    "create_crust_with_scaling",
+    "modified_corner_cutting", "modified_corner_cutting2",
     # Subdivision / remeshing
     "catmull_clark", "dual", "doo_sabin", "simplest_subdivide",
     "vertex_cutting", "loop_subdivide", "sqrt3_subdivide",
