@@ -25,7 +25,9 @@ from __future__ import annotations
 import bpy
 from bpy.props import FloatProperty, IntProperty
 
-from .converter import apply_op
+from .converter import (apply_op, apply_local_face_op, apply_local_edge_op,
+                        apply_two_face_op, apply_insert_edge,
+                        apply_delete_vertex)
 
 # Import topmod ops via the bundled sub-package
 from .topmod import (
@@ -46,6 +48,10 @@ from .topmod import (
     extrude_face_dome, make_wireframe,
     doo_sabin_bc, modified_corner_cutting, modified_corner_cutting2,
     create_crust_with_scaling,
+    # Local ops
+    extrude_face, stellate, subdivide_face, subdivide_edge,
+    delete_edge, collapse_edge, trisect_edge, triangulate_face,
+    add_handle, punch_hole,
 )
 
 
@@ -103,6 +109,132 @@ def _make_global_op(idname: str, label: str, description: str,
     attrs["execute"] = execute
     attrs["poll"] = classmethod(poll)
 
+    return type(idname.replace(".", "_").upper(), (bpy.types.Operator,), attrs)
+
+
+def _make_face_op(idname, label, description, op_fn, props=None):
+    """Factory for operators that act on SELECTED FACES."""
+    _captured_fn = op_fn
+
+    attrs = {
+        "bl_idname": idname,
+        "bl_label": label,
+        "bl_description": description + " (apply to selected faces)",
+        "bl_options": {'REGISTER', 'UNDO'},
+    }
+    if props:
+        attrs["__annotations__"] = dict(props)
+
+    def execute(self, context):
+        kwargs = {}
+        if props:
+            for k in props:
+                kwargs[k] = getattr(self, k)
+        try:
+            result = apply_local_face_op(context, _captured_fn, **kwargs)
+            if result is None:
+                self.report({'ERROR'}, "Select at least one face")
+                return {'CANCELLED'}
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+    def poll(cls, context):
+        return (context.mode == 'EDIT_MESH' and
+                context.edit_object is not None)
+
+    attrs["execute"] = execute
+    attrs["poll"] = classmethod(poll)
+    return type(idname.replace(".", "_").upper(), (bpy.types.Operator,), attrs)
+
+
+def _make_edge_op(idname, label, description, op_fn, props=None):
+    """Factory for operators that act on SELECTED EDGES."""
+    _captured_fn = op_fn
+
+    attrs = {
+        "bl_idname": idname,
+        "bl_label": label,
+        "bl_description": description + " (apply to selected edges)",
+        "bl_options": {'REGISTER', 'UNDO'},
+    }
+    if props:
+        attrs["__annotations__"] = dict(props)
+
+    def execute(self, context):
+        kwargs = {}
+        if props:
+            for k in props:
+                kwargs[k] = getattr(self, k)
+        try:
+            result = apply_local_edge_op(context, _captured_fn, **kwargs)
+            if result is None:
+                self.report({'ERROR'}, "Select at least one edge")
+                return {'CANCELLED'}
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+    def poll(cls, context):
+        return (context.mode == 'EDIT_MESH' and
+                context.edit_object is not None)
+
+    attrs["execute"] = execute
+    attrs["poll"] = classmethod(poll)
+    return type(idname.replace(".", "_").upper(), (bpy.types.Operator,), attrs)
+
+
+def _make_two_face_op(idname, label, description, op_fn):
+    """Factory for operators that need exactly 2 selected faces."""
+    _captured_fn = op_fn
+
+    attrs = {
+        "bl_idname": idname,
+        "bl_label": label,
+        "bl_description": description + " (select exactly 2 faces)",
+        "bl_options": {'REGISTER', 'UNDO'},
+    }
+
+    def execute(self, context):
+        try:
+            result = apply_two_face_op(context, _captured_fn)
+            if result == "select_error":
+                self.report({'ERROR'}, "Select exactly 2 faces")
+                return {'CANCELLED'}
+            if result is None:
+                self.report({'ERROR'}, "Failed — check face selection")
+                return {'CANCELLED'}
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+    def poll(cls, context):
+        return (context.mode == 'EDIT_MESH' and
+                context.edit_object is not None)
+
+    attrs["execute"] = execute
+    attrs["poll"] = classmethod(poll)
+    return type(idname.replace(".", "_").upper(), (bpy.types.Operator,), attrs)
+
+
+def _make_special_op(idname, label, description, execute_fn):
+    """Factory for ops with custom execute (insert_edge, delete_vertex)."""
+    attrs = {
+        "bl_idname": idname,
+        "bl_label": label,
+        "bl_description": description,
+        "bl_options": {'REGISTER', 'UNDO'},
+    }
+    attrs["execute"] = execute_fn
+
+    def poll(cls, context):
+        return (context.mode == 'EDIT_MESH' and
+                context.edit_object is not None)
+
+    attrs["poll"] = classmethod(poll)
     return type(idname.replace(".", "_").upper(), (bpy.types.Operator,), attrs)
 
 
@@ -457,6 +589,162 @@ _classes = [
     # Composite
     TOPMOD_OT_make_wireframe,
 ]
+
+# ── Local operators (need face/edge/vertex selection) ─────────────────────
+
+# Face ops
+TOPMOD_OT_extrude_face = _make_face_op(
+    "topmod.extrude_face", "Extrude Face",
+    "Extrude selected faces along their normals",
+    extrude_face,
+    props={"dist": FloatProperty(
+        name="Distance", default=0.5, min=-5.0, max=5.0,
+        description="Extrusion distance along face normal")},
+)
+
+TOPMOD_OT_stellate_face = _make_face_op(
+    "topmod.stellate_face", "Stellate Face",
+    "Add apex vertex at face centroid, split into triangles",
+    stellate,
+)
+
+TOPMOD_OT_subdivide_face = _make_face_op(
+    "topmod.subdivide_face", "Subdivide Face",
+    "Fan-subdivide selected faces from centroid",
+    subdivide_face,
+)
+
+TOPMOD_OT_triangulate_face = _make_face_op(
+    "topmod.triangulate_face", "Triangulate Face",
+    "Fan-triangulate selected faces",
+    triangulate_face,
+)
+
+TOPMOD_OT_double_stellate_face = _make_face_op(
+    "topmod.double_stellate_face", "Double Stellate Face",
+    "Two-round stellate on selected faces",
+    double_stellate_face,
+    props={"dist": FloatProperty(
+        name="Distance", default=0.0, min=0.0, max=2.0,
+        description="Apex displacement along face normal")},
+)
+
+TOPMOD_OT_extrude_face_dome = _make_face_op(
+    "topmod.extrude_face_dome_local", "Extrude Dome (Face)",
+    "Dome-shaped extrusion on selected faces",
+    extrude_face_dome,
+    props={
+        "length": FloatProperty(
+            name="Length", default=1.0, min=0.0, max=3.0,
+            description="Dome height"),
+        "sf": FloatProperty(
+            name="Scale", default=1.0, min=0.0, max=3.0,
+            description="Dome ring scale"),
+    },
+)
+
+# Edge ops
+TOPMOD_OT_delete_edge = _make_edge_op(
+    "topmod.delete_edge", "Delete Edge",
+    "Delete selected edges (merge flanking faces)",
+    delete_edge,
+)
+
+TOPMOD_OT_subdivide_edge = _make_edge_op(
+    "topmod.subdivide_edge", "Subdivide Edge",
+    "Split selected edges at midpoint",
+    subdivide_edge,
+)
+
+TOPMOD_OT_collapse_edge = _make_edge_op(
+    "topmod.collapse_edge", "Collapse Edge",
+    "Merge endpoints of selected edges to midpoint",
+    collapse_edge,
+)
+
+TOPMOD_OT_trisect_edge = _make_edge_op(
+    "topmod.trisect_edge", "Trisect Edge",
+    "Split selected edges into 3 equal segments",
+    trisect_edge,
+)
+
+# Two-face ops
+TOPMOD_OT_add_handle = _make_two_face_op(
+    "topmod.add_handle", "Add Handle",
+    "Connect 2 selected faces with a tunnel (genus +1)",
+    add_handle,
+)
+
+TOPMOD_OT_punch_hole = _make_two_face_op(
+    "topmod.punch_hole", "Punch Hole",
+    "Punch a hole between 2 selected faces",
+    punch_hole,
+)
+
+# Special ops
+def _exec_insert_edge(self, context):
+    try:
+        result = apply_insert_edge(context)
+        if result == "select_error":
+            self.report({'ERROR'}, "Select exactly 2 vertices")
+            return {'CANCELLED'}
+        if result is None:
+            self.report({'ERROR'}, "Failed — vertices must share a face "
+                        "or each have an outgoing half-edge")
+            return {'CANCELLED'}
+    except Exception as e:
+        self.report({'ERROR'}, str(e))
+        return {'CANCELLED'}
+    return {'FINISHED'}
+
+TOPMOD_OT_insert_edge = _make_special_op(
+    "topmod.insert_edge", "Insert Edge",
+    "Insert edge between 2 selected vertices (select 2 verts on same face for diagonal, different faces for merge)",
+    _exec_insert_edge,
+)
+
+def _exec_delete_vertex(self, context):
+    try:
+        result = apply_delete_vertex(context)
+        if result == "select_error":
+            self.report({'ERROR'}, "Select exactly 1 isolated vertex")
+            return {'CANCELLED'}
+        if result is None:
+            self.report({'ERROR'}, "Failed — vertex must be isolated (no edges)")
+            return {'CANCELLED'}
+    except Exception as e:
+        self.report({'ERROR'}, str(e))
+        return {'CANCELLED'}
+    return {'FINISHED'}
+
+TOPMOD_OT_delete_vertex = _make_special_op(
+    "topmod.delete_vertex", "Delete Vertex",
+    "Delete an isolated vertex (no edges)",
+    _exec_delete_vertex,
+)
+
+_local_classes = [
+    # Face ops
+    TOPMOD_OT_extrude_face,
+    TOPMOD_OT_stellate_face,
+    TOPMOD_OT_subdivide_face,
+    TOPMOD_OT_triangulate_face,
+    TOPMOD_OT_double_stellate_face,
+    TOPMOD_OT_extrude_face_dome,
+    # Edge ops
+    TOPMOD_OT_delete_edge,
+    TOPMOD_OT_subdivide_edge,
+    TOPMOD_OT_collapse_edge,
+    TOPMOD_OT_trisect_edge,
+    # Two-face ops
+    TOPMOD_OT_add_handle,
+    TOPMOD_OT_punch_hole,
+    # Special
+    TOPMOD_OT_insert_edge,
+    TOPMOD_OT_delete_vertex,
+]
+
+_classes = _classes + _local_classes
 
 
 def register():

@@ -69,9 +69,40 @@ class TOPMOD_MT_structural(bpy.types.Menu):
         layout.operator("topmod.make_wireframe")
 
 
+class TOPMOD_MT_local_face(bpy.types.Menu):
+    bl_idname = "TOPMOD_MT_local_face"
+    bl_label = "Face Operations (selection)"
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.operator("topmod.extrude_face")
+        layout.operator("topmod.stellate_face")
+        layout.operator("topmod.subdivide_face")
+        layout.operator("topmod.triangulate_face")
+        layout.operator("topmod.double_stellate_face")
+        layout.operator("topmod.extrude_face_dome_local")
+        layout.separator()
+        layout.operator("topmod.add_handle")
+        layout.operator("topmod.punch_hole")
+
+
+class TOPMOD_MT_local_edge(bpy.types.Menu):
+    bl_idname = "TOPMOD_MT_local_edge"
+    bl_label = "Edge Operations (selection)"
+
+    def draw(self, _context):
+        layout = self.layout
+        layout.operator("topmod.subdivide_edge")
+        layout.operator("topmod.trisect_edge")
+        layout.operator("topmod.delete_edge")
+        layout.operator("topmod.collapse_edge")
+        layout.separator()
+        layout.operator("topmod.insert_edge")
+
+
 class TOPMOD_MT_tools(bpy.types.Menu):
     bl_idname = "TOPMOD_MT_tools"
-    bl_label = "Tools"
+    bl_label = "Global Tools"
 
     def draw(self, _context):
         layout = self.layout
@@ -87,6 +118,9 @@ class TOPMOD_MT_main(bpy.types.Menu):
 
     def draw(self, _context):
         layout = self.layout
+        layout.menu("TOPMOD_MT_local_face")
+        layout.menu("TOPMOD_MT_local_edge")
+        layout.separator()
         layout.menu("TOPMOD_MT_tools")
         layout.separator()
         layout.menu("TOPMOD_MT_subdivision_classic")
@@ -115,9 +149,35 @@ class TOPMOD_PT_main(bpy.types.Panel):
     def draw(self, _context):
         layout = self.layout
 
-        # -- Tools --
+        # -- Face operations (selection) --
         box = layout.box()
-        box.label(text="Tools", icon='MESH_DATA')
+        box.label(text="Face Ops (selection)", icon='FACESEL')
+        col = box.column(align=True)
+        col.operator("topmod.extrude_face")
+        col.operator("topmod.stellate_face")
+        col.operator("topmod.subdivide_face")
+        col.operator("topmod.triangulate_face")
+        col.operator("topmod.double_stellate_face")
+        col.operator("topmod.extrude_face_dome_local")
+        col.separator()
+        col.operator("topmod.add_handle")
+        col.operator("topmod.punch_hole")
+
+        # -- Edge operations (selection) --
+        box = layout.box()
+        box.label(text="Edge Ops (selection)", icon='EDGESEL')
+        col = box.column(align=True)
+        col.operator("topmod.subdivide_edge")
+        col.operator("topmod.trisect_edge")
+        col.operator("topmod.delete_edge")
+        col.operator("topmod.collapse_edge")
+        col.separator()
+        col.operator("topmod.insert_edge")
+        col.operator("topmod.delete_vertex")
+
+        # -- Global tools --
+        box = layout.box()
+        box.label(text="Global Tools", icon='MESH_DATA')
         col = box.column(align=True)
         col.operator("topmod.stellate_all", icon='MESH_ICOSPHERE')
         col.operator("topmod.subdivide_all_edges")
@@ -180,6 +240,8 @@ _classes = [
     TOPMOD_MT_remeshing,
     TOPMOD_MT_structural,
     TOPMOD_MT_tools,
+    TOPMOD_MT_local_face,
+    TOPMOD_MT_local_edge,
     TOPMOD_MT_main,
     TOPMOD_PT_main,
 ]
