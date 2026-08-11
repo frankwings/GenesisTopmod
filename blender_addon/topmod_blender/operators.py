@@ -39,6 +39,13 @@ from .topmod import (
     create_crust,
     stellate_all,
     extrude_face, stellate, subdivide_face,
+    # Batch 5
+    stellate_subdivide, two_stellate_subdivide,
+    subdivide_all_edges, subdivide_all_faces,
+    triangulate_all, double_stellate_face,
+    extrude_face_dome, make_wireframe,
+    doo_sabin_bc, modified_corner_cutting, modified_corner_cutting2,
+    create_crust_with_scaling,
 )
 
 
@@ -300,6 +307,90 @@ TOPMOD_OT_dome = _make_global_op(
     },
 )
 
+# -- 4b. TopMod remeshing (new batch 5) ------------------------------------
+
+TOPMOD_OT_stellate_subdivide = _make_global_op(
+    "topmod.stellate_subdivide",
+    "Stellate Subdivide",
+    "Stellate all faces then delete original edges",
+    stellate_subdivide, returns_new=False,
+)
+
+TOPMOD_OT_two_stellate = _make_global_op(
+    "topmod.two_stellate",
+    "Two-Stellate",
+    "Two-pass stellate subdivision with height and curvature control",
+    two_stellate_subdivide, returns_new=False,
+    props={
+        "offset": FloatProperty(
+            name="Offset", default=0.0, min=0.0, max=2.0,
+            description="First-pass spike height"),
+        "curve": FloatProperty(
+            name="Curve", default=0.0, min=0.0, max=2.0,
+            description="Second-pass curvature"),
+    },
+)
+
+TOPMOD_OT_doo_sabin_bc = _make_global_op(
+    "topmod.doo_sabin_bc",
+    "Doo-Sabin BC",
+    "Doo-Sabin BC: subdivide all edges then Doo-Sabin",
+    doo_sabin_bc,
+)
+
+TOPMOD_OT_modified_cc = _make_global_op(
+    "topmod.modified_cc",
+    "Modified Corner Cutting",
+    "Bisector-inset corner-cutting subdivision",
+    modified_corner_cutting,
+    props={"thickness": FloatProperty(
+        name="Thickness", default=0.25, min=0.01, max=0.49,
+        description="Inset depth along bisectors")},
+)
+
+TOPMOD_OT_modified_cc2 = _make_global_op(
+    "topmod.modified_cc2",
+    "Modified Corner Cutting 2",
+    "Scale-based corner-cutting subdivision",
+    modified_corner_cutting2,
+    props={"scale": FloatProperty(
+        name="Scale", default=0.25, min=0.01, max=0.99,
+        description="Displacement scale along neighbor directions")},
+)
+
+# -- 2b. High-level (global, new batch 5) ---------------------------------
+
+TOPMOD_OT_subdivide_all_edges = _make_global_op(
+    "topmod.subdivide_all_edges",
+    "Subdivide All Edges",
+    "Split every edge at its midpoint",
+    subdivide_all_edges, returns_new=False,
+)
+
+TOPMOD_OT_subdivide_all_faces = _make_global_op(
+    "topmod.subdivide_all_faces",
+    "Subdivide All Faces",
+    "Fan-subdivide every face from centroid (= stellate all)",
+    subdivide_all_faces, returns_new=False,
+)
+
+TOPMOD_OT_triangulate_all = _make_global_op(
+    "topmod.triangulate_all",
+    "Triangulate All",
+    "Fan-triangulate every face from its first vertex",
+    triangulate_all, returns_new=False,
+)
+
+TOPMOD_OT_make_wireframe = _make_global_op(
+    "topmod.make_wireframe",
+    "Make Wireframe",
+    "Wireframe: corner-cutting → crust → punch holes",
+    make_wireframe,
+    props={"thickness": FloatProperty(
+        name="Thickness", default=0.1, min=0.01, max=0.49,
+        description="Beam width and shell thickness")},
+)
+
 # -- 5. Structural ---------------------------------------------------------
 
 TOPMOD_OT_crust = _make_global_op(
@@ -312,15 +403,28 @@ TOPMOD_OT_crust = _make_global_op(
         description="Shell thickness (negative = outward)")},
 )
 
+TOPMOD_OT_crust_scaling = _make_global_op(
+    "topmod.crust_scaling",
+    "Crust (Scaling)",
+    "Shell via scaling toward centroid (not normal offset)",
+    create_crust_with_scaling, returns_new=True,
+    props={"scale_factor": FloatProperty(
+        name="Scale", default=0.9, min=0.01, max=0.99,
+        description="Inner shell scale relative to centroid")},
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Registration
 # ─────────────────────────────────────────────────────────────────────────────
 
 _classes = [
-    # High-level
+    # High-level (global)
     TOPMOD_OT_stellate_all,
-    # Classic
+    TOPMOD_OT_subdivide_all_edges,
+    TOPMOD_OT_subdivide_all_faces,
+    TOPMOD_OT_triangulate_all,
+    # Classic subdivision
     TOPMOD_OT_catmull_clark,
     TOPMOD_OT_dual,
     TOPMOD_OT_doo_sabin,
@@ -328,7 +432,7 @@ _classes = [
     TOPMOD_OT_vertex_cutting,
     TOPMOD_OT_loop,
     TOPMOD_OT_sqrt3,
-    # TopMod remeshing
+    # TopMod remeshing (original)
     TOPMOD_OT_honeycomb,
     TOPMOD_OT_star,
     TOPMOD_OT_corner_cutting,
@@ -341,8 +445,17 @@ _classes = [
     TOPMOD_OT_checkerboard,
     TOPMOD_OT_ds_bc_new,
     TOPMOD_OT_dome,
+    # TopMod remeshing (batch 5)
+    TOPMOD_OT_stellate_subdivide,
+    TOPMOD_OT_two_stellate,
+    TOPMOD_OT_doo_sabin_bc,
+    TOPMOD_OT_modified_cc,
+    TOPMOD_OT_modified_cc2,
     # Structural
     TOPMOD_OT_crust,
+    TOPMOD_OT_crust_scaling,
+    # Composite
+    TOPMOD_OT_make_wireframe,
 ]
 
 

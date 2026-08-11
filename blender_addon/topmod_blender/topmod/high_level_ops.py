@@ -6,6 +6,16 @@ add_handle(mesh, face1, face2)           -> list[Edge]
 stellate(mesh, face)                     -> Vertex
 subdivide_edge(mesh, edge)               -> Vertex
 subdivide_face(mesh, face)               -> Vertex
+stellate_all(mesh)                       -> list[Vertex]
+collapse_edge(mesh, edge)                -> Vertex
+trisect_edge(mesh, edge, t1, t2)         -> (Vertex, Vertex)
+subdivide_all_edges(mesh, n)             -> None
+subdivide_all_faces(mesh)                -> list[Vertex]
+triangulate_face(mesh, face)             -> None
+triangulate_all(mesh)                    -> None
+double_stellate_face(mesh, face, d)      -> Vertex
+stellate_subdivide(mesh)                 -> None
+punch_hole(mesh, face1, face2)           -> list[Edge]  (alias for add_handle)
 """
 
 from __future__ import annotations
@@ -492,3 +502,414 @@ def stellate_all(mesh: DLFLMesh) -> List[Vertex]:
     for face in list(mesh.faces.values()):
         apexes.append(stellate(mesh, face))
     return apexes
+
+
+# ── collapse_edge ────────────────────────────────────────────────────────────
+
+def collapse_edge(mesh: DLFLMesh, edge: Edge) -> Vertex:
+    """
+    Collapse an edge by merging its two endpoints into one vertex
+    at their midpoint.
+
+    Before: ... ─ v0 ── v1 ─ ...  (edge e, two flanking faces)
+    After:  ... ─── m ─── ...     (v0 & v1 merged into m)
+
+    The two faces adjacent to the edge are removed (they degenerate to
+    lines).  All half-edges that used v0 or v1 are repointed to m.
+
+    Topology: V−1, E−(1+k), F−2 for an interior edge where k is the
+    number of additional edges that become duplicates after merging
+    (typically k=2 for a manifold interior edge → V−1, E−3, F−2).
+
+    Returns the surviving (midpoint) vertex.
+    """
+    v0, v1 = edge.vertices()
+    mx = (v0.x + v1.x) / 2.0
+    my = (v0.y + v1.y) / 2.0
+    mz = (v0.z + v1.z) / 2.0
+
+    # Repoint all half-edges from v1 to v0 (v0 becomes the surviving vertex)
+    for he in list(mesh.halfedges.values()):
+        if he.origin is v1:
+            he.origin = v0
+
+    # Set the surviving vertex to the midpoint
+    v0.x, v0.y, v0.z = mx, my, mz
+
+    # Now the edge's two half-edges both originate from v0 or point to v0,
+    # making it a self-loop. Delete the edge and its flanking faces.
+    he0 = edge.he0
+    he1 = edge.he1
+
+    # The two flanking faces degenerate (contain repeated vertex v0).
+    # Remove them and their degenerate edges.
+    for face_he in [he0, he1]:
+        f = face_he.face
+        if f is None:
+            continue
+        # Collect all half-edges of this face
+        ring = f.halfedges()
+        # Remove face
+        mesh._remove_face(f)
+        for h in ring:
+            e = h.edge
+            if e is not None and e.id in mesh.edges:
+                # Check if this edge is now degenerate (self-loop)
+                ev0, ev1 = e.vertices()
+                if ev0 is ev1:
+                    mesh._remove_edge(e)
+                    mesh._remove_halfedge(e.he0)
+                    mesh._remove_halfedge(e.he1)
+
+    # Remove the original collapsed edge if still present
+    if edge.id in mesh.edges:
+        mesh._remove_edge(edge)
+        if he0.id in mesh.halfedges:
+            mesh._remove_halfedge(he0)
+        if he1.id in mesh.halfedges:
+            mesh._remove_halfedge(he1)
+
+    # Remove v1
+    if v1.id in mesh.vertices:
+        mesh._remove_vertex(v1)
+
+    # Fix v0.he
+    v0.he = None
+    for he in mesh.halfedges.values():
+        if he.origin is v0:
+            v0.he = he
+            break
+
+    # Rewire: some half-edge pairs may now be duplicates (same
+    # origin/destination).  For each pair of half-edges that share the
+    # same two vertices, merge them.  This is complex in general;
+    # for now, just fix next/prev pointers around removed faces.
+
+    # Fix next/prev chains: for each remaining half-edge, if its
+    # next or prev was removed, skip to the next valid one.
+    valid_ids = set(mesh.halfedges.keys())
+    for he in list(mesh.halfedges.values()):
+        while he.next is not None and he.next.id not in valid_ids:
+            he.next = he.next.next
+        while he.prev is not None and he.prev.id not in valid_ids:
+            he.prev = he.prev.prev
+
+    return v0
+
+
+# ── trisect_edge ─────────────────────────────────────────────────────────────
+
+def trisect_edge(mesh: DLFLMesh, edge: Edge,
+                 t1: float = 1.0/3.0,
+                 t2: float = 2.0/3.0) -> Tuple[Vertex, Vertex]:
+    """
+    Split an edge into three segments by inserting two vertices.
+
+    Parameters t1, t2 ∈ (0,1) control the split positions along v0→v1.
+    Default: equal trisection (1/3, 2/3).
+
+    Before: v0 ──────── v1
+    After:  v0 ─ m1 ─ m2 ─ v1
+
+    Topology: V+2, E+2, F unchanged.
+
+    Returns (m1, m2) — the two new vertices.
+    """
+    # First split: v0 — m2 — v1 at parameter t2
+    he_ab = edge.he0
+    v0 = he_ab.origin
+    v1 = edge.he1.origin
+
+    m2 = subdivide_edge(mesh, edge)
+    # Position m2 at t2 along v0→v1
+    m2.x = v0.x + t2 * (v1.x - v0.x)
+    m2.y = v0.y + t2 * (v1.y - v0.y)
+    m2.z = v0.z + t2 * (v1.z - v0.z)
+
+    # Now the original edge is v0—m2.  Split it at t1/t2.
+    # Find the edge connecting v0 and m2
+    e_v0_m2 = mesh.find_edge(v0, m2)
+    if e_v0_m2 is None:
+        raise RuntimeError("trisect_edge: cannot find v0—m2 edge")
+
+    m1 = subdivide_edge(mesh, e_v0_m2)
+    # Position m1 at t1 along v0→v1
+    m1.x = v0.x + t1 * (v1.x - v0.x)
+    m1.y = v0.y + t1 * (v1.y - v0.y)
+    m1.z = v0.z + t1 * (v1.z - v0.z)
+
+    return (m1, m2)
+
+
+# ── subdivide_all_edges ──────────────────────────────────────────────────────
+
+def subdivide_all_edges(mesh: DLFLMesh, n_divs: int = 2) -> List[Vertex]:
+    """
+    Subdivide every edge into *n_divs* equal segments.
+
+    n_divs=2 (default): midpoint split, same as topmod3d's subdivideAllEdges.
+
+    Topology: V + (n_divs−1)·E_old, E_old·n_divs, F unchanged.
+
+    Returns all newly created vertices.
+    """
+    new_verts: List[Vertex] = []
+    orig_edges = list(mesh.edges.values())
+    for e in orig_edges:
+        if n_divs == 2:
+            new_verts.append(subdivide_edge(mesh, e))
+        else:
+            # General: split into n_divs by repeated bisection is tricky;
+            # instead, insert (n_divs−1) vertices at equal parameters.
+            he = e.he0
+            v0_pos = (he.origin.x, he.origin.y, he.origin.z)
+            v1 = e.he1.origin
+            v1_pos = (v1.x, v1.y, v1.z)
+            cur_edge = e
+            for k in range(1, n_divs):
+                t = k / n_divs
+                mid = subdivide_edge(mesh, cur_edge)
+                mid.x = v0_pos[0] + t * (v1_pos[0] - v0_pos[0])
+                mid.y = v0_pos[1] + t * (v1_pos[1] - v0_pos[1])
+                mid.z = v0_pos[2] + t * (v1_pos[2] - v0_pos[2])
+                new_verts.append(mid)
+                # The newly created second edge (mid—v1) is the one to
+                # split next.  After subdivide_edge, mid.he points mid→v1.
+                cur_edge = mid.he.edge
+    return new_verts
+
+
+# ── subdivide_all_faces ──────────────────────────────────────────────────────
+
+def subdivide_all_faces(mesh: DLFLMesh) -> List[Vertex]:
+    """
+    Subdivide every face by connecting its centroid to all corners
+    (= stellate_all with apex at centroid height = 0).
+
+    Oracle: same as stellate_all: V'=V+F, E'=3E, F'=2E.
+
+    Returns list of new center vertices.
+    """
+    return stellate_all(mesh)
+
+
+# ── triangulate ──────────────────────────────────────────────────────────────
+
+def triangulate_face(mesh: DLFLMesh, face: Face) -> None:
+    """
+    Triangulate one face by fan from its first vertex.
+
+    An n-gon becomes n−2 triangles (n−3 new edges inserted).
+    V unchanged, E + (n−3), F + (n−3).
+    """
+    hes = face.halfedges()
+    n = len(hes)
+    if n <= 3:
+        return  # already a triangle (or degenerate)
+
+    # Fan: insert edges from hes[0] to hes[2], hes[3], ..., hes[n−2]
+    for k in range(2, n - 1):
+        # After each insertion, hes[0] may be on a new (smaller) face.
+        # Re-fetch the face from hes[0].
+        f = hes[0].face
+        f_hes = f.halfedges()
+        # Find hes[0] in f_hes to locate the correct target corner
+        idx_0 = None
+        for i, h in enumerate(f_hes):
+            if h is hes[0]:
+                idx_0 = i
+                break
+        if idx_0 is None:
+            break
+        # Target is the corner at offset k from hes[0] in the original
+        # numbering.  In the current face it may be at a different index
+        # because earlier splits shortened the face.
+        # The target vertex is hes[k].origin — find the half-edge in
+        # the current face that starts at that vertex.
+        target_v = hes[k].origin
+        target_he = None
+        for h in f_hes:
+            if h.origin is target_v and h is not hes[0]:
+                target_he = h
+                break
+        if target_he is None:
+            break
+        insert_edge(mesh, hes[0], target_he)
+
+
+def triangulate_all(mesh: DLFLMesh) -> None:
+    """
+    Triangulate every face of the mesh by fan from the first vertex.
+
+    Oracle: V unchanged, E + Σ(d_i − 3) for each face of degree d_i,
+    F + Σ(d_i − 3).
+    """
+    for face in list(mesh.faces.values()):
+        triangulate_face(mesh, face)
+
+
+# ── double_stellate_face ─────────────────────────────────────────────────────
+
+def double_stellate_face(mesh: DLFLMesh, face: Face,
+                         dist: float = 0.0) -> Vertex:
+    """
+    Double-stellate a face: stellate it, then stellate each resulting
+    triangle from the first stellation.
+
+    The first apex is placed at face centroid + dist * normal.
+    The second-round apexes are at the centroids of the first-round
+    triangles (no additional displacement).
+
+    Returns the first-round apex vertex.
+    """
+    # Record original edges to know which faces are "first-round"
+    apex = stellate(mesh, face)
+    if dist != 0.0:
+        normal = face.normal() if face.id in mesh.faces else (0, 0, 1)
+        # face was removed by stellate; use the average of the new
+        # triangle normals instead
+        out_hes = apex.outgoing_halfedges()
+        if out_hes:
+            nx = ny = nz = 0.0
+            for he in out_hes:
+                n = he.face.normal()
+                nx += n[0]; ny += n[1]; nz += n[2]
+            mag = (nx*nx + ny*ny + nz*nz) ** 0.5
+            if mag > 1e-12:
+                nx, ny, nz = nx/mag, ny/mag, nz/mag
+            apex.x += dist * nx
+            apex.y += dist * ny
+            apex.z += dist * nz
+
+    # Second round: stellate each triangle that was just created
+    new_faces = [he.face for he in apex.outgoing_halfedges()]
+    for f in new_faces:
+        stellate(mesh, f)
+
+    return apex
+
+
+# ── stellate_subdivide ───────────────────────────────────────────────────────
+
+def stellate_subdivide(mesh: DLFLMesh) -> None:
+    """
+    Stellate subdivision: stellate every face, then delete all original
+    edges.  This is topmod3d's ``stellateSubdivide``.
+
+    Different from plain ``stellate_all`` (which keeps original edges).
+
+    Oracle (cube): V=14, E=24, F=12.
+    General: V' = V + F, E' = E + 2·Σ(d_i) = E + 4E = ... (complex;
+    depends on face degrees).  In practice for regular meshes:
+    after stellate_all: V+F, 3E, 2E; after deleting E old edges:
+    each old edge deletion merges two triangles → V+F, 2E, E+F.
+    Wait — topmod3d shows V=14, E=24, F=12 on cube (V=8,E=12,F=6):
+    stellate_all → 14, 36, 24; delete 12 old edges → 14, 24, 12.
+    Each deletion: E−1, F−1 (merge two triangles sharing that edge).
+    So: V'=V+F, E'=3E−E=2E, F'=2E−E=E.
+    """
+    orig_vert_ids = set(v.id for v in mesh.iter_vertices())
+    stellate_all(mesh)
+    # After stellate_all, "base edges" (connecting two original vertices)
+    # correspond to the original edges — delete them.
+    base_edges = [e for e in list(mesh.edges.values())
+                  if all(v.id in orig_vert_ids for v in e.vertices())]
+    for e in base_edges:
+        if e.id in mesh.edges:
+            delete_edge(mesh, e)
+
+
+# ── punch_hole (alias for add_handle) ────────────────────────────────────────
+
+def punch_hole(mesh: DLFLMesh, face1: Face, face2: Face) -> List[Edge]:
+    """Alias for add_handle — punch a hole/tunnel between two faces."""
+    return add_handle(mesh, face1, face2)
+
+
+# ── extrude_face_dome ────────────────────────────────────────────────────────
+
+_FACE_DOME_HEIGHTS = (0.3, 0.18, 0.1, 0.05, 0.025)
+_FACE_DOME_SCALES  = (1.7, 1.6, 1.4, 1.2, 1.1)
+
+
+def extrude_face_dome(mesh: DLFLMesh, face: Face,
+                      length: float = 1.0, sf: float = 1.0) -> Face:
+    """
+    Dome-shaped extrusion of a single face (topmod3d's extrudeFaceDome).
+
+    5 successive DS-style extrusions with decreasing height and increasing
+    scale, followed by a final stellation to close the dome apex.
+
+    In-place.  Returns the final apex face (tiny top cap).
+    """
+    import math
+
+    # Average boundary edge length for height unit
+    vs = face.vertices()
+    d = len(vs)
+    per = 0.0
+    for i in range(d):
+        a, b = vs[i], vs[(i + 1) % d]
+        per += math.dist((a.x, a.y, a.z), (b.x, b.y, b.z))
+    unit = per / d
+
+    current = face
+    for h, s in zip(_FACE_DOME_HEIGHTS, _FACE_DOME_SCALES):
+        new_faces = extrude_face(mesh, current, dist=h * length * unit)
+        top = new_faces[0]
+        # DS ring repositioning
+        ring = top.vertices()
+        n = len(ring)
+        pts = [(v.x, v.y, v.z) for v in ring]
+        cx = sum(p[0] for p in pts) / n
+        cy = sum(p[1] for p in pts) / n
+        cz = sum(p[2] for p in pts) / n
+        scale = s * sf
+        for k, v in enumerate(ring):
+            p = pts[k]
+            a = pts[(k - 1) % n]
+            b = pts[(k + 1) % n]
+            dsx = (p[0] + cx + (p[0] + a[0]) / 2 + (p[0] + b[0]) / 2) / 4.0
+            dsy = (p[1] + cy + (p[1] + a[1]) / 2 + (p[1] + b[1]) / 2) / 4.0
+            dsz = (p[2] + cz + (p[2] + a[2]) / 2 + (p[2] + b[2]) / 2) / 4.0
+            v.x = cx + scale * (dsx - cx)
+            v.y = cy + scale * (dsy - cy)
+            v.z = cz + scale * (dsz - cz)
+        current = top
+
+    # Final stellation to close dome
+    stellate(mesh, current)
+    return current
+
+
+# ── makeWireframe ────────────────────────────────────────────────────────────
+
+def make_wireframe(mesh: DLFLMesh, thickness: float = 0.1) -> DLFLMesh:
+    """
+    Wireframe generation (topmod3d's makeWireframe).
+
+    Pipeline: modified_corner_cutting → create_crust → punch matching holes.
+    The result is a hollow wireframe — each original edge becomes a beam,
+    each original face becomes a hole.
+
+    Returns a new mesh.
+    """
+    from .remeshing import modified_corner_cutting, create_crust
+
+    # Step 1: modified corner cutting (insets faces, creates quad bridges)
+    wire = modified_corner_cutting(mesh, thickness=thickness)
+
+    # Step 2: create crust (double-wall shell)
+    shelled, pairs = create_crust(wire, thickness=thickness)
+
+    # Step 3: punch holes at faces that correspond to the inner inset faces
+    # In topmod3d this uses FTHole marking; we punch all face pairs that
+    # correspond to the original inset faces (the first F faces of wire).
+    n_orig_faces = mesh.F()
+    for i in range(n_orig_faces):
+        if i < len(pairs):
+            outer, inner = pairs[i]
+            if outer.degree() == inner.degree():
+                add_handle(shelled, outer, inner)
+
+    return shelled
