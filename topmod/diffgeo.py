@@ -60,10 +60,15 @@ from .remeshing import (
     star_subdivide, fractal_subdivide, dome_subdivide,
     create_crust,
     _DOME_HEIGHTS, _DOME_SCALES,
+    modified_corner_cutting, modified_corner_cutting2,
+    create_crust_with_scaling,
+    doo_sabin_bc, two_stellate_subdivide,
 )
 from .high_level_ops import (
     stellate_all, stellate, extrude_face, subdivide_edge, subdivide_face,
-    add_handle,
+    add_handle, stellate_subdivide, subdivide_all_edges,
+    triangulate_all, double_stellate_face, extrude_face_dome,
+    _FACE_DOME_HEIGHTS, _FACE_DOME_SCALES,
 )
 
 
@@ -189,6 +194,18 @@ def _sta(mesh):
     stellate_all(mesh)
     return mesh
 
+def _stsub(mesh):
+    stellate_subdivide(mesh)
+    return mesh
+
+def _sae(mesh):
+    subdivide_all_edges(mesh)
+    return mesh
+
+def _tri(mesh):
+    triangulate_all(mesh)
+    return mesh
+
 
 # opcode -> callable
 _LINEAR_FLOAT_OPS: Dict[str, Callable] = {
@@ -209,12 +226,20 @@ _LINEAR_FLOAT_OPS: Dict[str, Callable] = {
     "ROOT4": root4_subdivide,
     "CHKB":  checkerboard_remesh,
     "DSBC":  ds_bc_new_subdivide,
+    # Batch 5 linear ops
+    "STSUB": _stsub,           # stellate_subdivide
+    "SAE":   _sae,             # subdivide_all_edges
+    "TRI":   _tri,             # triangulate_all
 }
 
 LINEAR_OPS: Tuple[str, ...] = tuple(_LINEAR_FLOAT_OPS.keys())
 NONLINEAR_OPS: Tuple[str, ...] = (
     "CRUST", "STAR", "FRAC", "DOME",
     "EXTRUDE_FACE", "STELLATE", "SUBDIVIDE_EDGE", "SUBDIVIDE_FACE",
+    # Batch 5 nonlinear ops
+    "MCC", "MCC2", "CRUST_SCALING",
+    "TWO_STELLATE", "DOO_SABIN_BC",
+    "DOUBLE_STELLATE_FACE", "EXTRUDE_FACE_DOME",
 )
 
 
@@ -981,6 +1006,326 @@ def _make_hdl_op(n_verts: int, faces: List[List[int]],
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Batch 5 nonlinear ops
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _make_mcc_op(name: str, n_verts: int, faces: List[List[int]],
+                 op_fn, params: Dict) -> DiffOp:
+    """
+    Modified corner cutting (MCC/MCC2).  Nonlinear because direction
+    normalization involves coordinate products.  Run float path for
+    topology; torch reimplements the geometry.
+    """
+    positions_dummy = [(float(i), float(i*2+1), float(i*3+2))
+                       for i in range(n_verts)]
+    mesh = _build_mesh(positions_dummy, [list(r) for r in faces])
+    result = op_fn(mesh, **params)
+    out_pos, out_faces = mesh_to_arrays(result)
+    n_out = len(out_pos)
+
+    # MCC/MCC2 use _corner_cut_topology which = DS topology.
+    # Position: each output vertex is a weighted sum of input vertices
+    # within its face.  The weights depend on neighbor directions
+    # (nonlinear), so we compute per-face per-corner in torch.
+
+    # Build per-halfedge → (face_idx, corner_idx, face_ring) mapping
+    face_rings: List[List[int]] = list(faces)
+    is_mcc2 = (name == "MCC2")
+    param_val = params.get("scale", 0.25) if is_mcc2 else params.get("thickness", 0.25)
+
+    def apply_fn(verts: torch.Tensor) -> torch.Tensor:
+        out_verts = []
+        for ring in face_rings:
+            d = len(ring)
+            for i in range(d):
+                v_idx = ring[i]
+                prev_idx = ring[(i - 1) % d]
+                next_idx = ring[(i + 1) % d]
+
+                v = verts[v_idx]
+                vp = verts[prev_idx]
+                vn = verts[next_idx]
+
+                d1 = vp - v
+                d2 = vn - v
+                L1 = torch.linalg.vector_norm(d1)
+                L2 = torch.linalg.vector_norm(d2)
+                d1n = d1 / torch.clamp(L1, min=_EPS)
+                d2n = d2 / torch.clamp(L2, min=_EPS)
+
+                if is_mcc2:
+                    # MCC2: v + scale * (d1n + d2n)
+                    t = param_val
+                    if not isinstance(t, torch.Tensor):
+                        t = torch.tensor(float(t), dtype=verts.dtype,
+                                         device=verts.device)
+                    out_verts.append(v + t * (d1n + d2n))
+                else:
+                    # MCC: bisector displacement
+                    bisector = d1n + d2n
+                    blen = torch.linalg.vector_norm(bisector)
+                    dot = (d1n * d2n).sum()
+                    sin2 = torch.clamp(1.0 - dot * dot, min=_EPS)
+                    t = param_val
+                    x = torch.sqrt(t * t / (4.0 * sin2))
+                    x = torch.clamp(x, max=0.5)
+                    bisector_dir = bisector / torch.clamp(blen, min=_EPS)
+                    out_verts.append(v + x * bisector)
+
+        return torch.stack(out_verts)
+
+    op = DiffOp(name, n_verts, n_out, out_faces)
+    op._apply_fn = apply_fn
+    return op
+
+
+def _make_crust_scaling_op(n_verts: int, faces: List[List[int]],
+                           scale_factor) -> DiffOp:
+    """Crust via centroid scaling — purely linear (no normals)."""
+    out_faces = [list(r) for r in faces] + \
+                [[vi + n_verts for vi in reversed(r)] for r in faces]
+
+    def apply_fn(verts: torch.Tensor) -> torch.Tensor:
+        sf = scale_factor
+        if not isinstance(sf, torch.Tensor):
+            sf = torch.tensor(float(sf), dtype=verts.dtype,
+                              device=verts.device)
+        centroid = verts.mean(dim=0)
+        inner = centroid + sf * (verts - centroid)
+        return torch.cat([verts, inner], dim=0)
+
+    op = DiffOp("CRUST_SCALING", n_verts, 2 * n_verts, out_faces)
+    op._apply_fn = apply_fn
+    return op
+
+
+def _make_two_stellate_op(n_verts: int, faces: List[List[int]],
+                          offset, curve) -> DiffOp:
+    """
+    Two-pass stellate subdivision: STA×2 + delete old edges + normal
+    displacements on both rounds' apexes.
+    """
+    # Get topology via float path
+    positions_dummy = [(float(i), float(i*2+1), float(i*3+2))
+                       for i in range(n_verts)]
+    mesh = _build_mesh(positions_dummy, [list(r) for r in faces])
+    two_stellate_subdivide(mesh, offset=0.0, curve=0.0)
+    _, out_faces = mesh_to_arrays(mesh)
+    n_out = len(list(mesh.vertices.values()))
+
+    # Trace topology: STA round 1 → STA round 2 → delete base edges
+    # stellate_subdivide = STA + delete base edges
+    # two_stellate = stellate(all, offset) + stellate_subdivide on result
+    # But the traced STSUB (stellate_subdivide) already handles STA+delete.
+    # two_stellate = STA(round 1) + STSUB(round 2 = STA + delete pre-round2 edges)
+
+    sta1 = _trace_linear("STA", n_verts, faces, {})
+    stsub = _trace_linear("STSUB", sta1.n_out, sta1.faces, {})
+
+    apex_start_r1 = n_verts
+    n_faces_orig = len(faces)
+
+    # Round 2 apexes: STSUB adds V_mid (= sta1.n_out) apexes at the end
+    # but STSUB = STA + delete, so its vertex layout is different.
+    # The round-1 apexes survive into the STSUB output because STSUB
+    # only deletes edges (not vertices).
+
+    def apply_fn(verts: torch.Tensor) -> torch.Tensor:
+        o = offset
+        if not isinstance(o, torch.Tensor):
+            o = torch.tensor(float(o), dtype=verts.dtype, device=verts.device)
+        c = curve
+        if not isinstance(c, torch.Tensor):
+            c = torch.tensor(float(c), dtype=verts.dtype, device=verts.device)
+
+        # STA round 1
+        mid = sta1.apply(verts)
+
+        # Displace round-1 apexes by offset * original face normals
+        if o.detach().item() != 0.0 or isinstance(offset, torch.Tensor):
+            fn = _newell_face_normals(verts, faces)
+            mid = mid.clone()
+            mid[apex_start_r1:apex_start_r1 + n_faces_orig] += o * fn
+
+        # Before STSUB (round 2), compute normals of the intermediate faces
+        # for curve displacement
+        mid_faces = sta1.faces
+        apex_start_r2 = sta1.n_out
+        n_mid_faces = len(mid_faces)
+
+        # STSUB round 2 (linear: STA + delete base edges)
+        out = stsub.apply(mid)
+
+        # Displace round-2 apexes by curve * intermediate face normals
+        if c.detach().item() != 0.0 or isinstance(curve, torch.Tensor):
+            fn2 = _newell_face_normals(mid, mid_faces)
+            out = out.clone()
+            out[apex_start_r2:apex_start_r2 + n_mid_faces] += c * fn2
+
+        return out
+
+    op = DiffOp("TWO_STELLATE", n_verts, n_out, out_faces)
+    op._apply_fn = apply_fn
+    return op
+
+
+def _make_doo_sabin_bc_op(n_verts: int, faces: List[List[int]]) -> DiffOp:
+    """Doo-Sabin BC = subdivide_all_edges (linear) then DS (linear)."""
+    sae = _trace_linear("SAE", n_verts, faces, {})
+    ds = _trace_linear("DS", sae.n_out, sae.faces, {})
+
+    def apply_fn(verts: torch.Tensor) -> torch.Tensor:
+        return ds.apply(sae.apply(verts))
+
+    op = DiffOp("DOO_SABIN_BC", n_verts, ds.n_out, ds.faces)
+    op._apply_fn = apply_fn
+    return op
+
+
+def _make_double_stellate_face_op(n_verts: int, faces: List[List[int]],
+                                  face_idx: int, dist) -> DiffOp:
+    """Double stellate on one face: stellate twice + dist displacement."""
+    positions_dummy = [(0.0, 0.0, 0.0)] * n_verts
+    mesh = _build_mesh(positions_dummy, [list(r) for r in faces])
+    face_list = list(mesh.faces.values())
+    double_stellate_face(mesh, face_list[face_idx], dist=0.0)
+    out_pos, out_faces = mesh_to_arrays(mesh)
+    n_out = len(out_pos)
+
+    ring_indices = list(faces[face_idx])
+    n_ring = len(ring_indices)
+
+    def apply_fn(verts: torch.Tensor) -> torch.Tensor:
+        d = dist
+        if not isinstance(d, torch.Tensor):
+            d = torch.tensor(float(d), dtype=verts.dtype, device=verts.device)
+
+        ring_v = verts[ring_indices]
+        centroid1 = ring_v.mean(dim=0)
+
+        # After first stellate: n triangles, each has centroid1 + 2 ring verts
+        # After second stellate: each triangle gets its own centroid
+        # Second-round centroids: each = (centroid1 + ring[i] + ring[i+1]) / 3
+        second_centroids = []
+        for i in range(n_ring):
+            c = (centroid1 + verts[ring_indices[i]] +
+                 verts[ring_indices[(i + 1) % n_ring]]) / 3.0
+            second_centroids.append(c)
+
+        # Displacement of first apex along face normal
+        if d.detach().item() != 0.0 or isinstance(dist, torch.Tensor):
+            q = torch.roll(ring_v, shifts=-1, dims=0)
+            normal = torch.stack([
+                torch.sum((ring_v[:, 1] - q[:, 1]) * (ring_v[:, 2] + q[:, 2])),
+                torch.sum((ring_v[:, 2] - q[:, 2]) * (ring_v[:, 0] + q[:, 0])),
+                torch.sum((ring_v[:, 0] - q[:, 0]) * (ring_v[:, 1] + q[:, 1])),
+            ])
+            nrm = torch.linalg.vector_norm(normal)
+            if nrm.detach().item() < _EPS:
+                normal = torch.tensor([0.0, 0.0, 1.0], dtype=verts.dtype,
+                                      device=verts.device)
+            else:
+                normal = normal / nrm
+            apex1 = centroid1 + d * normal
+        else:
+            apex1 = centroid1
+
+        new_verts = torch.cat([apex1.unsqueeze(0)] +
+                              [c.unsqueeze(0) for c in second_centroids])
+        return torch.cat([verts, new_verts], dim=0)
+
+    op = DiffOp("DOUBLE_STELLATE_FACE", n_verts, n_out, out_faces)
+    op._apply_fn = apply_fn
+    return op
+
+
+def _make_extrude_face_dome_op(n_verts: int, faces: List[List[int]],
+                               face_idx: int, length_param, sf_param) -> DiffOp:
+    """Single-face dome extrusion: 5 DS extrusions + final stellate."""
+    positions_dummy = [(float(i), float(i*2+1), float(i*3+2))
+                       for i in range(n_verts)]
+    mesh = _build_mesh(positions_dummy, [list(r) for r in faces])
+    face_list = list(mesh.faces.values())
+    extrude_face_dome(mesh, face_list[face_idx], length=1.0, sf=1.0)
+    out_pos, out_faces = mesh_to_arrays(mesh)
+    n_out = len(out_pos)
+
+    ring_indices = list(faces[face_idx])
+    n_ring = len(ring_indices)
+    heights = _FACE_DOME_HEIGHTS
+    scales = _FACE_DOME_SCALES
+
+    def apply_fn(verts: torch.Tensor) -> torch.Tensor:
+        lng = length_param
+        if not isinstance(lng, torch.Tensor):
+            lng = torch.tensor(float(lng), dtype=verts.dtype,
+                               device=verts.device)
+        s_f = sf_param
+        if not isinstance(s_f, torch.Tensor):
+            s_f = torch.tensor(float(s_f), dtype=verts.dtype,
+                               device=verts.device)
+
+        # Average edge length for height unit
+        ring_v = verts[ring_indices]
+        edge_lens = []
+        for i in range(n_ring):
+            edge_lens.append(torch.linalg.vector_norm(
+                ring_v[(i + 1) % n_ring] - ring_v[i]))
+        unit = torch.stack(edge_lens).mean()
+
+        extra_verts = []
+        current_ring = ring_v
+
+        for h, s in zip(heights, scales):
+            n = current_ring.shape[0]
+            # Face normal
+            q = torch.roll(current_ring, shifts=-1, dims=0)
+            normal = torch.stack([
+                torch.sum((current_ring[:, 1] - q[:, 1]) *
+                          (current_ring[:, 2] + q[:, 2])),
+                torch.sum((current_ring[:, 2] - q[:, 2]) *
+                          (current_ring[:, 0] + q[:, 0])),
+                torch.sum((current_ring[:, 0] - q[:, 0]) *
+                          (current_ring[:, 1] + q[:, 1])),
+            ])
+            nrm = torch.linalg.vector_norm(normal)
+            if nrm.detach().item() < _EPS:
+                normal = torch.tensor([0.0, 0.0, 1.0], dtype=verts.dtype,
+                                      device=verts.device)
+            else:
+                normal = normal / nrm
+
+            # Extrude
+            disp = h * lng * unit * normal
+            new_pts = current_ring + disp.unsqueeze(0)
+
+            # DS ring repositioning
+            centroid = new_pts.mean(dim=0)
+            scale = s * s_f
+            p_prev = torch.roll(new_pts, shifts=1, dims=0)
+            p_next = torch.roll(new_pts, shifts=-1, dims=0)
+            ds_pts = (new_pts + centroid.unsqueeze(0) +
+                      (new_pts + p_prev) / 2 +
+                      (new_pts + p_next) / 2) / 4.0
+            repositioned = centroid.unsqueeze(0) + scale * (
+                ds_pts - centroid.unsqueeze(0))
+
+            for k in range(n):
+                extra_verts.append(repositioned[k])
+            current_ring = repositioned
+
+        # Final stellate: apex at centroid of last ring
+        apex = current_ring.mean(dim=0)
+        extra_verts.append(apex)
+
+        return torch.cat([verts, torch.stack(extra_verts)], dim=0)
+
+    op = DiffOp("EXTRUDE_FACE_DOME", n_verts, n_out, out_faces)
+    op._apply_fn = apply_fn
+    return op
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public constructors
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1029,8 +1374,33 @@ def trace_op(name: str, positions_or_n, faces: List[List[int]],
         return _make_hdl_op(n, faces,
                             params.get("face1_ord", 0),
                             params.get("face2_ord", 1))
+    # Batch 5 nonlinear ops
+    if name == "MCC":
+        return _make_mcc_op("MCC", n, faces, modified_corner_cutting,
+                            {"thickness": params.get("thickness", 0.25)})
+    if name == "MCC2":
+        return _make_mcc_op("MCC2", n, faces, modified_corner_cutting2,
+                            {"scale": params.get("scale", 0.25)})
+    if name == "CRUST_SCALING":
+        return _make_crust_scaling_op(n, faces,
+                                      params.get("scale_factor", 0.9))
+    if name == "TWO_STELLATE":
+        return _make_two_stellate_op(n, faces,
+                                     params.get("offset", 0.0),
+                                     params.get("curve", 0.0))
+    if name == "DOO_SABIN_BC":
+        return _make_doo_sabin_bc_op(n, faces)
+    if name == "DOUBLE_STELLATE_FACE":
+        return _make_double_stellate_face_op(
+            n, faces, params.get("face_idx", 0),
+            params.get("dist", 0.0))
+    if name == "EXTRUDE_FACE_DOME":
+        return _make_extrude_face_dome_op(
+            n, faces, params.get("face_idx", 0),
+            params.get("length", 1.0),
+            params.get("sf", 1.0))
+
     if name in ("IE", "DE"):
-        # IE/DE are topology-only ops; not yet implemented in DiffSequence.
         raise ValueError(
             f"IE/DE not yet supported in DiffSequence "
             f"(topology-only ops require mesh rebuild)")
