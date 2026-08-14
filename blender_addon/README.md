@@ -1,6 +1,6 @@
 # TopMod for Blender — Installation & Usage Guide
 
-A Blender addon bringing all 21 global TopMod mesh operators into
+A Blender addon bringing all 46 TopMod mesh operators into
 Blender's Edit Mode, based on Akleman & Chen's DLFL (Doubly-Linked
 Face List) theory. Every operation preserves 2-manifoldness at every step.
 
@@ -47,12 +47,81 @@ All operators require **Edit Mode** on a mesh object:
    - **Sidebar**: Press **N** to open the sidebar → **TopMod** tab
    - **Search**: Press **F3** and type the operator name (e.g. "Catmull")
 
-### Available operators (21)
+### Selection modes
 
-#### High-Level
+Different operators require different selection modes:
+
+| Selection Mode | How to activate | Operators |
+|---|---|---|
+| **No selection needed** | — | All global/subdivision/remeshing operators |
+| **Face selection** | Press **3** | Extrude Face, Stellate, Subdivide Face, Triangulate Face, Double Stellate Face, Extrude Face Dome |
+| **Edge selection** | Press **2** | Subdivide Edge, Collapse Edge, Trisect Edge |
+| **Two-face selection** | Press **3**, select 2 faces | Add Handle, Punch Hole |
+| **Vertex selection (ordered)** | Press **1**, click vertices in order | Insert Edge (4 vertices), Delete Vertex (1 vertex) |
+
+### Insert Edge — detailed selection guide
+
+`insert_edge` is the most nuanced operator because it requires specifying
+two **half-edges**. A half-edge is a directed edge (A→B) that belongs to
+a specific face.
+
+**How to select:**
+
+1. Enter **Vertex selection mode** (press **1**)
+2. Click 4 vertices **one by one, in order**:
+   - **V1** then **V2** → defines half-edge 1 (from V1 toward V2)
+   - **V3** then **V4** → defines half-edge 2 (from V3 toward V4)
+3. Run the operator (Mesh → TopMod → Insert Edge, or sidebar)
+4. The new edge connects **V1** and **V3**
+
+**Why 4 vertices?** Two vertices A→B define a directed edge, which
+determines not just *which* edge, but *which side* (which face) the
+half-edge belongs to. This eliminates all ambiguity — especially in the
+cross-face case where different face choices produce different topological
+results.
+
+**Same-face case** (V1 and V3 on the same face): the face is split in two.
+
+**Cross-face case** (V1 and V3 on different faces): the two faces merge
+into one, adding a topological handle (genus +1).
+
+> **Tip**: The selection order matters! Blender records click order via
+> `select_history`. If you box-select or select-all, the order is lost
+> and the operator will report an error.
+
+### Available operators (46)
+
+#### Fundamental (Akleman & Chen 2003)
+| Operator | Selection | Description |
+|---|---|---|
+| **Insert Edge** | 4 vertices (ordered) | Insert edge between two half-edges |
+| **Delete Edge** | 1 edge | Delete an edge, merging flanking faces |
+
+#### High-Level (selection-based)
+| Operator | Selection | Parameters | Description |
+|---|---|---|---|
+| **Extrude Face** | 1+ faces | dist (0–5) | Pull face outward along normal |
+| **Stellate** | 1+ faces | dist (0–5) | Pyramid apex on face |
+| **Subdivide Edge** | 1+ edges | — | Split edge at midpoint |
+| **Subdivide Face** | 1+ faces | — | Fan from centroid |
+| **Collapse Edge** | 1+ edges | — | Merge endpoints to midpoint |
+| **Trisect Edge** | 1+ edges | — | Split edge into 3 segments |
+| **Triangulate Face** | 1+ faces | — | Fan triangulation |
+| **Double Stellate Face** | 1+ faces | dist (0–5) | Two-level stellate spike |
+| **Extrude Face Dome** | 1+ faces | length, scale | 5-layer dome on face |
+| **Add Handle** | 2 faces | — | Tunnel between two faces (genus +1) |
+| **Punch Hole** | 2 faces | — | Alias for Add Handle |
+| **Delete Vertex** | 1 vertex | — | Remove isolated vertex |
+
+#### Global (no selection needed)
 | Operator | Description |
 |---|---|
-| **Stellate All** | Pyramid on every face → all-triangle mesh |
+| **Stellate All** | Pyramid on every face → all-triangle |
+| **Subdivide All Edges** | Midpoint split every edge |
+| **Subdivide All Faces** | Centroid fan every face |
+| **Triangulate All** | Triangulate every face |
+| **Stellate Subdivide** | Stellate all + delete original edges |
+| **Make Wireframe** | MCC → crust → punch holes → hollow beams |
 
 #### Classic Subdivision
 | Operator | Parameters | Description |
@@ -80,13 +149,20 @@ All operators require **Edit Mode** on a mesh object:
 | **Checkerboard** | thickness (0.01–0.49) | Alternating quad pattern |
 | **DS BC-New** | scale, length | Doo-Sabin variant with surviving vertices |
 | **Dome** | length, scale | 7-layer extrusion domes on every face |
+| **Doo-Sabin BC** | — | Subdivide all edges then Doo-Sabin |
+| **Two-Stellate** | offset, curve | Two-pass stellate subdivision |
+| **Modified Corner Cutting** | thickness | Bisector-based inset + bridge |
+| **Modified Corner Cutting 2** | scale | Uniform displacement variant |
 
 #### Structural
 | Operator | Parameters | Description |
 |---|---|---|
-| **Create Crust** | thickness (−2 to 2) | Hollow shell (duplicate + inward offset) |
+| **Create Crust** | thickness (−2 to 2) | Hollow shell (duplicate + normal offset) |
+| **Create Crust (Scaling)** | scale (0.1–1) | Hollow shell (scale toward centroid) |
 
-### Workflow example
+### Workflow examples
+
+#### Basic subdivision
 
 1. Add a cube (**Shift+A → Mesh → Cube**)
 2. Enter Edit Mode (**Tab**)
@@ -97,19 +173,45 @@ All operators require **Edit Mode** on a mesh object:
    press **F9** to reopen it
 7. **Ctrl+Z** to undo any step (full undo support)
 
+#### Face extrusion
+
+1. Start with a cube in Edit Mode
+2. Switch to **Face selection** (press **3**)
+3. Select one face
+4. Click **Extrude Face** in the sidebar → a box grows from that face
+5. Select the new top face, click **Stellate** → a pyramid forms
+
+#### Insert Edge (same face — diagonal)
+
+1. Start with a cube in Edit Mode
+2. Switch to **Vertex selection** (press **1**)
+3. Click vertex A (one corner of the top face)
+4. **Shift+click** vertex B (the adjacent corner — this defines half-edge 1: A→B)
+5. **Shift+click** vertex C (the opposite corner of the same face)
+6. **Shift+click** vertex D (the remaining corner — this defines half-edge 2: C→D)
+7. Run **Insert Edge** → a diagonal splits the top face into two triangles
+
+#### Wireframe generation
+
+1. Start with any mesh in Edit Mode
+2. Click **Make Wireframe** (thickness=0.15)
+3. The solid becomes a hollow wireframe with beams along every edge
+
 ### Tips
 
 - **Loop** and **√3** only work on pure triangle meshes — apply
-  **Stellate All** first to triangulate any mesh.
+  **Stellate All** or **Triangulate All** first.
 - **Dome** generates many vertices (V + 59E) — use on low-poly meshes.
 - **Create Crust** produces two disconnected shells; use Blender's
   **Separate by Loose Parts** (P → By Loose Parts) to split them.
 - Parameters can be adjusted **after** applying (F9 or bottom-left popup)
   — Blender re-runs the operator with the new values.
+- For **Insert Edge**, always click vertices one by one (Shift+click).
+  Box select or Select All loses the click order and will fail.
 
 ## Verification
 
-The addon was tested headlessly on Blender 4.5.7 LTS:
+The addon was tested on Blender 4.5.7 LTS (46 operators, all passing):
 
 ```
 CC on cube: V=26 E=48 F=24          ← matches oracle V'=V+E+F, F'=2E
@@ -127,8 +229,8 @@ All element counts match the closed-form oracles in `docs/operators.md`.
 ```
 topmod_blender/
   __init__.py       ← bl_info + register/unregister
-  converter.py      ← BMesh ↔ DLFLMesh bidirectional conversion
-  operators.py      ← 21 bpy.types.Operator classes (factory pattern)
+  converter.py      ← BMesh ↔ DLFLMesh conversion + selection helpers
+  operators.py      ← 46 bpy.types.Operator classes (factory pattern)
   panels.py         ← Mesh menu + N-panel sidebar
   topmod/           ← Bundled pure-Python topmod core (zero dependencies)
 ```
@@ -137,6 +239,13 @@ The topmod core has **zero external dependencies** — no NumPy, no PyTorch.
 It is bundled directly inside the addon as a sub-package. The `converter.py`
 module is the sole interface between Blender's BMesh and the DLFL mesh
 representation.
+
+Selection-based operators use helper functions in `converter.py`:
+- `apply_local_face_op()` — operates on selected faces
+- `apply_local_edge_op()` — operates on selected edges
+- `apply_two_face_op()` — requires exactly 2 selected faces
+- `apply_insert_edge()` — reads 4 vertices from select history
+- `apply_delete_vertex()` — operates on 1 selected vertex
 
 ## For developers
 
