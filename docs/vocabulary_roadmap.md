@@ -1,82 +1,114 @@
 # Operator Vocabulary Roadmap
 
-*Created 2026-08-06 · Source: verified inventory of `davyrisso/topmod3d`
-(`DLFLSubdiv.hh` 22 subdivision functions + `dlflaux` connect/crust modules).
-All extensions are clean-room re-implementations from documented semantics —
-no GPL code is copied.*
+*Created 2026-08-06 · Updated 2026-08-13 · Source: verified inventory of
+`davyrisso/topmod3d` (`DLFLSubdiv.hh` 22 subdivision functions + `dlflaux`
+connect/crust modules). All extensions are clean-room re-implementations
+from documented semantics — no GPL code is copied.*
 
-## Current Vocabulary (implemented, oracle-validated)
+## Current Vocabulary (46 operators, oracle-validated)
 
-| Token | Oracle (ΔV, ΔE, ΔF for n-gon) | Status |
+### 1. Fundamental Operators (Akleman & Chen 2003)
+
+| Token | Operator | Oracle | Diff | Status |
+|---|---|---|---|---|
+| `CV` | `create_vertex` | V+1, F+1 (point sphere) | ✅ param | ✅ |
+| — | `delete_vertex` | V−1, F−1 | — | ✅ |
+| `IE` | `insert_edge` | E+1; same face→F+1, cross→F−1 | ✅ identity | ✅ |
+| `DE` | `delete_edge` | E−1; merge/split face | ✅ identity | ✅ |
+
+### 2. High-Level Operators
+
+| Token | Operator | Oracle | Diff | Status |
+|---|---|---|---|---|
+| — | `extrude_face` | V+n, E+2n, F+n | ✅ torch | ✅ |
+| — | `stellate` | V+1, E+n, F+n−1 | ✅ torch | ✅ |
+| — | `subdivide_edge` | V+1, E+1, F+0 | ✅ torch | ✅ |
+| — | `subdivide_face` | V+1, E+n, F+n−1 | ✅ torch | ✅ |
+| `HDL` | `add_handle` | E+n, F+n−2, genus+1 | ✅ identity | ✅ |
+| `STA` | `stellate_all` | V'=V+F, E'=3E, F'=2E | ✅ linear | ✅ |
+| — | `collapse_edge` | V−1, E−(d0+d1−3), F−2 | ❌ pending | ✅ |
+| — | `trisect_edge` | V+2, E+2, F+0 | ❌ pending | ✅ |
+| `SAE` | `subdivide_all_edges` | V'=V+E, E'=2E, F unchanged | ✅ linear | ✅ |
+| — | `subdivide_all_faces` | V'=V+F, E'=3E, F'=2E | ✅ linear | ✅ |
+| — | `triangulate_face` | V+0, E+(n−3), F+(n−3) | ✅ identity | ✅ |
+| `TRI` | `triangulate_all` | V+0, E+Σ(d_i−3), F+Σ(d_i−3) | ✅ identity | ✅ |
+| — | `double_stellate_face` | complex | ✅ torch | ✅ |
+| `STSUB` | `stellate_subdivide` | V'=V+F, E'~2Σd_i, F'~Σd_i | ✅ linear | ✅ |
+| — | `punch_hole` | = add_handle | ✅ identity | ✅ |
+| — | `extrude_face_dome` | V+~5n, E+~10n, F+~5n | ✅ torch | ✅ |
+| — | `make_wireframe` | complex (MCC→crust→punch) | ❌ pending | ✅ |
+
+### 3. Classic Subdivision
+
+| Token | Operator | Oracle | Diff | Status |
+|---|---|---|---|---|
+| `CC` | `catmull_clark` | V'=V+E+F, E'=4E, F'=2E (all-quad) | ✅ linear | ✅ |
+| `DUAL` | `dual` | V'=F, E'=E, F'=V | ✅ linear | ✅ |
+| `DS` | `doo_sabin` | V'=2E, E'=4E, F'=V+E+F | ✅ linear | ✅ |
+| `SIMP` | `simplest_subdivide` | V'=E, E'=2E, F'=F+V | ✅ linear | ✅ |
+| `VC` | `vertex_cutting` | V'=2E, E'=3E, F'=F+V | ✅ linear | ✅ |
+| `LOOP` | `loop_subdivide` | V'=V+E, E'=4E, F'=4F (tri-only) | ✅ linear | ✅ |
+| `SQRT3` | `sqrt3_subdivide` | V'=V+F, E'=3E, F'=3F (tri-only) | ✅ linear | ✅ |
+
+### 4. TopMod Remeshing Schemes
+
+| Token | Operator | Oracle | Diff | Status |
+|---|---|---|---|---|
+| `HONEY` | `honeycomb_subdivide` | V'=2E, E'=3E, F'=V+F | ✅ linear | ✅ |
+| `STAR` | `star_subdivide` | V'=V+F+2E, E'=9E, F'=6E | ✅ torch | ✅ |
+| `CCUT` | `corner_cutting` | V'=2E, E'=4E, F'=V+E+F | ✅ linear | ✅ |
+| `LSTYLE` | `loop_style_subdivide` | V'=V+E, E'=4E, F'=F+2E | ✅ linear | ✅ |
+| `FRAC` | `fractal_subdivide` | V'=V+E+F, E'=6E, F'=4E | ✅ torch | ✅ |
+| `PENT` | `pentagonal_subdivide` | V'=V+2E+F, E'=5E, F'=2E | ✅ linear | ✅ |
+| `PENT2` | `pentagonal2_subdivide` | V'=V+3E, E'=6E, F'=F+2E | ✅ linear | ✅ |
+| `D1264` | `dual1264_subdivide` | V'=4E, E'=6E, F'=F+E+V | ✅ linear | ✅ |
+| `ROOT4` | `root4_subdivide` | V'=V+2E, E'=4E, F'=F+E | ✅ linear | ✅ |
+| `CHKB` | `checkerboard_remesh` | V'=V+4E, E'=9E, F'=F+4E | ✅ linear | ✅ |
+| `DSBC` | `ds_bc_new_subdivide` | V'=V+4E, E'=7E, F'=F+2E | ✅ linear | ✅ |
+| `DOME` | `dome_subdivide` | V'=V+59E, E'=116E, F'=F+56E | ✅ torch | ✅ |
+| — | `doo_sabin_bc` | complex (SAE then DS) | ✅ torch | ✅ |
+| — | `two_stellate_subdivide` | complex (2-pass stellate) | ✅ torch | ✅ |
+| `MCC` | `modified_corner_cutting` | V'=2E, E'≈5E, F'=V+F | ✅ torch | ✅ |
+| `MCC2` | `modified_corner_cutting2` | V'=2E, E'≈5E, F'=V+F | ✅ torch | ✅ |
+
+### 5. Structural Operators
+
+| Token | Operator | Oracle | Diff | Status |
+|---|---|---|---|---|
+| `CRUST` | `create_crust` | V'=2V, E'=2E, F'=2F | ✅ torch | ✅ |
+| — | `create_crust_with_scaling` | V'=2V, E'=2E, F'=2F | ✅ torch | ✅ |
+
+## Summary
+
+| Metric | Count |
+|---|---|
+| Total operators | 46 |
+| Tokenizer opcodes | 26 (others are local/composite ops without tokens) |
+| Differentiable (PyTorch) | 43 / 46 (93%) |
+| Not yet differentiable | 3 (`collapse_edge`, `trisect_edge`, `make_wireframe`) |
+| Blender addon coverage | 46 / 46 (100%) |
+| Before/after visualizations | 47 (46 + insert_edge_cross variant) |
+| Tests passing | 471 |
+
+## Differentiability Gap
+
+Three operators remain non-differentiable:
+
+| Operator | Reason | Path to differentiable |
 |---|---|---|
-| `extrude_face` | (+n, +2n, +n), Δg=0 | ✅ tests/test_semantic_oracle.py |
-| `add_handle` | (0, +n, +n−2), Δg=+1 | ✅ |
-| `stellate` / `subdivide_face` | (+1, +n, +n−1) | ✅ |
-| `subdivide_edge` | (+1, +1, 0) | ✅ |
-| `catmull_clark` | V'=V+E+F, E'=4E, F'=2E, all-quad | ✅ |
-| `dual` (token `DUAL`) | V'=F, E'=E, F'=V; involution | ✅ 2026-08-06, topmod/remeshing.py |
-| `doo_sabin` (token `DS`) | V'=2E, E'=4E, F'=V+E+F | ✅ 2026-08-06, topmod/remeshing.py |
-| `stellate_all` (token `STA`) | V'=V+F, E'=3E, F'=2E, all-tri | ✅ 2026-08-06, topmod/high_level_ops.py |
-| `simplest_subdivide` (token `SIMP`) | V'=E, E'=2E, F'=F+V (cube→cuboctahedron) | ✅ 2026-08-06, topmod/remeshing.py |
-| `vertex_cutting` (token `VC`) | V'=2E, E'=3E, F'=F+V (cube→truncated cube) | ✅ 2026-08-06, topmod/remeshing.py |
-| `loop_subdivide` (token `LOOP`) | tri-only: V'=V+E, E'=4E, F'=4F | ✅ 2026-08-06, topmod/remeshing.py |
-| `sqrt3_subdivide` (token `SQRT3`) | tri-only: V'=V+F, E'=3E, F'=3F | ✅ 2026-08-06, topmod/remeshing.py |
-| `honeycomb_subdivide` (token `HONEY`) | V'=2E, E'=3E, F'=V+F (= dual∘stellate_all) | ✅ 2026-08-07, topmod/remeshing.py |
-| `star_subdivide` (token `STAR`) | V'=V+F+2E, E'=9E, F'=6E (= stellate_all², param offset) | ✅ 2026-08-07 |
-| `corner_cutting` (token `CCUT`) | V'=2E, E'=4E, F'=V+E+F (DS topology, param α) | ✅ 2026-08-07 |
-| `loop_style_subdivide` (token `LSTYLE`) | V'=V+E, E'=4E, F'=F+2E (polygonal Loop connectivity) | ✅ 2026-08-07 |
-| `fractal_subdivide` (token `FRAC`) | V'=V+E+F, E'=6E, F'=4E (loop_style + apex fans, param offset) | ✅ 2026-08-07 |
-| `pentagonal_subdivide` (token `PENT`) | V'=V+2E+F, E'=5E, F'=2E all-pentagon (tetra→dodecahedron, param offset) | ✅ 2026-08-07 |
-| `pentagonal2_subdivide` (token `PENT2`) | V'=V+3E, E'=6E, F'=F+2E (param scale_factor) | ✅ 2026-08-07 |
-| `dual1264_subdivide` (token `D1264`) | V'=4E, E'=6E, F'=F+E+V (DS-like 2d-gon inner, param sf) | ✅ 2026-08-07 |
-| `root4_subdivide` (token `ROOT4`) | V'=V+2E, E'=4E, F'=F+E (params a, twist) | ✅ 2026-08-07 |
-| `checkerboard_remesh` (token `CHKB`) | V'=V+4E, E'=9E, F'=F+4E; all-quad on quad input (param thickness) | ✅ 2026-08-07 |
-| `ds_bc_new_subdivide` (token `DSBC`) | V'=V+4E, E'=7E, F'=F+2E (params sf, length) | ✅ 2026-08-07 |
-| `dome_subdivide` (token `DOME`) | V'=V+59E, E'=116E, F'=F+56E; in-place composition (params length, sf) | ✅ 2026-08-07 |
-| `create_crust` (token `CRUST`) | V'=2V, E'=2E, F'=2F, 2 components; punch k holes via `add_handle` on mirror pairs (HDL tokens) → genus 2g+k−1 | ✅ 2026-08-07 |
-| 4 fundamental ops (create/delete vertex, insert/delete edge) | per Akleman & Chen 2003 | ✅ |
+| `collapse_edge` | Removes vertices — element count decreases, tracing impossible | Would need a soft relaxation (weight vertex to zero) |
+| `trisect_edge` | Trivially linear (2 interpolation points) but not yet traced | Easy — add to `_trace_linear()` |
+| `make_wireframe` | Compound op (MCC→crust→punch_hole) — each sub-op is differentiable individually | Chain the 3 DiffOps |
 
-Tokenizer note: `DUAL`/`DS` vocabulary IDs are appended AFTER the REF block,
-so all legacy IDs (EOS/CC/CV/IE/DE/HDL, COORD_*, REF_*) are unchanged —
-sequences and Phase A/B checkpoints encoded with the old vocabulary stay valid.
-
-## Tier 1 — DONE (2026-08-06)
-
-All Tier-1 candidates implemented and oracle-validated; see the table above.
-
-## Tier 2 — status after batch 2 (2026-08-07)
-
-Semantics for ALL TopMod-specific schemes extracted clean-room into
-`docs/reference_semantics.md` (χ-verified closed-form oracles).
-
-DONE (batch 2): honeycomb, star, corner_cutting, loop_style, fractal.
-DONE (batch 3): pentagonal, pentagonal2, dual1264, root4.
-DONE (batch 4a): checkerboard, ds_bc_new.
-DONE (batch 4b): dome.
-DONE (batch 4c): create_crust (+ hole punching = existing add_handle/HDL).
-See the Current Vocabulary table.
-
-Tier 2 is complete — all 13 reference subdivision schemes + crust
-implemented.
-
-multiConnectFaces status: NOT implemented as a token by design.
-- Its core primitive `connectFaces` ≡ our `add_handle` (already a token: HDL).
-- The greedy half-edge-pairing variant has no input-only closed-form
-  oracle (data-dependent geometric matching) — unsuitable as a
-  deterministic vocabulary token.
-- Convex-hull variants = hull construction + k × add_handle; revisit if
-  the Blender plugin needs them as macros (Blender ships a hull op).
-
-## Tier 3 — Structural operators (beyond subdivision)
+## Tier 3 — Potential Additions
 
 From `dlflaux` standalone modules (verified present 2026-08-06):
 
-| Token candidate | Reference | Value |
-|---|---|---|
-| `multi_connect` | `DLFLMultiConnect` | Generalized add_handle across face sets |
-| `bezier_handle` | `DLFLCubicBezierConnect` | Curved handles — parametric geometry + topology |
-| `crust` / `shell` | `DLFLCrust` | Solidify: mesh → double-walled shell (Δg doubles+) |
-| `convex_hull` | `DLFLConvexHull` | Utility, not manifold-preserving per se — gate carefully |
+| Token candidate | Reference | Value | Status |
+|---|---|---|---|
+| `multi_connect` | `DLFLMultiConnect` | Generalized add_handle across face sets | Not implemented — data-dependent matching unsuitable as deterministic token |
+| `bezier_handle` | `DLFLCubicBezierConnect` | Curved handles — parametric geometry + topology | Not planned |
+| `convex_hull` | `DLFLConvexHull` | Utility, not manifold-preserving | Not planned |
 
 ## Rules for Adding a Token
 
@@ -88,8 +120,14 @@ From `dlflaux` standalone modules (verified present 2026-08-06):
 5. Parametric ops (corner_cutting α, extrude dist) — parameters are
    continuous token attributes, not separate tokens.
 
-## Ceiling
+## Timeline
 
-26 current + remaining T3 candidates ≈ **29-op vocabulary**, matching the
-original TopMod's expressive range while remaining differentiable-pipeline-
-and Blender-embeddable.
+| Date | Milestone |
+|---|---|
+| 2026-08-06 | Tier 1 complete: 4 fundamental + CC + 7 subdivision |
+| 2026-08-07 | Tier 2 complete: all 13 remeshing schemes + crust |
+| 2026-08-08 | Batch 5: MCC, MCC2, doo_sabin_bc, two_stellate, crust_scaling |
+| 2026-08-09 | High-level ops: collapse/trisect/triangulate/dome/wireframe |
+| 2026-08-10 | Diffgeo: 35/46 differentiable via sparse trace + torch |
+| 2026-08-12 | Blender addon: 46/46 complete coverage |
+| 2026-08-13 | Docs: 47 gallery entries, insert_edge 4-vertex selection |
