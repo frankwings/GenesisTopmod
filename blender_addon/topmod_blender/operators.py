@@ -686,11 +686,22 @@ def _exec_insert_edge(self, context):
     try:
         result = apply_insert_edge(context)
         if result == "select_error":
-            self.report({'ERROR'}, "Select exactly 2 vertices")
+            self.report({'ERROR'},
+                        "Select exactly 4 vertices in order: "
+                        "V1→V2 (half-edge 1), V3→V4 (half-edge 2)")
+            return {'CANCELLED'}
+        if result == "he1_error":
+            self.report({'ERROR'},
+                        "V1→V2 does not correspond to a valid half-edge "
+                        "(vertices must share a face)")
+            return {'CANCELLED'}
+        if result == "he2_error":
+            self.report({'ERROR'},
+                        "V3→V4 does not correspond to a valid half-edge "
+                        "(vertices must share a face)")
             return {'CANCELLED'}
         if result is None:
-            self.report({'ERROR'}, "Failed — vertices must share a face "
-                        "or each have an outgoing half-edge")
+            self.report({'ERROR'}, "insert_edge failed")
             return {'CANCELLED'}
     except Exception as e:
         self.report({'ERROR'}, str(e))
@@ -699,7 +710,8 @@ def _exec_insert_edge(self, context):
 
 TOPMOD_OT_insert_edge = _make_special_op(
     "topmod.insert_edge", "Insert Edge",
-    "Insert edge between 2 selected vertices (select 2 verts on same face for diagonal, different faces for merge)",
+    "Insert edge between 2 half-edges defined by 4 vertices: "
+    "select V1,V2 (half-edge 1) then V3,V4 (half-edge 2) in order",
     _exec_insert_edge,
 )
 

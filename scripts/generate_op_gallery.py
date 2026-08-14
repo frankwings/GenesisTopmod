@@ -38,6 +38,11 @@ from topmod import (
     insert_edge, delete_edge,
     extrude_face, add_handle, stellate, stellate_all,
     subdivide_edge, subdivide_face,
+    collapse_edge, trisect_edge,
+    subdivide_all_edges, subdivide_all_faces,
+    triangulate_face, triangulate_all,
+    double_stellate_face, stellate_subdivide,
+    punch_hole, extrude_face_dome, make_wireframe,
     catmull_clark,
     dual, doo_sabin, simplest_subdivide, vertex_cutting,
     loop_subdivide, sqrt3_subdivide,
@@ -47,6 +52,9 @@ from topmod import (
     dual1264_subdivide, root4_subdivide,
     checkerboard_remesh, ds_bc_new_subdivide, dome_subdivide,
     create_crust,
+    doo_sabin_bc, two_stellate_subdivide,
+    create_crust_with_scaling,
+    modified_corner_cutting, modified_corner_cutting2,
 )
 
 ASSET_DIR = os.path.join(ROOT, "docs", "assets", "ops")
@@ -178,6 +186,31 @@ _DIFF = {
                            "the target face. Gradients flow to all face "
                            "vertices. Oracle: matches float path to 1e-9"),
     "none":     ("—", "no geometry to differentiate"),
+    "pending":  ("❌ Not yet", "not yet differentiable — topology-heavy "
+                               "operation that changes element count in "
+                               "ways difficult to trace"),
+    "crust_scaling": ("✅ Yes", "dedicated torch implementation: inner "
+                               "shell = verts scaled toward centroid by "
+                               "scale_factor. Gradients flow to input "
+                               "positions and `scale_factor`"),
+    "double_stel": ("✅ Yes", "dedicated torch implementation: two rounds "
+                              "of stellate with centroid + normal apex "
+                              "computation. Gradients flow to input "
+                              "positions and `dist`"),
+    "extrude_dome": ("✅ Yes", "dedicated torch implementation: 5 rounds "
+                               "of DS-style extrusion with Newell normals "
+                               "+ final stellate. Gradients flow to input "
+                               "positions, `length` and `sf`"),
+    "doo_sabin_bc_diff": ("✅ Yes", "composed: linear SAE trace then DS "
+                                    "trace, two sparse matrices chained. "
+                                    "Gradients flow to input positions"),
+    "two_stel": ("✅ Yes", "decomposed: STA round 1 + normal correction "
+                           "+ STA round 2 + curve correction. Gradients "
+                           "flow to input positions, `offset` and `curve`"),
+    "mcc":      ("✅ Yes", "dedicated torch implementation: direction "
+                           "normalization (bisector/scale) for vertex "
+                           "positions. Gradients flow to input positions "
+                           "and `thickness`/`scale`"),
 }
 
 
@@ -190,6 +223,105 @@ def _apply_insert_edge(m):
     hes = f.halfedges()
     insert_edge(m, hes[0], hes[2])   # diagonal chord across the quad
     return m
+
+
+def _apply_insert_edge_cross(m):
+    """Cross-face insert_edge: pick half-edges on two OPPOSITE faces (body diagonal)."""
+    faces = list(m.faces.values())
+    # Find opposite faces (no shared vertices)
+    from itertools import combinations
+    for i, j in combinations(range(len(faces)), 2):
+        vi = set(id(v) for v in faces[i].vertices())
+        vj = set(id(v) for v in faces[j].vertices())
+        if len(vi & vj) == 0:
+            # Pick half-edges whose origins are body-diagonal
+            he0 = faces[i].halfedges()[0]
+            he1 = faces[j].halfedges()[0]
+            insert_edge(m, he0, he1)
+            return m
+    # fallback: adjacent faces
+    he0 = faces[0].halfedges()[0]
+    he1 = faces[1].halfedges()[0]
+    insert_edge(m, he0, he1)
+    return m
+
+
+def _apply_collapse_edge(m):
+    collapse_edge(m, _first_edge(m))
+    return m
+
+
+def _apply_trisect_edge(m):
+    trisect_edge(m, _first_edge(m))
+    return m
+
+
+def _apply_subdivide_all_edges(m):
+    subdivide_all_edges(m)
+    return m
+
+
+def _apply_subdivide_all_faces(m):
+    subdivide_all_faces(m)
+    return m
+
+
+def _apply_triangulate_face(m):
+    triangulate_face(m, _first_face(m))
+    return m
+
+
+def _apply_triangulate_all(m):
+    triangulate_all(m)
+    return m
+
+
+def _apply_double_stellate_face(m):
+    double_stellate_face(m, _first_face(m), dist=0.5)
+    return m
+
+
+def _apply_stellate_subdivide(m):
+    stellate_subdivide(m)
+    return m
+
+
+def _apply_punch_hole(m):
+    faces = list(m.faces.values())
+    punch_hole(m, faces[0], faces[1])
+    return m
+
+
+def _apply_extrude_face_dome(m):
+    extrude_face_dome(m, _first_face(m))
+    return m
+
+
+def _apply_make_wireframe(m):
+    return make_wireframe(m, thickness=0.15)
+
+
+def _apply_doo_sabin_bc(m):
+    return doo_sabin_bc(m)
+
+
+def _apply_two_stellate(m):
+    two_stellate_subdivide(m, offset=0.15, curve=0.0)
+    return m
+
+
+def _apply_crust_scaling(m):
+    out, pairs = create_crust_with_scaling(m, scale_factor=0.8)
+    add_handle(out, pairs[0][0], pairs[0][1])
+    return out
+
+
+def _apply_mcc(m):
+    return modified_corner_cutting(m, thickness=0.2)
+
+
+def _apply_mcc2(m):
+    return modified_corner_cutting2(m, scale=0.2)
 
 
 def _apply_delete_edge(m):
@@ -270,17 +402,43 @@ OPS: List[OpEntry] = [
             "insert_edge(mesh, he1, he2) -> Edge", "IE",
             "E+1; same face → F+1 (split), different faces → F−1 "
             "(merge components / open handle)",
-            "he1, he2 — two corners (half-edges)",
-            "Inserts a new edge between two corners. If both corners lie on "
-            "the *same* face, the face is split in two (shown: a diagonal "
-            "chord splits a cube quad into two triangles). If they lie on "
-            "*different* faces, the two faces merge into one — this is how "
-            "components are joined and handles are opened. One of the two "
-            "core DLFL operators; the mesh is a valid 2-manifold after every "
-            "single call.",
+            "he1, he2 — two half-edges (each defined by a directed vertex pair)",
+            "Inserts a new edge between two half-edges. Each half-edge is "
+            "specified by a directed vertex pair: A→B means the half-edge "
+            "originating at A and pointing toward B, which belongs to the face "
+            "containing the directed edge A→B in its boundary loop.\n\n"
+            "**Blender addon selection**: select 4 vertices **in click order** "
+            "(vertex mode). V1→V2 defines half-edge 1, V3→V4 defines half-edge "
+            "2. The new edge connects V1 and V3. Selection order is read via "
+            "`bm.select_history`.\n\n"
+            "If both half-edges lie on the *same* face, the face is split in "
+            "two (shown: a diagonal chord splits a cube quad into two "
+            "triangles). If they lie on *different* faces, the two faces merge "
+            "into one — this is how components are joined and handles are "
+            "opened. One of the two core DLFL operators; the mesh is a valid "
+            "2-manifold after every single call.",
             "hes = face.halfedges()\n"
             "insert_edge(mesh, hes[0], hes[2])  # diagonal across the quad",
             apply=_apply_insert_edge),
+    OpEntry("insert_edge_cross", "1. Fundamental Operators",
+            "insert_edge(mesh, he1, he2) -> Edge", "IE",
+            "E+1, F−1 (two faces merge into one)",
+            "he1, he2 — half-edges on *different* faces",
+            "Cross-face variant: when the two half-edges lie on different "
+            "faces, those faces merge into one large face with the new edge "
+            "traversed twice (once per direction) in the boundary loop. "
+            "Topologically this adds a handle (genus +1). The geometry is the "
+            "same straight line between two vertices, but the face structure "
+            "changes: the two original faces become one connected face that "
+            "loops through the new edge like a bridge.\n\n"
+            "**Blender addon selection**: same as insert_edge — select 4 "
+            "vertices in order. V1→V2 on face A, V3→V4 on face B. The "
+            "direction determines exactly which faces are merged, eliminating "
+            "all ambiguity.",
+            "he0 = face_A.halfedges()[0]\n"
+            "he1 = face_B.halfedges()[0]\n"
+            "insert_edge(mesh, he0, he1)  # merge two faces",
+            apply=_apply_insert_edge_cross),
     OpEntry("delete_edge", "1. Fundamental Operators",
             "delete_edge(mesh, edge)", "DE",
             "E−1; two distinct sides → F−1 (merge), same face both sides → F+1",
@@ -353,6 +511,110 @@ OPS: List[OpEntry] = [
             "block inside the honeycomb and star schemes.",
             "apexes = stellate_all(mesh)",
             apply=_apply_stellate_all),
+    OpEntry("collapse_edge", "2. High-Level Operators",
+            "collapse_edge(mesh, edge) -> Vertex", "—",
+            "V−1, E−(d0+d1−3), F−2 (d0,d1 = degrees of flanking faces)",
+            "—",
+            "Collapses an edge by merging its two endpoints into their "
+            "midpoint. The two flanking faces degenerate and are removed. "
+            "Shown: one edge of a cube collapsed, reducing to 7 vertices.",
+            "mid = collapse_edge(mesh, edge)",
+            apply=_apply_collapse_edge),
+    OpEntry("trisect_edge", "2. High-Level Operators",
+            "trisect_edge(mesh, edge, t1=1/3, t2=2/3) -> (Vertex, Vertex)",
+            "—",
+            "V+2, E+2, F+0",
+            "t1, t2 ∈ (0,1) — split positions along the edge",
+            "Splits an edge into three segments by inserting two vertices "
+            "at positions t1 and t2 along the original edge. The flanking "
+            "faces each gain two corners. Default: equal trisection.",
+            "v1, v2 = trisect_edge(mesh, edge)",
+            apply=_apply_trisect_edge),
+    OpEntry("subdivide_all_edges", "2. High-Level Operators",
+            "subdivide_all_edges(mesh, n_divs=2) -> List[Vertex]", "SAE",
+            "V'=V+E, E'=2E, F unchanged (for n_divs=2)",
+            "n_divs — number of segments per edge (default 2 = midpoint)",
+            "Subdivides every edge by inserting midpoints. This is the "
+            "edge-refinement step used by doo_sabin_bc and other compound "
+            "schemes. Face degrees double (each n-gon becomes a 2n-gon).",
+            "new_verts = subdivide_all_edges(mesh)",
+            apply=_apply_subdivide_all_edges),
+    OpEntry("subdivide_all_faces", "2. High-Level Operators",
+            "subdivide_all_faces(mesh) -> List[Vertex]", "—",
+            "V'=V+F, E'=3E, F'=2E",
+            "—",
+            "Subdivides every face by connecting its centroid to all corners "
+            "(= stellate_all with apex at height 0, i.e. in the face plane). "
+            "Topologically identical to stellate_all.",
+            "centers = subdivide_all_faces(mesh)",
+            apply=_apply_subdivide_all_faces),
+    OpEntry("triangulate_face", "2. High-Level Operators",
+            "triangulate_face(mesh, face)", "—",
+            "V+0, E+(n−3), F+(n−3) for an n-gon",
+            "—",
+            "Triangulates one face by fan from its first vertex. An n-gon "
+            "becomes n−2 triangles via n−3 inserted diagonal edges. "
+            "Shown: one quad face of a cube triangulated into 2 triangles.",
+            "triangulate_face(mesh, face)",
+            apply=_apply_triangulate_face),
+    OpEntry("triangulate_all", "2. High-Level Operators",
+            "triangulate_all(mesh)", "TRI",
+            "V+0, E+Σ(d_i−3), F+Σ(d_i−3)",
+            "—",
+            "Triangulates every face by fan from its first vertex. "
+            "Converts the entire mesh to triangles. On a cube (all quads), "
+            "each quad becomes 2 triangles: E=12→18, F=6→12.",
+            "triangulate_all(mesh)",
+            apply=_apply_triangulate_all),
+    OpEntry("double_stellate_face", "2. High-Level Operators",
+            "double_stellate_face(mesh, face, dist=0.0) -> Vertex", "—",
+            "V+(1+n), E+(n+3n), F+(n−1+3n−n) (complex)",
+            "dist — first apex displacement along face normal",
+            "Double-stellates a face: stellate it once (creating n triangles), "
+            "then stellate each resulting triangle. Produces a spiky, fractal "
+            "protrusion on a single face.",
+            "apex = double_stellate_face(mesh, face, dist=0.5)",
+            apply=_apply_double_stellate_face),
+    OpEntry("stellate_subdivide", "2. High-Level Operators",
+            "stellate_subdivide(mesh)  # in place", "STSUB",
+            "V'=V+F, E'=2·Σd_i, F'=Σd_i (varies)",
+            "—",
+            "Stellate subdivision: stellate every face, then delete all "
+            "original edges (merging adjacent triangles). Different from "
+            "plain stellate_all which keeps original edges. Creates a "
+            "dual-like mesh with new faces bridging original vertices.",
+            "stellate_subdivide(mesh)",
+            apply=_apply_stellate_subdivide),
+    OpEntry("punch_hole", "2. High-Level Operators",
+            "punch_hole(mesh, face1, face2) -> List[Edge]", "—",
+            "same as add_handle",
+            "—",
+            "Alias for `add_handle` — punches a hole/tunnel between two "
+            "faces. Included for semantic clarity in workflows where "
+            "the intent is hole-making (e.g. after `create_crust`).",
+            "punch_hole(mesh, face_outer, face_inner)",
+            apply=_apply_punch_hole, alpha_after=0.55),
+    OpEntry("extrude_face_dome", "2. High-Level Operators",
+            "extrude_face_dome(mesh, face, length=1.0, sf=1.0) -> Face",
+            "—",
+            "V+~5n, E+~10n, F+~5n (n = face degree, 5 extrusion rounds)",
+            "length — height scale; sf — ring scale",
+            "Dome-shaped extrusion on a single selected face. Five successive "
+            "DS-style extrusions with decreasing height and increasing scale, "
+            "then a final stellation closes the dome apex. Creates a smooth "
+            "bump on one face rather than the whole mesh.",
+            "top = extrude_face_dome(mesh, face)",
+            apply=_apply_extrude_face_dome),
+    OpEntry("make_wireframe", "2. High-Level Operators",
+            "make_wireframe(mesh, thickness=0.1) -> DLFLMesh", "—",
+            "complex (MCC → crust → punch holes)",
+            "thickness — beam width",
+            "Wireframe generation: modified_corner_cutting → create_crust → "
+            "punch matching holes. Converts a solid into a hollow wireframe "
+            "where each original edge becomes a beam and each original face "
+            "becomes a hole. Returns a new mesh.",
+            "wire = make_wireframe(mesh, thickness=0.15)",
+            apply=_apply_make_wireframe, alpha_after=0.45),
 
     # ── 3. Classic subdivision ──────────────────────────────────────────────
     OpEntry("catmull_clark", "3. Classic Subdivision",
@@ -543,6 +805,49 @@ OPS: List[OpEntry] = [
             "mesh sprouts a bubble on every side.",
             "dome_subdivide(mesh)",
             apply=_apply_dome),
+    OpEntry("doo_sabin_bc", "4. TopMod Remeshing Schemes",
+            "doo_sabin_bc(mesh) -> DLFLMesh", "—",
+            "complex (subdivide_all_edges then doo_sabin)",
+            "—",
+            "Doo-Sabin BC: subdivide all edges (midpoint split) then apply "
+            "Doo-Sabin on the result. The edge subdivision doubles face "
+            "degrees before DS acts, producing a denser, smoother result "
+            "than plain Doo-Sabin.",
+            "out = doo_sabin_bc(mesh)",
+            apply=_apply_doo_sabin_bc),
+    OpEntry("two_stellate_subdivide", "4. TopMod Remeshing Schemes",
+            "two_stellate_subdivide(mesh, offset=0.0, curve=0.0)", "—",
+            "complex (2-pass stellate + edge deletion)",
+            "offset — pass-1 apex displacement; curve — pass-2 displacement",
+            "Two-pass stellate subdivision: stellate every original face "
+            "(pass 1), then stellate ALL faces including pass-1 triangles "
+            "(pass 2), then delete all edges that existed before pass 2. "
+            "Creates a spiky, organic surface texture.",
+            "two_stellate_subdivide(mesh, offset=0.15)",
+            apply=_apply_two_stellate),
+    OpEntry("modified_corner_cutting", "4. TopMod Remeshing Schemes",
+            "modified_corner_cutting(mesh, thickness=0.25) -> DLFLMesh",
+            "MCC",
+            "V'=2E, E'≈5E, F'=V+F (DS topology)",
+            "thickness — inset distance along edge bisectors",
+            "Modified corner-cutting: each face gets an inset copy where "
+            "vertices are pushed inward along the bisector of adjacent edges. "
+            "Original geometry is replaced; inner faces are bridged with quad "
+            "strips. Same connectivity as Doo-Sabin but different vertex "
+            "placement. Used as the first step of make_wireframe.",
+            "out = modified_corner_cutting(mesh, thickness=0.2)",
+            apply=_apply_mcc),
+    OpEntry("modified_corner_cutting2", "4. TopMod Remeshing Schemes",
+            "modified_corner_cutting2(mesh, scale=0.25) -> DLFLMesh",
+            "MCC2",
+            "V'=2E, E'≈5E, F'=V+F (DS topology)",
+            "scale — displacement magnitude along neighbor sum",
+            "Variant 2 of modified corner-cutting: same topology as MCC "
+            "but vertex positions use a uniform scale displacement along "
+            "the sum of neighbor directions instead of bisector-based "
+            "thickness.",
+            "out = modified_corner_cutting2(mesh, scale=0.2)",
+            apply=_apply_mcc2),
 
     # ── 5. Structural operators ─────────────────────────────────────────────
     OpEntry("create_crust", "5. Structural Operators",
@@ -561,6 +866,18 @@ OPS: List[OpEntry] = [
             "    add_handle(out, outer, inner)  # each hole: genus +1\n"
             "                                   # (first hole joins the walls)",
             apply=_apply_crust_hole, alpha_after=0.45),
+    OpEntry("create_crust_with_scaling", "5. Structural Operators",
+            "create_crust_with_scaling(mesh, scale_factor=0.9) -> "
+            "(DLFLMesh, pairs)", "—",
+            "V'=2V, E'=2E, F'=2F, 2 components",
+            "scale_factor — inner shell scale toward centroid",
+            "Crust via scaling: instead of normal-offset, the inner shell "
+            "is produced by scaling all vertices toward the mesh centroid. "
+            "Same topology as create_crust but different inner geometry. "
+            "Shown: shell with one hole punched to reveal the inner wall.",
+            "out, pairs = create_crust_with_scaling(mesh, scale_factor=0.8)\n"
+            "add_handle(out, pairs[0][0], pairs[0][1])",
+            apply=_apply_crust_scaling, alpha_after=0.45),
 ]
 
 
@@ -569,6 +886,7 @@ _DIFF_BY_NAME = {
     "create_vertex":        "param",
     "delete_vertex":        "none",
     "insert_edge":          "identity",
+    "insert_edge_cross":    "identity",
     "delete_edge":          "identity",
     "extrude_face":         "extrude",
     "stellate":             "stellate_t",
@@ -596,6 +914,22 @@ _DIFF_BY_NAME = {
     "ds_bc_new_subdivide":  "linear",
     "dome_subdivide":       "dome",
     "create_crust":         "crust",
+    "create_crust_with_scaling": "crust_scaling",
+    "collapse_edge":        "pending",
+    "trisect_edge":         "pending",
+    "subdivide_all_edges":  "linear",
+    "subdivide_all_faces":  "linear",
+    "triangulate_face":     "identity",
+    "triangulate_all":      "identity",
+    "double_stellate_face": "double_stel",
+    "stellate_subdivide":   "linear",
+    "punch_hole":           "identity",
+    "extrude_face_dome":    "extrude_dome",
+    "make_wireframe":       "pending",
+    "doo_sabin_bc":         "doo_sabin_bc_diff",
+    "two_stellate_subdivide": "two_stel",
+    "modified_corner_cutting":  "mcc",
+    "modified_corner_cutting2": "mcc",
 }
 for _op in OPS:
     _op.diff = _DIFF_BY_NAME[_op.name]

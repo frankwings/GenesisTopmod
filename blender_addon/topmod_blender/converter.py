@@ -280,12 +280,40 @@ def apply_two_face_op(context, op_fn, **kwargs):
     return dlfl
 
 
+def _find_halfedge(dlfl, bv_map, vi_from, vi_to):
+    """Find the DLFL half-edge from vi_from toward vi_to.
+
+    Two vertices A→B define a directed edge, which corresponds to
+    exactly one half-edge: the one originating at A whose face contains
+    both A and B, and whose next walk goes toward B.
+
+    Returns the half-edge, or None if not found.
+    """
+    dv_from = bv_map[vi_from]
+    dv_to   = bv_map[vi_to]
+    for he in dv_from.outgoing_halfedges():
+        # Walk the face to check if dv_to is the next vertex
+        if he.next.origin is dv_to:
+            return he
+    # Fallback: dv_to is on the same face but not immediately next
+    for he in dv_from.outgoing_halfedges():
+        face_verts = set(id(v) for v in he.face.vertices())
+        if id(dv_to) in face_verts:
+            return he
+    return None
+
+
 def apply_insert_edge(context):
     """
-    insert_edge: user selects exactly 2 vertices.
+    insert_edge: user selects exactly 4 vertices **in order** (via
+    select history).
 
-    If both are on the same face → split that face (diagonal).
-    If on different faces → cross-face merge.
+    Vertices 1→2 define half-edge 1 (origin = V1, direction toward V2).
+    Vertices 3→4 define half-edge 2 (origin = V3, direction toward V4).
+    The new edge connects V1 and V3.
+
+    The direction (A→B) determines which face the half-edge belongs to,
+    eliminating all ambiguity in the cross-face case.
     """
     from .topmod.operators import insert_edge as _insert_edge
 
@@ -297,38 +325,25 @@ def apply_insert_edge(context):
     bm.verts.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
 
-    selected_verts = [v.index for v in bm.verts if v.select]
-    if len(selected_verts) != 2:
+    # Use select history to get ordered selection
+    history = [e for e in bm.select_history if isinstance(e, bmesh.types.BMVert)]
+    if len(history) != 4:
         return "select_error"
+
+    v1, v2, v3, v4 = [v.index for v in history]
 
     dlfl = bmesh_to_dlfl(bm)
     bv_map = dlfl._bv_map
-    dv0 = bv_map[selected_verts[0]]
-    dv1 = bv_map[selected_verts[1]]
 
-    # Find half-edges at dv0 and dv1.
-    # For same-face: find a face containing both, pick the half-edges
-    # For cross-face: pick any half-edge from each vertex
-    he0 = he1 = None
-    # Check if they share a face
-    for he in dv0.outgoing_halfedges():
-        face_verts = set(v.id for v in he.face.vertices())
-        if dv1.id in face_verts:
-            # Same face — find dv1's half-edge on this face
-            he0 = he
-            for he_b in dv1.outgoing_halfedges():
-                if he_b.face is he.face:
-                    he1 = he_b
-                    break
-            break
+    # V1→V2 defines half-edge 1
+    he0 = _find_halfedge(dlfl, bv_map, v1, v2)
+    # V3→V4 defines half-edge 2
+    he1 = _find_halfedge(dlfl, bv_map, v3, v4)
 
-    if he0 is None or he1 is None:
-        # Different faces — pick first outgoing from each
-        he0 = dv0.outgoing_halfedges()[0] if dv0.outgoing_halfedges() else None
-        he1 = dv1.outgoing_halfedges()[0] if dv1.outgoing_halfedges() else None
-
-    if he0 is None or he1 is None:
-        return None
+    if he0 is None:
+        return "he1_error"
+    if he1 is None:
+        return "he2_error"
 
     _insert_edge(dlfl, he0, he1)
 
