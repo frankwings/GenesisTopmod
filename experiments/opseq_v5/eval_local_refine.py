@@ -217,6 +217,254 @@ def select_refine_faces(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# REINFORCE / probe-and-keep hyper-parameters
+# ─────────────────────────────────────────────────────────────────────────────
+
+RL_N_CANDIDATES  = 720   # heuristic pre-filter pool for REINFORCE / probe-keep
+RL_N_SELECT      = 360   # stellates per round  (iso-budget: 480 + 2×360×2 = 1920F)
+RL_N_RL_STEPS    = 5     # REINFORCE iterations per refinement trigger
+RL_BATCH         = 6     # B — samples per REINFORCE step
+RL_K_PROBE       = 10    # K — gradient steps per probe sample
+RL_LR_INIT       = 0.5   # logit learning rate
+RL_EPS_CARD      = 0.001 # ε_card — cardinality penalty in reward signal
+ISO_MAX_ROUNDS   = 2     # 2 rounds → 480 + 720 + 720 = 1920F (iso-budget with cc3)
+
+PK_BATCH_SIZE    = 60    # probe-and-keep: candidate faces per probe batch
+PK_K_PROBE       = 10    # gradient steps per batch probe
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared probe helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_loss_K(
+    ctx,
+    verts_np:  np.ndarray,
+    tris_np:   np.ndarray,
+    gt_uint8:  np.ndarray,
+    gt_depths: np.ndarray,
+    mvps:      torch.Tensor,
+    device:    str,
+    K:         int = 10,
+) -> float:
+    """Cold-start Adam, run K gradient steps, return mean loss of last 3 steps.
+
+    Creates and immediately releases all GPU tensors so this can be called many
+    times from REINFORCE / probe-and-keep inner loops without memory leaks.
+    """
+    N_v = mvps.shape[0]
+    targets    = torch.from_numpy(
+        (gt_uint8 < 128).astype(np.float32)).unsqueeze(-1).to(device)
+    gt_depth_t = [torch.from_numpy(gt_depths[i]).float().to(device)
+                  for i in range(N_v)]
+    gt_fg_t    = [torch.from_numpy(gt_uint8[i] < 128).to(device)
+                  for i in range(N_v)]
+
+    verts_t = torch.tensor(verts_np, dtype=torch.float32,
+                           device=device).requires_grad_(True)
+    faces_t = torch.tensor(tris_np,  dtype=torch.int32, device=device)
+    opt     = torch.optim.Adam([verts_t], lr=LR)
+
+    losses: List[float] = []
+    for _ in range(K):
+        opt.zero_grad()
+        l_sil = torch.tensor(0.0, device=device)
+        l_dep = torch.tensor(0.0, device=device)
+        for i in range(N_v):
+            sil, ndc_z, fg = render_sil_and_depth(
+                ctx, verts_t, faces_t, mvps[i], (IMG_RES, IMG_RES))
+            l_sil += F.l1_loss(sil[0], targets[i])
+            l_dep += depth_loss_masked(ndc_z, fg, gt_depth_t[i], gt_fg_t[i])
+        l_sil /= N_v; l_dep /= N_v
+        total = (l_sil + W_DEPTH * l_dep
+                 + W_LAP * laplacian_loss(verts_t, faces_t)
+                 + W_EDGE * edge_length_loss(verts_t, faces_t))
+        total.backward()
+        torch.nn.utils.clip_grad_norm_([verts_t], 1.0)
+        opt.step()
+        losses.append(total.item())
+
+    del verts_t, faces_t, targets, gt_depth_t, gt_fg_t, opt
+    if device != 'cpu':
+        torch.cuda.empty_cache()
+
+    tail = max(1, min(3, K))
+    return float(np.mean(losses[-tail:]))
+
+
+def _get_prefiltered_candidates(
+    face_scores: np.ndarray,
+    n_cands:     int,
+) -> np.ndarray:
+    """Return indices of top-n_cands faces by heuristic score."""
+    n = min(n_cands, len(face_scores))
+    return np.argsort(-face_scores)[:n].astype(np.int32)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REINFORCE selection
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _reinforce_select_faces(
+    ctx,
+    verts_np:        np.ndarray,
+    tris_np:         np.ndarray,
+    gt_uint8:        np.ndarray,
+    gt_depths:       np.ndarray,
+    mvps:            torch.Tensor,
+    device:          str,
+    candidate_faces: np.ndarray,        # [C] pre-filtered face indices
+    n_select:        int,
+    n_rl_steps:      int   = RL_N_RL_STEPS,
+    B:               int   = RL_BATCH,
+    K_probe:         int   = RL_K_PROBE,
+    rl_lr:           float = RL_LR_INIT,
+    eps_card:        float = RL_EPS_CARD,
+) -> np.ndarray:
+    """REINFORCE-Ball: learn per-face Bernoulli logits to select which faces to stellate.
+
+    Algorithm (faithful to DMesh++ Eq.8)
+    -------------------------------------
+    1.  z_f = 0   ∀f ∈ candidates   (logit; phi_f = sigmoid(z_f) = 0.5 initially)
+    2.  For n_rl_steps iterations:
+        a. phi  = sigmoid(z)
+        b. Sample B binary masks  m_i ~ Bernoulli(phi),  i = 1..B
+        c. For each mask i:
+             - Apply stellates for all f with m_i_f = 1 to a COPY of the mesh
+             - Probe K gradient steps → loss_i
+             - reward_i = −loss_i − eps_card · |m_i|   (higher = better)
+        d. Baseline  b = mean(reward_i)
+        e. REINFORCE gradient ascent (maximise expected reward):
+             z_f  +=  rl_lr · (1/B) · Σ_i (reward_i − b) · (m_i_f − phi_f)
+    3.  Decode: top-n_select faces by sigmoid(z_final).
+
+    Returns [≤n_select] int32 face indices selected from candidate_faces.
+    """
+    C = len(candidate_faces)
+    if C == 0:
+        return np.array([], dtype=np.int32)
+    n_sel = min(n_select, C)
+
+    z = np.zeros(C, dtype=np.float64)          # per-candidate logits
+
+    for rl_iter in range(n_rl_steps):
+        phi     = 1.0 / (1.0 + np.exp(-z))     # [C] sigmoid
+        rewards = np.zeros(B, dtype=np.float64)
+        masks   = np.zeros((B, C), dtype=np.float64)
+
+        for bi in range(B):
+            m = (np.random.rand(C) < phi).astype(np.float64)
+            masks[bi] = m
+            sel_idx   = candidate_faces[m > 0.5]
+
+            if len(sel_idx) == 0:
+                # No selection → probe base mesh
+                loss_val = compute_loss_K(ctx, verts_np, tris_np,
+                                          gt_uint8, gt_depths, mvps, device, K_probe)
+                rewards[bi] = -loss_val
+                continue
+
+            try:
+                pv, pt, _ = topmod_stellate_cluster(
+                    verts_np.copy(), tris_np.copy(), sel_idx)
+                n_bnd, _ = dlfl_boundary_stats(pv, pt)
+                probe_v, probe_t = (verts_np, tris_np) if n_bnd > 0 else (pv, pt)
+                loss_val = compute_loss_K(ctx, probe_v, probe_t,
+                                          gt_uint8, gt_depths, mvps, device, K_probe)
+            except Exception:
+                loss_val = compute_loss_K(ctx, verts_np, tris_np,
+                                          gt_uint8, gt_depths, mvps, device, K_probe)
+
+            rewards[bi] = -loss_val - eps_card * float(m.sum())
+
+        # Gradient ascent: z += rl_lr · (1/B) Σ_i (r_i − b) · (m_i − phi)
+        baseline  = rewards.mean()
+        advantage = rewards - baseline                       # [B]
+        grad      = (advantage[:, None] * (masks - phi[None, :])).mean(axis=0)  # [C]
+        z        += rl_lr * grad
+
+        if rl_iter % 2 == 0 or rl_iter == n_rl_steps - 1:
+            phi_cur = 1.0 / (1.0 + np.exp(-z))
+            print(f"    [RL it={rl_iter}]  phi∈[{phi_cur.min():.3f},{phi_cur.max():.3f}]"
+                  f"  r_mean={rewards.mean():.5f}  adv_std={advantage.std():.5f}")
+
+    phi_final = 1.0 / (1.0 + np.exp(-z))
+    top_idx   = np.argsort(-phi_final)[:n_sel]
+    selected  = candidate_faces[top_idx]
+    print(f"    [RL decode]  selected={len(selected)}  "
+          f"phi_sel_mean={phi_final[top_idx].mean():.3f}")
+    return selected.astype(np.int32)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Probe-and-keep greedy selection
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _probe_keep_select_faces(
+    ctx,
+    verts_np:        np.ndarray,
+    tris_np:         np.ndarray,
+    gt_uint8:        np.ndarray,
+    gt_depths:       np.ndarray,
+    mvps:            torch.Tensor,
+    device:          str,
+    candidate_faces: np.ndarray,        # [C] pre-filtered face indices
+    n_select:        int,
+    batch_size:      int = PK_BATCH_SIZE,
+    K_probe:         int = PK_K_PROBE,
+) -> np.ndarray:
+    """Greedy probe-and-keep: iterate batches, keep a batch if its ΔL < 0.
+
+    Each probe applies the *accumulated accepted set ∪ current batch* to a
+    COPY of the original verts_np/tris_np — this avoids face-index shifting
+    that would occur if stellates were committed incrementally.
+
+    Returns [≤n_select] int32 face indices.
+    """
+    C = len(candidate_faces)
+    if C == 0:
+        return np.array([], dtype=np.int32)
+
+    # Baseline: probe the original unmodified mesh
+    base_loss = compute_loss_K(ctx, verts_np, tris_np,
+                               gt_uint8, gt_depths, mvps, device, K_probe)
+    print(f"    [PK] base_loss={base_loss:.6f}")
+
+    accepted: List[int] = []
+    best_loss = base_loss
+    n_batches = math.ceil(C / batch_size)
+
+    for bi in range(n_batches):
+        if len(accepted) >= n_select:
+            break
+
+        batch     = candidate_faces[bi * batch_size: (bi + 1) * batch_size]
+        trial_set = np.array(accepted + batch.tolist(), dtype=np.int32)
+
+        try:
+            pv, pt, _ = topmod_stellate_cluster(
+                verts_np.copy(), tris_np.copy(), trial_set)
+            n_bnd, _ = dlfl_boundary_stats(pv, pt)
+            if n_bnd > 0:
+                continue   # topology break: skip batch
+            probe_loss = compute_loss_K(ctx, pv, pt,
+                                        gt_uint8, gt_depths, mvps, device, K_probe)
+        except Exception:
+            continue
+
+        delta = probe_loss - best_loss
+        if delta < 0:
+            accepted.extend(batch.tolist())
+            best_loss = probe_loss
+            print(f"    [PK] batch {bi:2d}: KEEP  Δloss={delta:+.6f}  "
+                  f"n_accepted={len(accepted)}")
+
+    result = np.array(accepted[:n_select], dtype=np.int32)
+    print(f"    [PK] done: {len(result)} accepted  best_loss={best_loss:.6f}")
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Main optimisation loop — local refinement
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -234,6 +482,15 @@ def run_local_refine(
     face_budget:     int   = FACE_BUDGET,
     refine_interval: int   = REFINE_INTERVAL,
     max_rounds:      int   = MAX_REFINE_ROUNDS,
+    # ── REINFORCE / probe-and-keep strategy ──────────────────────────────────
+    strategy:        str   = 'heuristic',  # 'heuristic' | 'reinforce' | 'probe_keep'
+    n_rl_steps:      int   = RL_N_RL_STEPS,
+    rl_batch:        int   = RL_BATCH,
+    rl_k_probe:      int   = RL_K_PROBE,
+    rl_lr:           float = RL_LR_INIT,
+    rl_eps_card:     float = RL_EPS_CARD,
+    pk_batch_size:   int   = PK_BATCH_SIZE,
+    pk_k_probe:      int   = PK_K_PROBE,
 ) -> Tuple[float, np.ndarray, np.ndarray, List[dict]]:
     """Local error-driven refinement loop.
 
@@ -380,10 +637,44 @@ def run_local_refine(
                     verts_cur, tris_cur,
                     error_maps, pred_depths_np, gt_depths, gt_uint8, mvps_np)
 
-                score_max = float(face_scores.max())
+                score_max  = float(face_scores.max())
                 budget_rem = face_budget - len(tris_cur)
-                refine_faces = select_refine_faces(
-                    face_scores, top_k_refine, MIN_FACE_SCORE, budget_rem)
+
+                if strategy == 'heuristic':
+                    refine_faces = select_refine_faces(
+                        face_scores, top_k_refine, MIN_FACE_SCORE, budget_rem)
+                elif strategy in ('reinforce', 'probe_keep'):
+                    n_sel = min(RL_N_SELECT, budget_rem // 2)
+                    cands = _get_prefiltered_candidates(face_scores,
+                                                        RL_N_CANDIDATES)
+                    if n_sel <= 0 or len(cands) == 0:
+                        refine_faces = np.array([], dtype=np.int32)
+                    elif strategy == 'reinforce':
+                        print(f"  [REINFORCE] step={step}: C={len(cands)}"
+                              f"  n_sel={n_sel}"
+                              f"  n_rl_steps={n_rl_steps}  B={rl_batch}")
+                        refine_faces = _reinforce_select_faces(
+                            ctx, verts_cur, tris_cur,
+                            gt_uint8, gt_depths, mvps, device,
+                            candidate_faces=cands,
+                            n_select=n_sel,
+                            n_rl_steps=n_rl_steps,
+                            B=rl_batch,
+                            K_probe=rl_k_probe,
+                            rl_lr=rl_lr,
+                            eps_card=rl_eps_card)
+                    else:
+                        print(f"  [PROBE-KEEP] step={step}: C={len(cands)}"
+                              f"  n_sel={n_sel}")
+                        refine_faces = _probe_keep_select_faces(
+                            ctx, verts_cur, tris_cur,
+                            gt_uint8, gt_depths, mvps, device,
+                            candidate_faces=cands,
+                            n_select=n_sel,
+                            batch_size=pk_batch_size,
+                            K_probe=pk_k_probe)
+                else:
+                    raise ValueError(f"Unknown strategy: {strategy!r}")
 
                 if len(refine_faces) == 0:
                     print(f"  [REFINE] step={step}: no eligible faces "
@@ -649,10 +940,13 @@ def run_variant(variant: str, scene: dict, device: str,
     """Run one trial of a variant.
 
     Variants:
-      A   — cc2 baseline (with depth, no refinement)
-      cc3 — cc3 baseline (with depth, no refinement, ~1920 faces)
-      B   — local stellate refinement (starts cc2, adaptive density)
-      C   — local stellate + extrude for topology gaps
+      A    — cc2 baseline (with depth, no refinement)
+      cc3  — cc3 baseline (with depth, no refinement, ~1920 faces)
+      B    — local stellate, heuristic selection (starts cc2, adaptive density)
+      C    — local stellate + extrude for topology gaps
+      Biso — heuristic selection iso-budget (360×2 rounds → ~1920F)
+      R    — REINFORCE where-to-refine iso-budget (360×2 rounds → ~1920F)
+      P    — probe-and-keep greedy iso-budget (360×2 rounds → ~1920F)
     """
     ctx       = scene['ctx']
     mvps      = scene['mvps']
@@ -675,6 +969,40 @@ def run_variant(variant: str, scene: dict, device: str,
                                       device, total_steps, label='cc3')
         return {'iou': float(iou), 'n_rounds': 0,
                 'final_faces': n_f, 'time': time.time() - t0}
+
+    # ── iso-budget variants (R, P, Biso): 360 stellates × 2 rounds → ~1920F ──
+    _ISO_KW = dict(
+        face_budget     = 1920,
+        refine_interval = REFINE_INTERVAL,
+        max_rounds      = ISO_MAX_ROUNDS,
+        top_k_refine    = RL_N_SELECT,
+    )
+    if variant == 'Biso':
+        iou, _, _, log = run_local_refine(
+            ctx, iv, it, gt_uint8, gt_depths, mvps, device,
+            use_extrude=False, total_steps=total_steps,
+            strategy='heuristic', **_ISO_KW)
+        final_faces = log[-1]['total_faces'] if log else len(it)
+        return {'iou': float(iou), 'n_rounds': len(log),
+                'final_faces': final_faces, 'time': time.time() - t0, 'log': log}
+
+    if variant == 'R':
+        iou, _, _, log = run_local_refine(
+            ctx, iv, it, gt_uint8, gt_depths, mvps, device,
+            use_extrude=False, total_steps=total_steps,
+            strategy='reinforce', **_ISO_KW)
+        final_faces = log[-1]['total_faces'] if log else len(it)
+        return {'iou': float(iou), 'n_rounds': len(log),
+                'final_faces': final_faces, 'time': time.time() - t0, 'log': log}
+
+    if variant == 'P':
+        iou, _, _, log = run_local_refine(
+            ctx, iv, it, gt_uint8, gt_depths, mvps, device,
+            use_extrude=False, total_steps=total_steps,
+            strategy='probe_keep', **_ISO_KW)
+        final_faces = log[-1]['total_faces'] if log else len(it)
+        return {'iou': float(iou), 'n_rounds': len(log),
+                'final_faces': final_faces, 'time': time.time() - t0, 'log': log}
 
     use_extrude = (variant == 'C')
     iou, pred_sils, pred_depths, log = run_local_refine(
@@ -715,7 +1043,7 @@ def main():
     ap.add_argument('--shape',        default='cow')
     ap.add_argument('--trials',       type=int, default=1)
     ap.add_argument('--variants',     nargs='+', default=['A', 'cc3', 'B'],
-                    choices=['A', 'cc3', 'B', 'C'])
+                    choices=['A', 'cc3', 'B', 'C', 'Biso', 'R', 'P'])
     ap.add_argument('--total-steps',  type=int, default=TOTAL_STEPS)
     ap.add_argument('--top-k',        type=int, default=TOP_K_REFINE,
                     help='faces to stellate per refinement round')
