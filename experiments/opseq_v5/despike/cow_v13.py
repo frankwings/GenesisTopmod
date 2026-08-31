@@ -202,6 +202,7 @@ def heldout_exam(ctx, v, t, scene):
     azs = [22.5 + 22.5 * i for i in range(16)]
     mv = orbit_cameras(n=16, elevation_deg=20.0, radius=2.5,
                        azimuths_deg=azs, device=DEVICE)
+    if isinstance(mv, tuple): mv = mv[0]
     pvt = torch.tensor(v, dtype=torch.float32, device=DEVICE)
     pft = torch.tensor(t, dtype=torch.int32, device=DEVICE)
     gt_sils = render_views_n(ctx, gvt, gft, mv)
