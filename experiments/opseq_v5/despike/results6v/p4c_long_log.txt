@@ -1,0 +1,38 @@
+##### 6v long: flips + collapse(0.5) + SI push
+[base] V=5534 F=11064 watertight=True | train=0.9686 ho16=0.9712 hair=2322 | SI=1028 (9.3%) folds=2.1%
+[step 100/1500] sil=0.0139 flips=793 collapses=48 pushes=6874 V=5486 SI=1024 (9.3%) folds=3.8% (10s)
+[step 200/1500] sil=0.0138 flips=1467 collapses=139 pushes=13419 V=5395 SI=946 (8.8%) folds=4.0% (19s)
+[step 300/1500] sil=0.0139 flips=2019 collapses=172 pushes=20005 V=5362 SI=940 (8.8%) folds=4.0% (29s)
+[step 400/1500] sil=0.0138 flips=2560 collapses=214 pushes=26312 V=5320 SI=895 (8.4%) folds=4.0% (38s)
+[step 500/1500] sil=0.0137 flips=3004 collapses=241 pushes=32394 V=5293 SI=860 (8.1%) folds=4.0% (48s)
+[step 600/1500] sil=0.0138 flips=3378 collapses=299 pushes=38344 V=5235 SI=867 (8.3%) folds=4.2% (57s)
+[step 700/1500] sil=0.0136 flips=3777 collapses=481 pushes=43879 V=5053 SI=732 (7.2%) folds=4.3% (67s)
+[step 800/1500] sil=0.0136 flips=4176 collapses=651 pushes=49114 V=4883 SI=708 (7.3%) folds=4.3% (76s)
+[step 900/1500] sil=0.0137 flips=4511 collapses=783 pushes=54287 V=4751 SI=603 (6.3%) folds=4.4% (84s)
+[step 1000/1500] sil=0.0137 flips=4810 collapses=876 pushes=58718 V=4658 SI=576 (6.2%) folds=4.3% (92s)
+[step 1100/1500] sil=0.0137 flips=5052 collapses=963 pushes=62682 V=4571 SI=527 (5.8%) folds=4.3% (101s)
+[step 1200/1500] sil=0.0135 flips=5305 collapses=1053 pushes=66378 V=4481 SI=508 (5.7%) folds=4.2% (108s)
+[step 1300/1500] sil=0.0134 flips=5533 collapses=1120 pushes=69432 V=4414 SI=369 (4.2%) folds=3.9% (116s)
+[step 1400/1500] sil=0.0133 flips=5679 collapses=1170 pushes=71878 V=4364 SI=330 (3.8%) folds=3.7% (123s)
+[step 1500/1500] sil=0.0144 flips=5759 collapses=1170 pushes=73236 V=4364 SI=292 (3.3%) folds=3.5% (130s)
+[final] V=4364 F=8724 watertight=True | train=0.9680 ho16=0.9691 hair=2308 | SI=298 (3.4%) folds=3.5%
+[p4] ho16 0.9712 -> 0.9691 (-0.21) | SI 11.8% -> 3.4% | total flips=5789
+[p4] saved cow_armadillo_p4c_6.npz
+##### 64v long: flips + collapse(0.5) + SI push
+[run_64v] SHAPE=armadillo TAG=p4c_64 W_QUAL=0.01 W_DIFF=1.0
+[base] V=3494 F=6984 watertight=True | train=0.9694 ho16=0.9854 hair=186 | SI=867 (12.4%) folds=0.8%
+[step 100/1200] sil=0.0046 flips=654 collapses=15 pushes=5272 V=3479 SI=718 (10.3%) folds=1.0% (27s)
+[step 200/1200] sil=0.0047 flips=1315 collapses=44 pushes=9729 V=3450 SI=609 (8.8%) folds=0.9% (52s)
+[step 300/1200] sil=0.0048 flips=1825 collapses=124 pushes=12787 V=3370 SI=451 (6.7%) folds=0.9% (78s)
+[step 400/1200] sil=0.0047 flips=2208 collapses=145 pushes=15008 V=3349 SI=357 (5.3%) folds=0.7% (102s)
+[step 500/1200] sil=0.0045 flips=2632 collapses=195 pushes=16885 V=3299 SI=365 (5.5%) folds=0.8% (128s)
+[step 600/1200] sil=0.0045 flips=3004 collapses=229 pushes=18350 V=3265 SI=223 (3.4%) folds=0.5% (154s)
+[step 700/1200] sil=0.0046 flips=3332 collapses=241 pushes=19332 V=3253 SI=196 (3.0%) folds=0.5% (177s)
+[step 800/1200] sil=0.0044 flips=3596 collapses=293 pushes=20186 V=3201 SI=162 (2.5%) folds=0.5% (202s)
+[step 900/1200] sil=0.0044 flips=3824 collapses=333 pushes=20901 V=3161 SI=128 (2.0%) folds=0.5% (229s)
+[step 1000/1200] sil=0.0043 flips=3983 collapses=350 pushes=21535 V=3144 SI=113 (1.8%) folds=0.1% (254s)
+[step 1100/1200] sil=0.0043 flips=4079 collapses=363 pushes=22160 V=3131 SI=115 (1.8%) folds=0.2% (278s)
+[step 1200/1200] sil=0.0044 flips=4120 collapses=363 pushes=22587 V=3131 SI=98 (1.6%) folds=0.1% (304s)
+[final] V=3131 F=6258 watertight=True | train=0.9765 ho16=0.9865 hair=144 | SI=98 (1.6%) folds=0.1%
+[p4] ho16 0.9854 -> 0.9865 (+0.11) | SI 13.9% -> 1.6% | total flips=4122
+[p4] saved cow_armadillo_p4c_64.npz

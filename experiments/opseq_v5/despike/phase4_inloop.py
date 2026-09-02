@@ -1,0 +1,244 @@
+"""Phase 4: DLFL flip sweep INSIDE the optimizer (every FLIP_EVERY steps).
+
+Alternating untangle<->refit (3e) showed the continuous optimizer re-creates
+tangles (6v 11%->19.5% SI, 64v 25%->38% per refit). Fix at the source: run a
+DLFL edge-flip sweep (+1 tangential smoothing iteration) every N steps while
+optimizing, rebuilding adjacency in place. Vertex count never changes, so
+Adam state stays valid; topology changes are DLFL-only (manifold preserved).
+
+MODE=6v : sil+depth on 6 views + soup distance field (TARGET_OBJ)
+MODE=64v: sil+depth+diffuse on 64 views + voting hull field (1f-c)
+Both: lap/edge/qual/spike/sliver/fold regularizers.
+Targets: self-intersecting faces < 5% with no IoU loss.
+
+Run: MODE=6v TAG=p4_6 BASE_NPZ=... TARGET_OBJ=... python3 despike/phase4_inloop.py
+"""
+import sys, os
+sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5")
+sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5/despike")
+sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod")
+os.chdir("/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5")
+os.environ.setdefault("MODE", "6v")
+
+import time
+import numpy as np, torch
+import torch.nn.functional as F
+import open3d as o3d
+import nvdiffrast.torch as dr
+
+import cow_v13
+from cow_v13 import (build_adj, build_pairs, fold_loss, mean_edge_of, spike_pen,
+                     sliver_pen, DEVICE, W_SPIKE, W_SLIVER, W_FOLD)
+from eval_local_refine import (setup_scene, render_views_n, compute_iou_n,
+                               load_obj, normalize_to_range, BUNNY_PATH,
+                               depth_loss_masked, laplacian_loss, edge_length_loss,
+                               LR, LR_MIN, W_DEPTH, W_LAP, W_EDGE)
+from eval_extrude_v3 import render_sil_and_depth
+import phase1b_pipeline as p1b
+from phase1b_pipeline import heldout_exam, check_watertight
+from eval_dmesh import load_any_mesh
+from dlfl_untangle import (flip_sweep, tangential_smooth, si_faces, fold_frac,
+                           collapse_short_edges)
+
+SHAPE = os.environ.get("SHAPE", "armadillo")
+MODE = os.environ.get("MODE", "6v")
+TAG = os.environ.get("TAG", f"p4_{MODE}")
+BASE_NPZ = os.environ["BASE_NPZ"]
+TARGET_OBJ = os.environ.get("TARGET_OBJ", "")
+STEPS = int(os.environ.get("STEPS", "600"))
+FLIP_EVERY = int(os.environ.get("FLIP_EVERY", "25"))
+SMOOTH_ITERS = int(os.environ.get("SMOOTH_ITERS", "1"))
+SMOOTH_LAM = float(os.environ.get("SMOOTH_LAM", "0.2"))
+W_T = float(os.environ.get("W_T", "20.0"))
+W_QUAL = float(os.environ.get("W_QUAL", "0.01"))
+W_DIFF = float(os.environ.get("W_DIFF", "1.0"))
+FOLD_MULT = float(os.environ.get("FOLD_MULT", "1.0"))
+COLLAPSE_EVERY = int(os.environ.get("COLLAPSE_EVERY", "0"))   # 0 = off
+COLLAPSE_RATIO = float(os.environ.get("COLLAPSE_RATIO", "0.3"))
+COLLAPSE_MAX = int(os.environ.get("COLLAPSE_MAX", "300"))
+SI_PUSH = float(os.environ.get("SI_PUSH", "0.0"))   # nudge intersecting pairs apart (x mean edge)
+OUTD = "/tmp/liou_cow_viz"
+os.makedirs(OUTD, exist_ok=True)
+torch.manual_seed(0); np.random.seed(0)
+
+_SQRT3_4 = 4.0 * (3.0 ** 0.5)
+def _qual_loss(verts_t, faces_t):
+    tri = verts_t[faces_t.long()]
+    e0 = tri[:, 1] - tri[:, 0]; e1 = tri[:, 2] - tri[:, 1]; e2 = tri[:, 0] - tri[:, 2]
+    l2 = (e0 * e0).sum(-1) + (e1 * e1).sum(-1) + (e2 * e2).sum(-1)
+    area = 0.5 * torch.cross(e0, -e2, dim=-1).norm(dim=-1)
+    return (1.0 - _SQRT3_4 * area / (l2 + 1e-12)).mean()
+
+# ---------------------------------------------------------------- scene
+z = np.load(BASE_NPZ)
+V, Fa = z["verts"].astype(np.float64), z["tris"].astype(np.int64)
+if MODE == "64v":
+    import run_64v
+    from run_64v import render_sdd
+    from hull_field import build_vote_hull
+    ctx = dr.RasterizeCudaContext()
+    gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
+    gvn = normalize_to_range(gv)
+    mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
+    gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
+    cow_v13.N_VIEWS = 64
+    HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=512, vote=2)
+    DEAD = 1.0 * HF.pitch
+    gtdf_t = [torch.from_numpy(gtdiff[i]).float().to(DEVICE) for i in range(64)]
+    def field_dist(pts): return F.relu(HF.dist(pts) - DEAD)
+else:
+    scene = setup_scene(SHAPE, DEVICE)
+    ctx, mvps = scene["ctx"], scene["mvps"]
+    gt, gtd = scene["gt_uint8"], scene["gt_depths"]
+    tv, tf = load_any_mesh(TARGET_OBJ)
+    tv = np.asarray(tv, np.float32); tf = np.asarray(tf, np.uint32)
+    NRES = 256
+    lo = np.minimum(tv.min(0), V.min(0)) - 0.03; hi = np.maximum(tv.max(0), V.max(0)) + 0.03
+    sp = (hi - lo) / (NRES - 1); PITCH = float(sp.max()); DEAD = 0.5 * PITCH
+    axes = [np.linspace(lo[a], hi[a], NRES) for a in range(3)]
+    G = np.stack(np.meshgrid(*axes, indexing="ij"), -1).reshape(-1, 3).astype(np.float32)
+    sc = o3d.t.geometry.RaycastingScene()
+    sc.add_triangles(o3d.t.geometry.TriangleMesh(o3d.core.Tensor(tv), o3d.core.Tensor(tf)))
+    D = np.zeros(len(G), np.float32)
+    for s in range(0, len(G), 2_000_000):
+        D[s:s+2_000_000] = sc.compute_distance(o3d.core.Tensor(G[s:s+2_000_000])).numpy()
+    vol = torch.from_numpy(D.reshape(NRES, NRES, NRES)).unsqueeze(0).unsqueeze(0).to(DEVICE)
+    lo_t = torch.tensor(lo, dtype=torch.float32, device=DEVICE)
+    hi_t = torch.tensor(hi, dtype=torch.float32, device=DEVICE)
+    def field_dist(pts):
+        g = 2.0 * (pts - lo_t) / (hi_t - lo_t) - 1.0
+        grid = g[:, [2, 1, 0]].view(1, 1, 1, -1, 3)
+        d = F.grid_sample(vol, grid, mode="bilinear", padding_mode="border",
+                          align_corners=True).view(-1)
+        return F.relu(d - DEAD)
+NV = len(mvps)
+p1b._MVPS, p1b._GT = mvps, gt
+p1b.SHAPE = SHAPE
+targets = torch.from_numpy((gt < 128).astype(np.float32)).unsqueeze(-1).to(DEVICE)
+gtd_t = [torch.from_numpy(np.asarray(gtd[i], np.float32)).to(DEVICE) for i in range(NV)]
+gtfg_t = [torch.from_numpy(gt[i] < 128).to(DEVICE) for i in range(NV)]
+
+_BARY = torch.tensor([[1/3, 1/3, 1/3], [1/2, 1/2, 0.0], [0.0, 1/2, 1/2], [1/2, 0.0, 1/2],
+                      [2/3, 1/6, 1/6], [1/6, 2/3, 1/6], [1/6, 1/6, 2/3]],
+                     dtype=torch.float32, device=DEVICE)
+
+def field_loss(verts_t, faces_l):
+    tri = verts_t[faces_l]
+    pts = torch.einsum("sk,fkc->fsc", _BARY, tri).reshape(-1, 3)
+    pen = field_dist(pts).view(-1, _BARY.shape[0]).mean(1)
+    area = 0.5 * torch.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0], dim=-1).norm(dim=-1)
+    w = area.detach() / (area.detach().sum() + 1e-12)
+    return (pen * w).sum() + field_dist(verts_t).mean()
+
+def iou_fn(vv, ff):
+    vt = torch.tensor(np.asarray(vv), dtype=torch.float32, device=DEVICE)
+    ft = torch.tensor(np.asarray(ff, np.int32), dtype=torch.int32, device=DEVICE)
+    return compute_iou_n(render_views_n(ctx, vt, ft, mvps), gt)
+
+def report(tag, V, Fa):
+    ho = heldout_exam(ctx, V, Fa); wt, _ = check_watertight(Fa)
+    s = si_faces(V, Fa); f = fold_frac(V, Fa)
+    print(f"[{tag}] V={len(V)} F={len(Fa)} watertight={wt} | train={iou_fn(V, Fa):.4f} "
+          f"ho16={ho[0]:.4f} hair={ho[1]} | SI={s} ({100*s/len(Fa):.1f}%) folds={100*f:.1f}%",
+          flush=True)
+    return ho[0], s
+
+# ---------------------------------------------------------------- optimize
+ho0, si0 = report("base", V, Fa)
+verts_t = torch.tensor(V, dtype=torch.float32, device=DEVICE).requires_grad_(True)
+opt = torch.optim.Adam([verts_t], lr=LR)
+sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=STEPS, eta_min=LR_MIN)
+
+def rebuild(Fa):
+    faces_t = torch.tensor(Fa.astype(np.int32), dtype=torch.int32, device=DEVICE)
+    src, dst, deg, excl = build_adj(Fa.astype(np.int32), int(Fa.max()) + 1)
+    pairs_t = torch.tensor(build_pairs(Fa.astype(np.int32)), device=DEVICE)
+    return faces_t, faces_t.long(), src, dst, deg, pairs_t
+
+faces_t, faces_l, src, dst, deg, pairs_t = rebuild(Fa)
+t0 = time.time(); nflips_total = 0; ncollapse_total = 0; npush_total = 0
+for step in range(STEPS):
+    opt.zero_grad()
+    me = mean_edge_of(verts_t.detach(), src, dst)
+    sl = dl = fl = torch.tensor(0.0, device=DEVICE)
+    for i in range(NV):
+        if MODE == "64v":
+            sil, ndc_z, fg, diff = render_sdd(ctx, verts_t, faces_t, mvps[i], views[i])
+            fl = fl + F.l1_loss(diff, gtdf_t[i])
+        else:
+            sil, ndc_z, fg = render_sil_and_depth(ctx, verts_t, faces_t, mvps[i])
+        sl = sl + F.l1_loss(sil[0], targets[i])
+        dl = dl + depth_loss_masked(ndc_z, fg, gtd_t[i], gtfg_t[i])
+    sl, dl, fl = sl / NV, dl / NV, fl / NV
+    loss = (sl + W_DEPTH * dl + W_DIFF * fl
+            + W_LAP * laplacian_loss(verts_t, faces_t)
+            + W_EDGE * edge_length_loss(verts_t, faces_t)
+            + W_QUAL * _qual_loss(verts_t, faces_t)
+            + W_SPIKE * spike_pen(verts_t, src, dst, deg, me)
+            + W_SLIVER * sliver_pen(verts_t, faces_l, me)
+            + W_FOLD * FOLD_MULT * fold_loss(verts_t, faces_l, pairs_t)
+            + W_T * field_loss(verts_t, faces_l))
+    loss.backward()
+    opt.step(); sched.step()
+    if FLIP_EVERY > 0 and (step + 1) % FLIP_EVERY == 0 and step + 1 < STEPS:
+        with torch.no_grad():
+            Vn = verts_t.detach().cpu().numpy().astype(np.float64)
+            nc = 0
+            if COLLAPSE_EVERY > 0 and (step + 1) % COLLAPSE_EVERY == 0:
+                Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, COLLAPSE_MAX)
+                ncollapse_total += nc
+            Vn, Fa, nf = flip_sweep(Vn, Fa, passes=3)
+            if SMOOTH_ITERS > 0:
+                Vn = tangential_smooth(Vn, Fa, SMOOTH_ITERS, SMOOTH_LAM)
+            if SI_PUSH > 0:
+                # residual overlaps are non-adjacent near-parallel faces: nudge
+                # each intersecting pair apart along the mean normal (delta =
+                # SI_PUSH x mean edge); DR/target losses pull the shape back.
+                om = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vn),
+                                               o3d.utility.Vector3iVector(Fa.astype(np.int32)))
+                prs = np.asarray(om.get_self_intersecting_triangles())
+                if len(prs):
+                    tri = Vn[Fa]; cen = tri.mean(1)
+                    nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+                    nrm /= np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-12
+                    me_np = np.linalg.norm(Vn[Fa[:, 0]] - Vn[Fa[:, 1]], axis=1).mean()
+                    disp = np.zeros_like(Vn); cnt = np.zeros(len(Vn))
+                    for a, b in prs:
+                        n = nrm[a] if abs(nrm[a] @ nrm[b]) > 0.5 else nrm[a] + nrm[b]
+                        n /= np.linalg.norm(n) + 1e-12
+                        s = np.sign((cen[b] - cen[a]) @ n) or 1.0
+                        disp[Fa[a]] -= s * n * SI_PUSH * me_np; cnt[Fa[a]] += 1
+                        disp[Fa[b]] += s * n * SI_PUSH * me_np; cnt[Fa[b]] += 1
+                    m = cnt > 0
+                    Vn[m] += disp[m] / cnt[m, None]
+                    npush_total += int(len(prs))
+            nflips_total += nf
+            if nc > 0:
+                # vertex count changed: new parameter tensor + fresh Adam at current lr
+                cur_lr = opt.param_groups[0]["lr"]
+                V = Vn
+                verts_t = torch.tensor(Vn, dtype=torch.float32, device=DEVICE).requires_grad_(True)
+                opt = torch.optim.Adam([verts_t], lr=cur_lr)
+                sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    opt, T_max=max(1, STEPS - step - 1), eta_min=LR_MIN)
+                faces_t, faces_l, src, dst, deg, pairs_t = rebuild(Fa)
+            else:
+                if SMOOTH_ITERS > 0 or SI_PUSH > 0:
+                    verts_t.data.copy_(torch.tensor(Vn, dtype=torch.float32, device=DEVICE))
+                if nf > 0:
+                    faces_t, faces_l, src, dst, deg, pairs_t = rebuild(Fa)
+    if (step + 1) % 100 == 0:
+        Vn = verts_t.detach().cpu().numpy().astype(np.float64)
+        s = si_faces(Vn, Fa)
+        print(f"[step {step+1}/{STEPS}] sil={sl.item():.4f} flips={nflips_total} collapses={ncollapse_total} pushes={npush_total} V={len(Fa) and len(Vn)} "
+              f"SI={s} ({100*s/len(Fa):.1f}%) folds={100*fold_frac(Vn, Fa):.1f}% "
+              f"({time.time()-t0:.0f}s)", flush=True)
+
+V = verts_t.detach().cpu().numpy().astype(np.float64)
+V, Fa, nf = flip_sweep(V, Fa, passes=4); nflips_total += nf
+wt, nbad = check_watertight(Fa); assert wt, nbad
+hof, sif = report("final", V, Fa)
+print(f"[p4] ho16 {ho0:.4f} -> {hof:.4f} ({(hof-ho0)*100:+.2f}) | SI {100*si0/len(Fa):.1f}% -> "
+      f"{100*sif/len(Fa):.1f}% | total flips={nflips_total}", flush=True)
+np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
+print(f"[p4] saved cow_{SHAPE}_{TAG}.npz", flush=True)
