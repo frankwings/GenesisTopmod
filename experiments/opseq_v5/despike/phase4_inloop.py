@@ -57,6 +57,8 @@ COLLAPSE_EVERY = int(os.environ.get("COLLAPSE_EVERY", "0"))   # 0 = off
 COLLAPSE_RATIO = float(os.environ.get("COLLAPSE_RATIO", "0.3"))
 COLLAPSE_MAX = int(os.environ.get("COLLAPSE_MAX", "300"))
 SI_PUSH = float(os.environ.get("SI_PUSH", "0.0"))   # nudge intersecting pairs apart (x mean edge)
+SUBDIV_ALL = int(os.environ.get("SUBDIV_ALL", "0"))  # Phase 5: global DLFL midpoint subdivision passes before optimizing
+LAP_MULT = float(os.environ.get("LAP_MULT", "1.0"))  # Phase 5: fairing strength (back smoothness)
 OUTD = "/tmp/liou_cow_viz"
 os.makedirs(OUTD, exist_ok=True)
 torch.manual_seed(0); np.random.seed(0)
@@ -72,6 +74,15 @@ def _qual_loss(verts_t, faces_t):
 # ---------------------------------------------------------------- scene
 z = np.load(BASE_NPZ)
 V, Fa = z["verts"].astype(np.float64), z["tris"].astype(np.int64)
+if SUBDIV_ALL > 0:
+    # resolution is the common denominator of "fingers not grown" and "back
+    # not smooth": mean edge 0.13 vs finger width ~0.1-0.2. Global DLFL
+    # subdivide_edge on every edge + stellate (all TopMod ops, watertight).
+    from phase1c_pipeline import dlfl_subdivide_arrays
+    for _ in range(SUBDIV_ALL):
+        V, Fa, ne = dlfl_subdivide_arrays(V, Fa, list(range(len(Fa))))
+        wt, _ = check_watertight(Fa); assert wt
+        print(f"[p4] global DLFL subdivision: split {ne} edges -> V={len(V)} F={len(Fa)}", flush=True)
 if MODE == "64v":
     import run_64v
     from run_64v import render_sdd
@@ -90,6 +101,19 @@ else:
     scene = setup_scene(SHAPE, DEVICE)
     ctx, mvps = scene["ctx"], scene["mvps"]
     gt, gtd = scene["gt_uint8"], scene["gt_depths"]
+if MODE == "6v" and not TARGET_OBJ:
+    # DMesh-free 6v: voting hull from the 6 TRAINING silhouettes only
+    # (vote=1: with 6 clean views any single view proves "outside";
+    # 1024px 2x-supersampled coverage keeps thin parts).
+    from hull_field import build_vote_hull
+    gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
+    gvn = normalize_to_range(gv)
+    HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=1024,
+                         vote=1, ss_thr=0.25)
+    DEAD = 1.0 * HF.pitch
+    print(f"[p4] 6v hull field: vox={HF.hull.sum()} pitch={HF.pitch:.4f}", flush=True)
+    def field_dist(pts): return F.relu(HF.dist(pts) - DEAD)
+elif MODE == "6v":
     tv, tf = load_any_mesh(TARGET_OBJ)
     tv = np.asarray(tv, np.float32); tf = np.asarray(tf, np.uint32)
     NRES = 256
@@ -171,7 +195,7 @@ for step in range(STEPS):
         dl = dl + depth_loss_masked(ndc_z, fg, gtd_t[i], gtfg_t[i])
     sl, dl, fl = sl / NV, dl / NV, fl / NV
     loss = (sl + W_DEPTH * dl + W_DIFF * fl
-            + W_LAP * laplacian_loss(verts_t, faces_t)
+            + W_LAP * LAP_MULT * laplacian_loss(verts_t, faces_t)
             + W_EDGE * edge_length_loss(verts_t, faces_t)
             + W_QUAL * _qual_loss(verts_t, faces_t)
             + W_SPIKE * spike_pen(verts_t, src, dst, deg, me)
