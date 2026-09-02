@@ -1,0 +1,19 @@
+##### 64v Phase5: global DLFL subdiv x1 + hull + in-loop cleanup + LAP x3
+[p4] global DLFL subdivision: split 9387 edges -> V=18776 F=37548
+[run_64v] SHAPE=armadillo TAG=p5_64 W_QUAL=0.01 W_DIFF=1.0
+[base] V=18776 F=37548 watertight=True | train=0.9765 ho16=0.9865 hair=144 | SI=472 (1.3%) folds=0.0%
+[step 100/1200] sil=0.0031 flips=11090 collapses=85 pushes=12950 V=18691 SI=2556 (6.8%) folds=1.1% (57s)
+[step 200/1200] sil=0.0028 flips=16919 collapses=161 pushes=32190 V=18615 SI=3039 (8.2%) folds=1.0% (115s)
+[step 300/1200] sil=0.0028 flips=21572 collapses=213 pushes=52892 V=18563 SI=3055 (8.2%) folds=0.9% (175s)
+[step 400/1200] sil=0.0027 flips=25694 collapses=306 pushes=73585 V=18470 SI=3126 (8.5%) folds=0.9% (235s)
+[step 500/1200] sil=0.0026 flips=29220 collapses=351 pushes=94050 V=18425 SI=2779 (7.5%) folds=0.9% (296s)
+[step 600/1200] sil=0.0026 flips=32305 collapses=377 pushes=113397 V=18399 SI=2719 (7.4%) folds=0.8% (355s)
+[step 700/1200] sil=0.0026 flips=35193 collapses=406 pushes=131175 V=18370 SI=2609 (7.1%) folds=0.8% (414s)
+[step 800/1200] sil=0.0026 flips=38022 collapses=451 pushes=147493 V=18325 SI=2285 (6.2%) folds=0.7% (475s)
+[step 900/1200] sil=0.0025 flips=40225 collapses=482 pushes=161164 V=18294 SI=2057 (5.6%) folds=0.6% (537s)
+[step 1000/1200] sil=0.0025 flips=41909 collapses=507 pushes=173337 V=18269 SI=1725 (4.7%) folds=0.4% (598s)
+[step 1100/1200] sil=0.0024 flips=42910 collapses=523 pushes=183672 V=18253 SI=1773 (4.9%) folds=0.3% (657s)
+[step 1200/1200] sil=0.0022 flips=43262 collapses=523 pushes=190817 V=18253 SI=1572 (4.3%) folds=0.2% (709s)
+[final] V=18253 F=36502 watertight=True | train=0.9890 ho16=0.9914 hair=64 | SI=1563 (4.3%) folds=0.2%
+[p4] ho16 0.9865 -> 0.9914 (+0.49) | SI 1.3% -> 4.3% | total flips=43302
+[p4] saved cow_armadillo_p5_64.npz
