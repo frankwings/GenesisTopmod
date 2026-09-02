@@ -49,9 +49,12 @@ DEAD_VOX = float(os.environ.get("DEAD_VOX", "0.5"))
 SUB_THR_VOX = float(os.environ.get("SUB_THR_VOX", "2.0"))
 SUB_CAP = int(os.environ.get("SUB_CAP", "200"))
 DILATE = 2
+FOLD_MULT = float(os.environ.get("FOLD_MULT", "1.0"))   # 3c untangle experiment
 OUTD = "/tmp/liou_cow_viz"
 
 torch.manual_seed(0); np.random.seed(0)
+cow_v13.W_FOLD = cow_v13.W_FOLD * FOLD_MULT
+print(f"[p2a] W_FOLD={cow_v13.W_FOLD} (x{FOLD_MULT})", flush=True)
 scene = setup_scene(SHAPE, DEVICE)
 ctx, mvps = scene["ctx"], scene["mvps"]
 gt, gtd = scene["gt_uint8"], scene["gt_depths"]
