@@ -40,7 +40,8 @@ from surgery_lib import surgery
 from escape_util import escape_mask
 from topmod.io import from_obj, to_triangle_arrays
 from topmod.high_level_ops import (extrude_face as dlfl_extrude,
-                                   triangulate_face, stellate as dlfl_stellate)
+                                   triangulate_face, stellate as dlfl_stellate,
+                                   subdivide_edge as dlfl_subdivide_edge)
 
 DEVICE = "cuda"
 OUT = "/tmp/liou_cow_viz"
@@ -63,6 +64,13 @@ CARVE_LEN = 1.5        # carve |dist| (deep narrow init self-intersects)
 ISO_DIST = 3.0
 DILATE = 2
 cow_v13.TUBE_THR = 0.4
+# Phase 1g knobs
+GROW_ONLY = os.environ.get("GROW_ONLY", "0") == "1"
+SUBDIV = os.environ.get("SUBDIV", "0") == "1"     # DLFL midpoint subdiv at grow sites
+SUBDIV_MIN = int(os.environ.get("SUBDIV_MIN", "100"))  # px blob size threshold
+FENCE = os.environ.get("FENCE", "0") == "1"       # hull fence on spec verts
+W_FENCE = float(os.environ.get("W_FENCE", "50.0"))
+_HULL = None                                       # HullField, set in main()
 
 
 def dlfl_extrude_arrays(V, Fa, fi, dist):
@@ -121,6 +129,46 @@ def densify_faces(V, Fa, fids):
     return V2, F2, len(tgt)
 
 
+def dlfl_subdivide_arrays(V, Fa, fids):
+    """Phase 1g: DLFL midpoint subdivision of faces fids + 1-ring.
+    subdivide_edge every edge of the region, then triangulate all non-tri
+    faces (fan from a midpoint would be degenerate; triangulate_face is not).
+    Real resolution increase: long edges actually get split, unlike stellate.
+    """
+    V = np.asarray(V, float); Fa = np.asarray(Fa, np.int64)
+    tgt = set(int(f) for f in fids)
+    vsets = [set(map(int, f)) for f in Fa]
+    for fi in list(tgt):                        # expand to edge-adjacent ring
+        for j, vs in enumerate(vsets):
+            if j != fi and len(vsets[fi] & vs) == 2:
+                tgt.add(j)
+    with tempfile.NamedTemporaryFile("w", suffix=".obj", delete=False) as fh:
+        for x, y, z in V: fh.write(f"v {x} {y} {z}\n")
+        for a, b, c in Fa: fh.write(f"f {a+1} {b+1} {c+1}\n")
+        path = fh.name
+    try:
+        mesh = from_obj(path)
+    finally:
+        os.unlink(path)
+    faces = list(mesh.iter_faces())
+    edges = {}
+    for fi in tgt:
+        for he in faces[fi].halfedges():
+            edges[id(he.edge)] = he.edge
+    for e in edges.values():
+        dlfl_subdivide_edge(mesh, e)
+    # stellate (centroid) rather than fan-triangulate: fan diagonals can
+    # duplicate existing boundary edges when adjacent n-gons share two edges
+    # (produced doubled faces in testing); centroid split cannot collide.
+    for f in list(mesh.faces.values()):
+        if len(f.vertices()) > 3:
+            dlfl_stellate(mesh, f)
+    vv, ff = to_triangle_arrays(mesh)
+    V2 = np.asarray(vv, float); F2 = np.asarray(ff, np.int64)
+    assert np.allclose(V2[:len(V)], V, atol=1e-9), "subdiv reordered verts"
+    return V2, F2, len(edges)
+
+
 def find_candidates(ctx, V, Fa, gt_fg, mvps, mean_edge):
     """Seed-style: green AND red blobs, no dilation, mixed grow/carve."""
     vt = torch.tensor(V, dtype=torch.float32, device=DEVICE)
@@ -131,7 +179,9 @@ def find_candidates(ctx, V, Fa, gt_fg, mvps, mean_edge):
         sil, tid = render_sil_and_ids(ctx, vt, ft, mvps[i])
         pred = (sil > 0.5).cpu().numpy()
         tid = tid.cpu().numpy()
-        for mask, sign in ((gt_fg[i] & ~pred, +1), (pred & ~gt_fg[i], -1)):
+        pairs = ((gt_fg[i] & ~pred, +1),) if GROW_ONLY else \
+                ((gt_fg[i] & ~pred, +1), (pred & ~gt_fg[i], -1))
+        for mask, sign in pairs:
             lab, nb = cc_label(mask)
             for k in range(1, nb + 1):
                 m = lab == k
@@ -260,10 +310,17 @@ def speculative_round(ctx, V, Fa, gt_sils_t, gt_deps_t, gt_fgs_t, mvps,
                     total = total + W_DEPTH_SPEC * p[k] * (e1d - e0d)
         return total / len(mvps) + W_OCCAM * torch.sigmoid(theta).sum()
 
+    def fence_pen():
+        """Phase 1g hull fence: spec verts must not grow outside the voting
+        hull (3D evidence boundary); free within one voxel dead zone."""
+        if _HULL is None: return torch.tensor(0.0, device=DEVICE)
+        d = _HULL.dist(verts_t[smask])
+        return W_FENCE * torch.relu(d - _HULL.pitch).mean()
+
     for r in range(AB_ROUNDS):
         for _ in range(POS_ITERS):
             opt_pos.zero_grad()
-            loss = spec_loss(force_p=torch.ones(K, device=DEVICE))
+            loss = spec_loss(force_p=torch.ones(K, device=DEVICE)) + fence_pen()
             loss.backward()
             verts_t.grad[~smask] = 0
             opt_pos.step()
@@ -322,6 +379,13 @@ def main():
     ok, _ = check_watertight(Fa)
     print(f"[base] {BASE_NPZ} V={len(V)} F={len(Fa)} watertight={ok}", flush=True)
 
+    if FENCE and MODE == "64v":
+        global _HULL
+        from hull_field import build_vote_hull
+        _HULL = build_vote_hull(ctx, mvps, normalize_to_range(gv), _gf, V, DEVICE)
+        print(f"[base] hull fence ready pitch={_HULL.pitch:.4f} "
+              f"W_FENCE={W_FENCE}", flush=True)
+
     def iou_fn(vv, ff):
         vt = torch.tensor(np.asarray(vv), dtype=torch.float32, device=DEVICE)
         ft = torch.tensor(np.asarray(ff, dtype=np.int32), dtype=torch.int32,
@@ -357,6 +421,16 @@ def main():
             print(f"[round {rnd}] densified {nst} faces around "
                   f"{len(big)} big blobs watertight={ok}", flush=True)
             assert ok
+        if SUBDIV:
+            # Phase 1g: real resolution at big GREEN sites -- a finger needs
+            # edges shorter than the finger; stellate can't split long edges.
+            big_g = [fi for sz, fi, sg in pre if sg > 0 and sz >= SUBDIV_MIN]
+            if big_g:
+                V, Fa, ne = dlfl_subdivide_arrays(V, Fa, big_g)
+                ok, _ = check_watertight(Fa)
+                print(f"[round {rnd}] subdivided {ne} edges at {len(big_g)} "
+                      f"grow sites V={len(V)} watertight={ok}", flush=True)
+                assert ok
         V, Fa, committed = speculative_round(ctx, V, Fa, gt_sils_t, gt_deps_t,
                                              gt_fgs_t, mvps, me, rnd)
         program += committed

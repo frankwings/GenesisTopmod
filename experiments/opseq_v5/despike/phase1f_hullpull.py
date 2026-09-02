@@ -49,6 +49,13 @@ W_HULL = float(os.environ.get("W_HULL", "20.0"))
 W_QUAL = float(os.environ.get("W_QUAL", "0.01"))
 W_DIFF = float(os.environ.get("W_DIFF", "1.0"))
 RAMP = int(os.environ.get("RAMP", "200"))
+# Phase 1f-c knobs
+HULL_MODE = os.environ.get("HULL_MODE", "npz")   # npz | vote
+NRES_V = int(os.environ.get("NRES_V", "256"))    # vote-hull voxel res
+HIRES = int(os.environ.get("HIRES", "512"))      # vote-hull silhouette res
+VOTE = int(os.environ.get("VOTE", "2"))          # views required to prove "outside"
+ANNEAL = int(os.environ.get("ANNEAL", "200"))    # final steps: hull weight decay
+DEAD_VOX = float(os.environ.get("DEAD_VOX", "1.0"))  # dead zone in voxel units
 OUTD = "/tmp/liou_cow_viz"
 
 torch.manual_seed(0); np.random.seed(0)
@@ -69,9 +76,57 @@ print(f"[p1f] base {BASE_NPZ} V={len(V0)} F={len(Fa)} watertight={ok} "
       f"W_HULL={W_HULL} STEPS={STEPS}", flush=True)
 
 # ---------------------------------------------------------------- hull field
-h = np.load(HULL_NPZ)
-lo, hi, NRES = h["lo"], h["hi"], int(h["nres"])
-gt_hull = h["gt_hull"]
+def build_vote_hull():
+    """Phase 1f-c hull: robust to subpixel-thin structures.
+
+    Old hull (diag_spacecarve) ate 3.05% of GT material (up to 19 voxels deep
+    at the hand) because a finger thinner than one pixel vanishes from a
+    single antialiased silhouette and the 64-view intersection deletes it.
+    Fixes: (1) hard-coverage silhouettes at HIRES=512 (any raster hit =
+    inside), (2) 1px dilation of inside, (3) VOTING -- a voxel is "outside"
+    only if >=VOTE views say so; no single-view veto.
+    """
+    from pipeline.cameras import transform_to_clip
+    gvn = normalize_to_range(gv)
+    gvt = torch.tensor(gvn, dtype=torch.float32, device=DEVICE)
+    gft = torch.tensor(_gf, dtype=torch.int32, device=DEVICE)
+    lo_ = np.minimum(gvn.min(0), V0.min(0)) - 0.02
+    hi_ = np.maximum(gvn.max(0), V0.max(0)) + 0.02
+    fgs = []
+    with torch.no_grad():
+        for i in range(NV):
+            pos = transform_to_clip(gvt, mvps[i])
+            rast, _ = dr.rasterize(ctx, pos, gft, resolution=[HIRES, HIRES])
+            fg = (rast[0, :, :, 3] > 0).float()
+            fg = (F.max_pool2d(fg[None, None], 3, 1, 1)[0, 0] > 0)  # 1px dilate
+            fgs.append(fg)
+        axes = [torch.linspace(float(lo_[a]), float(hi_[a]), NRES_V,
+                               device=DEVICE) for a in range(3)]
+        gx, gy, gz = torch.meshgrid(*axes, indexing="ij")
+        P = torch.stack([gx, gy, gz], -1).view(-1, 3)
+        votes = torch.zeros(P.shape[0], dtype=torch.uint8, device=DEVICE)
+        ones_c = torch.ones(P.shape[0], 1, device=DEVICE)
+        Ph = torch.cat([P, ones_c], 1)
+        for i in range(NV):
+            clip = (mvps[i] @ Ph.T).T
+            w = clip[:, 3].clamp(min=1e-8)
+            x, y = clip[:, 0] / w, clip[:, 1] / w
+            u = ((x + 1) * 0.5 * HIRES).long().clamp(0, HIRES - 1)
+            v = ((y + 1) * 0.5 * HIRES).long().clamp(0, HIRES - 1)
+            inb = (x.abs() <= 1) & (y.abs() <= 1)
+            outside = inb & ~fgs[i][v, u]
+            votes += outside.to(torch.uint8)
+        hull_ = (votes < VOTE).view(NRES_V, NRES_V, NRES_V).cpu().numpy()
+    return lo_, hi_, NRES_V, hull_
+
+if HULL_MODE == "vote":
+    lo, hi, NRES, gt_hull = build_vote_hull()
+    print(f"[p1f] vote-hull NRES={NRES} HIRES={HIRES} VOTE={VOTE} "
+          f"hull_vox={gt_hull.sum()}", flush=True)
+else:
+    h = np.load(HULL_NPZ)
+    lo, hi, NRES = h["lo"], h["hi"], int(h["nres"])
+    gt_hull = h["gt_hull"]
 sp = (hi - lo) / (NRES - 1)                       # per-axis pitch
 dist = distance_transform_edt(~gt_hull, sampling=tuple(sp)).astype(np.float32)
 print(f"[p1f] hull field: NRES={NRES} max_dist={dist.max():.4f} "
@@ -100,14 +155,18 @@ _BARY = torch.tensor([
     [2/3, 1/6, 1/6], [1/6, 2/3, 1/6], [1/6, 1/6, 2/3],
 ], dtype=torch.float32, device=DEVICE)                         # [S,3]
 
+DEAD_W = DEAD_VOX * float(np.max(sp))   # 1f-c dead zone: free within 1 voxel
+                                        # (kills EDT stair-step roughness)
+
 def hull_surface_loss(verts_t, faces_l):
     tri = verts_t[faces_l]                                     # [F,3,3]
     pts = torch.einsum("sk,fkc->fsc", _BARY, tri).reshape(-1, 3)  # [F*S,3]
     d = hull_dist(pts).view(-1, _BARY.shape[0])                # [F,S]
+    pen = F.relu(d - DEAD_W)
     area = 0.5 * torch.cross(tri[:, 1] - tri[:, 0],
                              tri[:, 2] - tri[:, 0], dim=-1).norm(dim=-1)
     w = area.detach() / (area.detach().sum() + 1e-12)
-    return (d.mean(1) * w).sum(), d
+    return (pen.mean(1) * w).sum(), d
 
 # ---------------------------------------------------------------- baseline
 def iou_fn(vv, ff):
@@ -145,9 +204,12 @@ for step in range(STEPS):
         fl = fl + F.l1_loss(diff, gtdf_t[i])
     sl, dl, fl = sl / NV, dl / NV, fl / NV
     wh = W_HULL * min(1.0, (step + 1) / RAMP)
+    if ANNEAL > 0 and step >= STEPS - ANNEAL:   # 1f-c: anneal, let sil polish
+        frac = (STEPS - step) / ANNEAL
+        wh = wh * max(0.1, frac)
     hl, hd_s = hull_surface_loss(verts_t, faces_l)
     hd = hull_dist(verts_t)
-    hl = hl + hd.mean()                       # keep vertex term too
+    hl = hl + F.relu(hd - DEAD_W).mean()        # vertex term, dead-zoned
     loss = (sl + W_DEPTH * dl + W_DIFF * fl
             + W_LAP * laplacian_loss(verts_t, faces_t)
             + W_EDGE * edge_length_loss(verts_t, faces_t)
