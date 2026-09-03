@@ -17,7 +17,7 @@ ctx = dr.RasterizeCudaContext()
 
 def load(p):
     if p == "GT":
-        v, f = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), "armadillo.obj")); return normalize_to_range(v), np.asarray(f)
+        v, f = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), os.environ.get("SHAPE", "armadillo") + ".obj")); return normalize_to_range(v), np.asarray(f)
     if p.endswith(".npz"):
         z = np.load(p); return z["verts"].astype(float), z["tris"].astype(np.int64)
     v, f = load_obj(p); return np.asarray(v, float), np.asarray(f, np.int64)
