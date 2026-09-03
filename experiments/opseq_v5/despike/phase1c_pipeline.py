@@ -136,6 +136,10 @@ def dlfl_subdivide_arrays(V, Fa, fids):
     Real resolution increase: long edges actually get split, unlike stellate.
     """
     V = np.asarray(V, float); Fa = np.asarray(Fa, np.int64)
+    if os.environ.get("GENERIC_OPS") == "1":
+        assert len(fids) == len(Fa), "generic subdivision supports all-faces only"
+        from generic_ops import subdivide_all_np
+        return subdivide_all_np(V, Fa)
     tgt = set(int(f) for f in fids)
     vsets = [set(map(int, f)) for f in Fa]
     for fi in list(tgt):                        # expand to edge-adjacent ring
