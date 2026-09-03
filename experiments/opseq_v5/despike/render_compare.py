@@ -49,6 +49,8 @@ ROWS = [("front", dict(az=180, el=10, ctr=(-0.3, 0.1, -0.3), dist=5.6, fov=40)),
         ("back", dict(az=20, el=15, ctr=(-0.3, 0.1, -0.3), dist=5.6, fov=40)),
         ("head closeup", dict(az=180, el=15, ctr=(-0.1, 1.35, -0.7), dist=2.2, fov=35)),
         ("back closeup", dict(az=10, el=25, ctr=(-0.3, 0.3, 0.3), dist=2.2, fov=35))]
+_rows = os.environ.get("ROWS")           # optional comma list of row names to keep
+if _rows: ROWS = [r for r in ROWS if r[0] in _rows.split(",")]
 out = sys.argv[1]; items = [a.split("=", 1) for a in sys.argv[2:]]
 res = 700; W = res * len(items); H = res * len(ROWS) + 60
 canvas = Image.new("L", (W, H), 255); d = ImageDraw.Draw(canvas)
