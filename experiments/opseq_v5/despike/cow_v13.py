@@ -70,7 +70,7 @@ def fold_loss(verts_t, faces_l, pairs_t):
     return F.relu(-d).pow(2).mean()
 
 
-def build_adj(tris_np, nv):
+def build_adj(tris_np, nv, want_excl=True):
     src, dst = [], []
     es = set()
     for a, b, c in tris_np:
@@ -83,6 +83,8 @@ def build_adj(tris_np, nv):
     dst = torch.tensor(dst, dtype=torch.long, device=DEVICE)
     deg = torch.zeros(nv, device=DEVICE).index_add_(
         0, src, torch.ones_like(src, dtype=torch.float32)).clamp(min=1).unsqueeze(-1)
+    if not want_excl:   # V x V dense masks OOM at >100k verts (phase 6); callers that don't use tube_mask skip it
+        return src, dst, deg, None
     # 2-hop exclusion mask (V x V bool): self + 1-hop + 2-hop
     A = torch.zeros(nv, nv, dtype=torch.bool, device=DEVICE)
     A[src, dst] = True

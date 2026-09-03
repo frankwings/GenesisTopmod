@@ -46,3 +46,16 @@ Honest reading: at equal LOW resolution optimized directly, DMesh is slightly ah
 (0.9894 vs 0.9865). Our advantage comes from coarse-to-fine (DLFL global subdivision +
 in-loop untangle + Taubin) which DMesh cannot do because its representation prunes
 itself back to ~5-9k faces regardless of seed count. Figure: dmesh_dense_compare.png.
+
+## Phase 6: resolution ladder (2026-09-02)
+| step | V / F | ho16 | SI | back dihedral |
+|---|---|---|---|---|
+| golden (36.5k) | 18,253 / 36,502 | 0.9957 | 1.4 % | 7.9° |
+| + partial DLFL subdiv of 1500 largest faces + in-loop 1200 + Taubin×5 (`p6_50k_taubin5`) | 28,396 / 56,788 | **0.9972** | 0.5 % | 7.3° |
+| + global subdiv ×6 (219k f) — ABORTED | 109,508 / 219,012 | (0.9958 before optimizing) | 32 % after 100 steps | — |
+
+Ceiling at 56.8k faces (GT decimated) ≈ 0.999. The 219k run tangled because the mean edge (0.015)
+fell below the 256² supervision pixel size (~0.01): per-pixel losses carry no information at that
+scale. Effective resolution limit for this recipe ≈ 50–60k faces at 256²; go to 512² images first
+to push further. Command: `SUBDIV_TOP=1500 LAP_MULT=3 STEPS=1200 FLIP_EVERY=25 COLLAPSE_EVERY=100
+COLLAPSE_RATIO=0.4 COLLAPSE_MAX=800 SI_PUSH=0.15 BASE_NPZ=<golden> phase4_inloop.py` then Taubin×5.

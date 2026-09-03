@@ -57,7 +57,8 @@ COLLAPSE_EVERY = int(os.environ.get("COLLAPSE_EVERY", "0"))   # 0 = off
 COLLAPSE_RATIO = float(os.environ.get("COLLAPSE_RATIO", "0.3"))
 COLLAPSE_MAX = int(os.environ.get("COLLAPSE_MAX", "300"))
 SI_PUSH = float(os.environ.get("SI_PUSH", "0.0"))   # nudge intersecting pairs apart (x mean edge)
-SUBDIV_ALL = int(os.environ.get("SUBDIV_ALL", "0"))  # Phase 5: global DLFL midpoint subdivision passes before optimizing
+SUBDIV_ALL = int(os.environ.get("SUBDIV_ALL", "0"))
+SUBDIV_TOP = int(os.environ.get("SUBDIV_TOP", "0"))  # Phase 6: DLFL-subdivide only the N largest faces (resolution equalization)  # Phase 5: global DLFL midpoint subdivision passes before optimizing
 LAP_MULT = float(os.environ.get("LAP_MULT", "1.0"))  # Phase 5: fairing strength (back smoothness)
 OUTD = "/tmp/liou_cow_viz"
 os.makedirs(OUTD, exist_ok=True)
@@ -83,6 +84,14 @@ if SUBDIV_ALL > 0:
         V, Fa, ne = dlfl_subdivide_arrays(V, Fa, list(range(len(Fa))))
         wt, _ = check_watertight(Fa); assert wt
         print(f"[p4] global DLFL subdivision: split {ne} edges -> V={len(V)} F={len(Fa)}", flush=True)
+if SUBDIV_TOP > 0:
+    # partial subdivision: the N largest faces (+1-ring, DLFL subdivide_edge + stellate).
+    from phase1c_pipeline import dlfl_subdivide_arrays
+    area = 0.5 * np.linalg.norm(np.cross(V[Fa[:, 1]] - V[Fa[:, 0]], V[Fa[:, 2]] - V[Fa[:, 0]]), axis=1)
+    fids = np.argsort(-area)[:SUBDIV_TOP].tolist()
+    V, Fa, ne = dlfl_subdivide_arrays(V, Fa, fids)
+    wt, _ = check_watertight(Fa); assert wt
+    print(f"[p4] partial DLFL subdivision of {SUBDIV_TOP} largest faces: split {ne} edges -> V={len(V)} F={len(Fa)}", flush=True)
 if MODE == "64v":
     import run_64v
     from run_64v import render_sdd
@@ -175,7 +184,7 @@ sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=STEPS, eta_min=LR_
 
 def rebuild(Fa):
     faces_t = torch.tensor(Fa.astype(np.int32), dtype=torch.int32, device=DEVICE)
-    src, dst, deg, excl = build_adj(Fa.astype(np.int32), int(Fa.max()) + 1)
+    src, dst, deg, excl = build_adj(Fa.astype(np.int32), int(Fa.max()) + 1, want_excl=False)
     pairs_t = torch.tensor(build_pairs(Fa.astype(np.int32)), device=DEVICE)
     return faces_t, faces_t.long(), src, dst, deg, pairs_t
 
