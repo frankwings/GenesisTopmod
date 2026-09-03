@@ -58,7 +58,9 @@ COLLAPSE_RATIO = float(os.environ.get("COLLAPSE_RATIO", "0.3"))
 COLLAPSE_MAX = int(os.environ.get("COLLAPSE_MAX", "300"))
 SI_PUSH = float(os.environ.get("SI_PUSH", "0.0"))   # nudge intersecting pairs apart (x mean edge)
 SUBDIV_ALL = int(os.environ.get("SUBDIV_ALL", "0"))
-SUBDIV_TOP = int(os.environ.get("SUBDIV_TOP", "0"))  # Phase 6: DLFL-subdivide only the N largest faces (resolution equalization)  # Phase 5: global DLFL midpoint subdivision passes before optimizing
+SUBDIV_TOP = int(os.environ.get("SUBDIV_TOP", "0"))
+SNAPSHOT_EVERY = int(os.environ.get("SNAPSHOT_EVERY", "0"))  # render front/back/back-closeup frames every N steps (video)
+SNAPSHOT_DIR = os.environ.get("SNAPSHOT_DIR", f"/tmp/liou_cow_viz/frames_{TAG}")  # Phase 6: DLFL-subdivide only the N largest faces (resolution equalization)  # Phase 5: global DLFL midpoint subdivision passes before optimizing
 LAP_MULT = float(os.environ.get("LAP_MULT", "1.0"))  # Phase 5: fairing strength (back smoothness)
 OUTD = "/tmp/liou_cow_viz"
 os.makedirs(OUTD, exist_ok=True)
@@ -163,6 +165,20 @@ def field_loss(verts_t, faces_l):
     w = area.detach() / (area.detach().sum() + 1e-12)
     return (pen * w).sum() + field_dist(verts_t).mean()
 
+def _snapshot(step, Vn, Fa):
+    from PIL import Image, ImageDraw, ImageFont
+    from viz_render import render as _vr, ROWS as _ROWS
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+    views = [r for r in _ROWS if r[0] in ("front", "back", "back closeup")]
+    res = 512
+    canvas = Image.new("L", (res * len(views), res + 40), 255); d = ImageDraw.Draw(canvas)
+    try: font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+    except Exception: font = ImageFont.load_default()
+    for j, (nm, kw) in enumerate(views):
+        canvas.paste(Image.fromarray(_vr(Vn, Fa, res=res, **kw)), (j * res, 40))
+    d.text((10, 8), f"{TAG}  step {step:4d}/{STEPS}   V={len(Vn)} F={len(Fa)}", fill=0, font=font)
+    canvas.save(f"{SNAPSHOT_DIR}/frame_{step:05d}.png")
+
 def iou_fn(vv, ff):
     vt = torch.tensor(np.asarray(vv), dtype=torch.float32, device=DEVICE)
     ft = torch.tensor(np.asarray(ff, np.int32), dtype=torch.int32, device=DEVICE)
@@ -260,6 +276,8 @@ for step in range(STEPS):
                     verts_t.data.copy_(torch.tensor(Vn, dtype=torch.float32, device=DEVICE))
                 if nf > 0:
                     faces_t, faces_l, src, dst, deg, pairs_t = rebuild(Fa)
+    if SNAPSHOT_EVERY > 0 and step % SNAPSHOT_EVERY == 0:
+        _snapshot(step, verts_t.detach().cpu().numpy().astype(np.float64), Fa)
     if (step + 1) % 100 == 0:
         Vn = verts_t.detach().cpu().numpy().astype(np.float64)
         s = si_faces(Vn, Fa)
