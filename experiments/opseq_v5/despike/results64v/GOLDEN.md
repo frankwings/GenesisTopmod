@@ -24,3 +24,25 @@ Topology ops are TopMod DLFL only (extrude_face, subdivide_edge, stellate, colla
 | ours 6v pure, same recipe (subdiv + 6-view hull + in-loop + Taubin) | 20,404 / 40,804 | 0.9555 | train 0.9970 -> overfits 6 views; information-limited, not resolution-limited |
 | DMesh 64v default (1000/3000/10000 seeds) | 2,400 / 4,799 | 0.9891 | 75k internal points |
 | DMesh 64v hi-res (3000/10000/25000 seeds) | 2,738 / 5,478 | 0.9894 | 190k internal points; output triangles barely grow (existence thresholding), score plateaus |
+
+## Fair face-count comparison vs DMesh (2026-09-02)
+
+DMesh prunes its own faces: epoch_3 starts at 45k (hires) / 188k (dense_b) faces and its
+existence-probability optimization removes >85% within 500 steps, even with the real
+regularizer set to 0 and reals frozen to 1 every step (`armadillo_64v_dense_{a,b}.yaml`).
+
+| Method | faces | ho16 |
+|---|---|---|
+| DMesh 64v (default, 14k seeds) | 4.8k | 0.9891 |
+| DMesh hires (38k seeds) | 5.5k | 0.9894 |
+| DMesh dense_a (no real reg, frozen reals) | 8.1k | 0.9889 |
+| DMesh dense_b (dense_a + 98k seeds + ud_thresh 1e-2) | 9.2k | 0.9885 |
+| Ours p4c_64 (optimized directly at low res) | 6.3k | 0.9865 |
+| Ours golden decimated (quadric) to 5.5k | 5.5k | 0.9921 |
+| Ours golden decimated (quadric) to 9.2k | 9.2k | 0.9946 |
+| Ours golden | 36.5k | 0.9957 |
+
+Honest reading: at equal LOW resolution optimized directly, DMesh is slightly ahead
+(0.9894 vs 0.9865). Our advantage comes from coarse-to-fine (DLFL global subdivision +
+in-loop untangle + Taubin) which DMesh cannot do because its representation prunes
+itself back to ~5-9k faces regardless of seed count. Figure: dmesh_dense_compare.png.
