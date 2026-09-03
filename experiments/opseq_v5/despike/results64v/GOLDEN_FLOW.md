@@ -166,3 +166,8 @@ Step 4/5/7 的循环内部已经带着 Step 3 的壳损失，所以 Step 2/3/4 �
 Step 4（低模上的 DLFL 清理）不能删——"先清理再细分"是关键顺序。
 最短链 **1 → 4 → 5 → 6**：球→7k 面 DR → 1200 步循环清理(含壳) → 全局细分 + 1200 步循环 → Taubin×5。
 （Step 7/8 二次加密可再 +0.0015。）
+
+### Minimal chain rerun with per-step video (2026-09-03)
+`run_64v` (0.9333) → phase4 1200 (0.9867, SI 26.7 %→1.9 %) → SUBDIV_ALL + 1200 → Taubin×5 → **0.9957**, 18,927 v / 37,850 f,
+SI 2.0 %, back 7.7°. Mesh: `cow_armadillo_min1456_taubin5.npz`. Video (5,410 frames, 64-view mosaic per step):
+share page GenesisTopmod/full_chain_1456_64views.mp4 (87 MB, not in git). Tooling: `viz_snap.py` (SNAPSHOT_DIR env).
