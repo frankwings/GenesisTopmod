@@ -37,6 +37,7 @@ from pipeline.cameras import transform_to_clip, look_at
 from surgery_lib import surgery, _propagate_flag
 from escape_util import escape_mask
 
+import viz_snap
 _SQRT3_4 = 4.0 * (3.0 ** 0.5)
 
 
@@ -186,6 +187,8 @@ def optimize_phase64(ctx, verts_np, tris_np, gt, gtd, gtdiff, mvps, views,
         loss.backward()
         torch.nn.utils.clip_grad_norm_([verts_t], 1.0)
         opt.step(); sched.step()
+        if viz_snap.enabled():
+            viz_snap.snap(ctx, mvps, verts_t.detach().cpu().numpy(), tris_np, f"Stage 1 [{label}] step {step+1}/{steps}", step=step)
         if step % 200 == 0:
             iou = compute_iou_n(render_views_n(ctx, verts_t, faces_t, mvps), gt)
             print(f"  [{label}] {step:4d}/{steps} iou={iou:.4f} "
@@ -261,6 +264,7 @@ def main():
 
     scene = setup_scene(SHAPE, DEVICE)  # only for init icosphere
     v, t = scene["init_verts"], scene["init_tris"]
+    viz_snap.snap(ctx, mvps, v, t, "Stage 1 [init icosphere]", hold=30)
 
     def iou_fn(vv, ff):
         vt = torch.tensor(np.asarray(vv), dtype=torch.float32, device=DEVICE)
@@ -286,12 +290,14 @@ def main():
                    iou_fn=iou_fn, iou_budget=3e-4, global_cap=1.5e-3,
                    max_rounds=8, max_grow=4, escape_fn=escape_fn)
     _set_faces(t)
+    viz_snap.snap(ctx, mvps, v, t, "Stage 1 [despike surgery 1: DLFL collapse of escaped needles]", hold=30)
     v, _ = optimize_phase64(ctx, v, np.asarray(t, np.int32), gt, gtd, gtdiff,
                             mvps, views, 400, "settle", settle=True,
                             use_fold=True, use_tube=True)
     v, t = surgery(np.asarray(v, np.float64), np.asarray(t, np.int64),
                    iou_fn=iou_fn, iou_budget=2e-4, global_cap=6e-4,
                    max_rounds=4, max_grow=4, escape_fn=escape_fn)
+    viz_snap.snap(ctx, mvps, v, t, "Stage 1 [despike surgery 2] -> 7k faces", hold=30)
     iou_final = iou_fn(v, t); t = np.asarray(t, np.int32)
     with open(f"{OUT}/cow_{TAG}.obj", "w") as fh:
         for x, y, z in v: fh.write(f"v {x} {y} {z}\n")

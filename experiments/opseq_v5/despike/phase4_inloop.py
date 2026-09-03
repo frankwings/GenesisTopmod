@@ -60,7 +60,8 @@ SI_PUSH = float(os.environ.get("SI_PUSH", "0.0"))   # nudge intersecting pairs a
 SUBDIV_ALL = int(os.environ.get("SUBDIV_ALL", "0"))
 SUBDIV_TOP = int(os.environ.get("SUBDIV_TOP", "0"))
 SNAPSHOT_EVERY = int(os.environ.get("SNAPSHOT_EVERY", "0"))  # render front/back/back-closeup frames every N steps (video)
-SNAPSHOT_DIR = os.environ.get("SNAPSHOT_DIR", f"/tmp/liou_cow_viz/frames_{TAG}")  # Phase 6: DLFL-subdivide only the N largest faces (resolution equalization)  # Phase 5: global DLFL midpoint subdivision passes before optimizing
+SNAPSHOT_DIR = os.environ.get("SNAPSHOT_DIR", f"/tmp/liou_cow_viz/frames_{TAG}")
+SNAPSHOT_MODE = os.environ.get("SNAPSHOT_MODE", "3")  # "3" = front/back/closeup, "64" = all training cameras mosaic  # Phase 6: DLFL-subdivide only the N largest faces (resolution equalization)  # Phase 5: global DLFL midpoint subdivision passes before optimizing
 LAP_MULT = float(os.environ.get("LAP_MULT", "1.0"))  # Phase 5: fairing strength (back smoothness)
 OUTD = "/tmp/liou_cow_viz"
 os.makedirs(OUTD, exist_ok=True)
@@ -86,6 +87,8 @@ if SUBDIV_ALL > 0:
         V, Fa, ne = dlfl_subdivide_arrays(V, Fa, list(range(len(Fa))))
         wt, _ = check_watertight(Fa); assert wt
         print(f"[p4] global DLFL subdivision: split {ne} edges -> V={len(V)} F={len(Fa)}", flush=True)
+    if os.environ.get("SNAPSHOT_DIR") and SNAPSHOT_EVERY > 0:
+        pass  # (frame written at step 0 by the loop; scene not built yet here)
 if SUBDIV_TOP > 0:
     # partial subdivision: the N largest faces (+1-ring, DLFL subdivide_edge + stellate).
     from phase1c_pipeline import dlfl_subdivide_arrays
@@ -169,6 +172,11 @@ def _snapshot(step, Vn, Fa):
     from PIL import Image, ImageDraw, ImageFont
     from viz_render import render as _vr, ROWS as _ROWS
     os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+    if SNAPSHOT_MODE == "64":
+        if os.environ.get("SNAPSHOT_DIR"):
+            import viz_snap
+            return viz_snap.snap(ctx, mvps, Vn, Fa, f"{os.environ.get('SNAPSHOT_TITLE', TAG)} step {step+1}/{STEPS}", step=step)
+        return _snapshot64(step, Vn, Fa)
     views = [r for r in _ROWS if r[0] in ("front", "back", "back closeup")]
     res = 512
     canvas = Image.new("L", (res * len(views), res + 40), 255); d = ImageDraw.Draw(canvas)
@@ -177,6 +185,31 @@ def _snapshot(step, Vn, Fa):
     for j, (nm, kw) in enumerate(views):
         canvas.paste(Image.fromarray(_vr(Vn, Fa, res=res, **kw)), (j * res, 40))
     d.text((10, 8), f"{TAG}  step {step:4d}/{STEPS}   V={len(Vn)} F={len(Fa)}", fill=0, font=font)
+    canvas.save(f"{SNAPSHOT_DIR}/frame_{step:05d}.png")
+
+def _snapshot64(step, Vn, Fa, res=192, cols=8):
+    """One frame = mosaic of flat-shaded renders from ALL training cameras (8x8 for 64v)."""
+    from PIL import Image, ImageDraw, ImageFont
+    vt = torch.tensor(Vn, dtype=torch.float32, device=DEVICE); ft = torch.tensor(Fa, dtype=torch.int32, device=DEVICE)
+    fn = torch.cross(vt[ft[:, 1].long()] - vt[ft[:, 0].long()], vt[ft[:, 2].long()] - vt[ft[:, 0].long()], dim=1)
+    fn = fn / (fn.norm(dim=1, keepdim=True) + 1e-12)
+    l1 = torch.tensor([0.3, 0.8, 0.5], device=DEVICE); l1 /= l1.norm()
+    l2 = torch.tensor([-0.6, 0.2, -0.8], device=DEVICE); l2 /= l2.norm()
+    sh = 0.3 + 0.45 * (fn @ l1).abs() + 0.25 * (fn @ l2).abs()
+    hom = torch.cat([vt, torch.ones(len(vt), 1, device=DEVICE)], 1)
+    n = len(mvps); rows = (n + cols - 1) // cols
+    canvas = Image.new("L", (cols * res, rows * res + 36), 255)
+    for i in range(n):
+        m = torch.as_tensor(mvps[i]).float().to(DEVICE)
+        rast, _ = dr.rasterize(ctx, (hom @ m.T)[None].contiguous(), ft, (res, res))
+        fid = rast[0, ..., 3].long(); img = torch.ones(res, res, device=DEVICE); msk = fid > 0
+        img[msk] = sh[fid[msk] - 1]
+        canvas.paste(Image.fromarray((img.cpu().numpy()[::-1] * 255).astype(np.uint8)), ((i % cols) * res, 36 + (i // cols) * res))
+    d = ImageDraw.Draw(canvas)
+    try: font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+    except Exception: font = ImageFont.load_default()
+    d.text((10, 6), f"{TAG}  step {step:4d}/{STEPS}   V={len(Vn)} F={len(Fa)}   {n} training views", fill=0, font=font)
+    os.makedirs(SNAPSHOT_DIR, exist_ok=True)
     canvas.save(f"{SNAPSHOT_DIR}/frame_{step:05d}.png")
 
 def iou_fn(vv, ff):

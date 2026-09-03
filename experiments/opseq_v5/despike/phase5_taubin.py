@@ -76,6 +76,10 @@ m = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V), o3d.utility.Vector3
 m = m.filter_smooth_taubin(number_of_iterations=ITERS, lambda_filter=LAM, mu=MU)
 V2 = np.asarray(m.vertices)
 report(f"taubin x{ITERS}", V2, F)
+if os.environ.get("SNAPSHOT_DIR"):
+    import viz_snap
+    viz_snap.snap(ctx, mvps, V, F, f"{os.environ.get('SNAPSHOT_TITLE', 'Taubin')} before", hold=30)
+    viz_snap.snap(ctx, mvps, V2, F, f"{os.environ.get('SNAPSHOT_TITLE', 'Taubin')} x{ITERS} -> FINAL", hold=90)
 out = f"{OUTD}/cow_{SHAPE}_{TAG}.npz"
 np.savez_compressed(out, verts=V2, tris=F)
 with open(out.replace(".npz", ".obj"), "w") as fh:
