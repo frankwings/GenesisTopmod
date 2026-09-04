@@ -59,4 +59,6 @@ ITERS=5 TAG=rockerarm_taubin5 BASE_NPZ=.../cow_rockerarm_rockerarm_p5.npz  pytho
 |---|---|---|---|---|---|
 | rocker-arm | 1 | 1 | 1 | 0.9972 | 0 |
 | 3holes | 3 | 3 | 3 | 0.9959（早期 hull 版 0.9983） | 50 |
-| fertility | 4 | 运行中 | | | |
+| fertility | 4 | 3 | 3 | 0.9878（Taubin 前；Taubin 后 0.9847，细结构被磨） | 25 |
+
+fertility 的第 4 条隧道在训练图里只有 11–15 px（256²），投票壳没有雕出来（面离壳 <4 体素）——低于监督分辨率，需 512² 训练图。

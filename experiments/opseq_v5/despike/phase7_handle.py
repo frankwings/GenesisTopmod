@@ -279,7 +279,7 @@ def open_tunnel_merge(mesh, flist, patch_i, patch_j):
     add_handle(mesh, f1, f2)
     return n
 
-def find_tunnel_by_rays(V, F, min_px=30, prev_handles=()):
+def find_tunnel_by_rays(V, F, min_px=int(os.environ.get("MIN_PX", "30")), prev_handles=()):
     """Image-domain space-carving evidence. In a TRAINING view, a background pixel enclosed by
     foreground (a 2D hole in the GT silhouette) proves free space along its whole ray. If our
     mesh is hit by that ray, the entry and exit faces are the two sides of the membrane that
