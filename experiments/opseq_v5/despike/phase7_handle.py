@@ -352,12 +352,14 @@ for k in range(MAX_HANDLES):
     if DRY:
         print(f"[p7] DRY: best pair {i},{j} out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],2)} {np.round(cen[j],2)}", flush=True); break
     print(f"[p7] add_handle between faces {i},{j}: out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],3)} {np.round(cen[j],3)}", flush=True)
-    with tempfile.NamedTemporaryFile("w", suffix=".obj", delete=False) as fh:
-        for x, y, zz in V: fh.write(f"v {x} {y} {zz}\n")
-        for a, b, c in Fa: fh.write(f"f {a+1} {b+1} {c+1}\n")
-        path = fh.name
-    mesh = from_obj(path); os.unlink(path)
-    faces = list(mesh.iter_faces())
+    def _load_mesh():
+        with tempfile.NamedTemporaryFile("w", suffix=".obj", delete=False) as fh:
+            for x, y, zz in V: fh.write(f"v {x} {y} {zz}\n")
+            for a, b, c in Fa: fh.write(f"f {a+1} {b+1} {c+1}\n")
+            path = fh.name
+        m = from_obj(path); os.unlink(path)
+        return m, list(m.iter_faces())
+    mesh, faces = _load_mesh()
     # membrane vertex sets (front patch of face i, back patch of face j) BEFORE the handle
     if ABSORB:
         comp_, chi_ = membrane_patches(V, Fa)
@@ -371,8 +373,20 @@ for k in range(MAX_HANDLES):
         if comp_.get(j) is None: pj = [j]
         if comp_.get(i) is not None and comp_.get(i) == comp_.get(j):
             print("[p7] entry and exit faces lie in the SAME membrane patch (thin sheet): using single faces", flush=True); pi, pj = [i], [j]
-        nrim = open_tunnel_merge(mesh, faces, pi, pj)
-        print(f"[p7] membranes merged to rim polygons ({len(pi)}+{len(pj)} faces) -> handle with {nrim}-gon rims", flush=True)
+        try:
+            nrim = open_tunnel_merge(mesh, faces, pi, pj)
+            for f in list(mesh.faces.values()):
+                if len(f.vertices()) > 3: dlfl_stellate(mesh, f)
+            _vv, _ff = to_triangle_arrays(mesh)
+            _wt, _nb = check_watertight(np.asarray(_ff, np.int64))
+            if not _wt: raise RuntimeError(f"merge left {_nb} bad edges")
+            print(f"[p7] membranes merged to rim polygons ({len(pi)}+{len(pj)} faces) -> handle with {nrim}-gon rims", flush=True)
+        except Exception as ex:
+            # thin sheets: front/back rims can share vertices -> non-manifold. Fall back to the plain
+            # single-face handle on a fresh mesh (never leave a broken mesh behind).
+            print(f"[p7] merge failed ({ex}); falling back to single-face add_handle", flush=True)
+            mesh, faces = _load_mesh()
+            add_handle(mesh, faces[i], faces[j])
     else:
         add_handle(mesh, faces[i], faces[j])
     if ABSORB:
@@ -382,7 +396,12 @@ for k in range(MAX_HANDLES):
         if len(f.vertices()) > 3: dlfl_stellate(mesh, f)
     vv, ff = to_triangle_arrays(mesh)
     V2, F2 = np.asarray(vv, float), np.asarray(ff, np.int64)
-    wt, nbad = check_watertight(F2); assert wt, nbad
+    wt, nbad = check_watertight(F2)
+    if not wt:
+        print(f"[p7] handle broke watertightness ({nbad} bad edges): blacklisting this blob and continuing", flush=True)
+        prev_handles.append({"mid": None, "blob": _blob if DETECT == "rays" else None})
+        if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
+        continue
     n_before = len(V) if not (ABSORB or OPEN == 'merge') else -1
     if ABSORB or OPEN == 'merge':
         # after collapses vertex order changed: tube verts = those outside the hull among the new mesh
