@@ -6,7 +6,7 @@ set -u
 cd /home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5
 S=$SHAPE; R=${ROUNDS:-6}; cur=$1; LOOP=${LOOP_STEPS:-400}
 export HANDLES_JSON=/tmp/liou_cow_viz/handles_${S}.json; rm -f $HANDLES_JSON /tmp/liou_cow_viz/cow_${S}_${S}_h[0-9]*.npz   # no stale round outputs
-COMMON="FLIP_EVERY=25 COLLAPSE_EVERY=100 COLLAPSE_RATIO=0.5 COLLAPSE_MAX=300 SI_PUSH=0.15"
+COMMON="FLIP_EVERY=25 COLLAPSE_EVERY=100 COLLAPSE_RATIO=0.5 COLLAPSE_FRAC=${COLLAPSE_FRAC:-0.02} SI_PUSH=0.15"
 for r in $(seq 1 $R); do
   [ "${SKIP_ROUNDS:-0}" = "1" ] && break
   echo "##### $S round $r: detect + add_handle on $cur"
@@ -21,7 +21,7 @@ for r in $(seq 1 $R); do
 done
 echo "##### $S: final Stage-4 (1200) -> Stage 5 -> Taubin from $cur"
 env MODE=64v SHAPE=$S TAG=${S}_hfin STEPS=1200 $COMMON BASE_NPZ=$cur python3 despike/phase4_inloop.py 2>&1 | grep "\[final\]\|Traceback\|Error"
-env MODE=64v SHAPE=$S TAG=${S}_p5 SUBDIV_ALL=1 LAP_MULT=3 STEPS=1200 FLIP_EVERY=25 COLLAPSE_EVERY=100 COLLAPSE_RATIO=0.4 COLLAPSE_MAX=600 SI_PUSH=0.15 BASE_NPZ=/tmp/liou_cow_viz/cow_${S}_${S}_hfin.npz python3 despike/phase4_inloop.py 2>&1 | grep "\[final\]\|subdivision\|Traceback\|Error"
+env MODE=64v SHAPE=$S TAG=${S}_p5 SUBDIV_ALL=1 LAP_MULT=3 STEPS=1200 FLIP_EVERY=25 COLLAPSE_EVERY=100 COLLAPSE_RATIO=0.4 COLLAPSE_FRAC=${COLLAPSE_FRAC:-0.02} SI_PUSH=0.15 BASE_NPZ=/tmp/liou_cow_viz/cow_${S}_${S}_hfin.npz python3 despike/phase4_inloop.py 2>&1 | grep "\[final\]\|subdivision\|Traceback\|Error"
 MODE=64v SHAPE=$S ITERS=5 TAG=${S}_taubin5 BASE_NPZ=/tmp/liou_cow_viz/cow_${S}_${S}_p5.npz python3 despike/phase5_taubin.py 2>&1 | grep "taubin\|Traceback"
 python3 - <<PY
 import numpy as np
