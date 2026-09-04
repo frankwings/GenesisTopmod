@@ -34,8 +34,13 @@ TAG = os.environ.get("TAG", f"{SHAPE}_p7")
 BASE_NPZ = os.environ["BASE_NPZ"]
 MAX_HANDLES = int(os.environ.get("MAX_HANDLES", "1"))
 TUBE_SUBDIV = int(os.environ.get("TUBE_SUBDIV", "3"))
-PROJECT = int(os.environ.get("PROJECT", "1"))       # after refinement, project every vertex that is outside the hull onto the hull boundary (deterministic inflate)  # DLFL-subdivide the new tube faces N times so the hull field can inflate a long tube
-OUT_VOX = float(os.environ.get("OUT_VOX", "2.0"))     # both faces must be > this many voxels outside the hull
+PROJECT = int(os.environ.get("PROJECT", "1"))
+EXT_VOX = float(os.environ.get("EXT_VOX", "8.0"))
+MIN_SEP = float(os.environ.get("MIN_SEP", "1.5"))
+PROJ_RADIUS = float(os.environ.get("PROJ_RADIUS", "0.6"))  # also radially project the membrane around the tube (within this radius of the axis) so the mouth eats it; 0 = tube only    # faces closer than this (mean-edge units) are fold/sliver remnants, not a slab   # tunnel must continue hull-free this far beyond BOTH faces (bay vs through-hole)
+DRY = int(os.environ.get("DRY", "0"))
+DETECT = os.environ.get("DETECT", "rays")   # rays = see-through pixels of the training silhouettes (default) | hull = back-to-back faces outside the hull             # 1 = detect and report only       # after refinement, project every vertex that is outside the hull onto the hull boundary (deterministic inflate)  # DLFL-subdivide the new tube faces N times so the hull field can inflate a long tube
+OUT_VOX = float(os.environ.get("OUT_VOX", "4.0"))     # both faces must be > this many voxels outside the hull
 FACE_COS = float(os.environ.get("FACE_COS", "-0.5"))  # n_i . n_j below this (facing each other)
 MAX_SEP = float(os.environ.get("MAX_SEP", "100.0"))   # max centroid separation (mean-edge units); thick slabs need long tubes (3holes: 12 edges)
 OUTD = "/tmp/liou_cow_viz"
@@ -76,7 +81,7 @@ def find_tunnel_pairs(V, F):
         for j in cand[a + 1:]:
             if len(set(F[i]) & set(F[j])): continue                   # must not share vertices
             v = cen[j] - cen[i]; L = np.linalg.norm(v)
-            if L > MAX_SEP * me or L < 1e-6: continue
+            if L > MAX_SEP * me or L < MIN_SEP * me: continue
             if n[i] @ n[j] > FACE_COS: continue                          # facing each other
             # membrane = thin slab of OUR volume inside the GT tunnel: the two faces are
             # back-to-back, outward normals point AWAY from each other
@@ -89,6 +94,11 @@ def find_tunnel_pairs(V, F):
                 r = o3d.core.Tensor(np.concatenate([(cen[i] + 0.02 * L * v / L)[None], (v / L)[None]], 1).astype(np.float32))
                 hit = _scene.cast_rays(r)["t_hit"].numpy()[0]
                 if np.isfinite(hit) and hit < L * 0.98: continue
+            # bay vs tunnel: a real through-hole keeps going (hull-free) beyond both faces;
+            # an unfilled bay has hull material right behind its bottom face (fertility: 7 handles vs GT 4)
+            ext = np.linspace(0.0, EXT_VOX * pitch, 9)[1:]
+            back = cen[i] - ext[:, None] * (v / L); fwd = cen[j] + ext[:, None] * (v / L)
+            if (hdist(back) < 0.5 * pitch).any() or (hdist(fwd) < 0.5 * pitch).any(): continue
             pairs.append((min(d[i], d[j]) / pitch, -L / me, int(i), int(j)))
     pairs.sort(reverse=True)
     return pairs, cen, d
@@ -114,7 +124,10 @@ def radial_project(V, a0, u, L, tube_verts):
     V = V.copy(); rel = V - a0; t = rel @ u
     radial = rel - t[:, None] * u; r = np.linalg.norm(radial, axis=1)
     d = hdist(V)
-    near = (d > 0.5 * pitch) & np.isin(np.arange(len(V)), list(tube_verts))   # tube only; the surrounding dimple is left to the DR loop
+    is_tube = np.isin(np.arange(len(V)), list(tube_verts))
+    # membrane remnants left around the mouth re-trigger the tunnel test (fertility: 7 handles vs 4);
+    # eat them into the mouth by projecting everything outside the hull near the axis radially too
+    near = (d > 0.5 * pitch) & (is_tube | ((r < PROJ_RADIUS) & (t > -0.2 * L) & (t < 1.2 * L)))
     idx = np.where(near)[0]
     if len(idx) == 0: return V, 0
     perp1 = np.cross(u, [1.0, 0, 0]); perp1 = perp1 if np.linalg.norm(perp1) > 0.1 else np.cross(u, [0, 1.0, 0]); perp1 /= np.linalg.norm(perp1)
@@ -131,13 +144,67 @@ def radial_project(V, a0, u, L, tube_verts):
     V[idx] = V[idx] + steps[first][:, None] * dirs
     return V, len(idx)
 
+
+def find_tunnel_by_rays(V, F, min_px=30):
+    """Image-domain space-carving evidence. In a TRAINING view, a background pixel enclosed by
+    foreground (a 2D hole in the GT silhouette) proves free space along its whole ray. If our
+    mesh is hit by that ray, the entry and exit faces are the two sides of the membrane that
+    blocks the tunnel -> add_handle(entry, exit). Holes are ranked by pixel area; the ray is
+    taken at the hole's centroid (plus a few fallbacks inside the blob)."""
+    import open3d as o3d
+    from scipy import ndimage
+    sc = o3d.t.geometry.RaycastingScene()
+    sc.add_triangles(o3d.t.geometry.TriangleMesh(o3d.core.Tensor(V.astype(np.float32)), o3d.core.Tensor(F.astype(np.int32))))
+    gtn = np.asarray(gt); H, W = gtn.shape[1:]
+    cands = []
+    for k in range(len(gtn)):
+        fg = gtn[k] < 128
+        lab, n = ndimage.label(~fg)
+        border = set(np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]])))
+        for c in range(1, n + 1):
+            if c in border: continue
+            m = lab == c; area = int(m.sum())
+            if area < min_px: continue
+            rr, cc = np.where(m); order = np.argsort((rr - rr.mean())**2 + (cc - cc.mean())**2)
+            cands.append((area, k, rr[order[:5]], cc[order[:5]]))
+    cands.sort(key=lambda x: -x[0])
+    print(f"[p7] see-through blobs >= {min_px}px across training views: {len(cands)}", flush=True)
+    inv = [np.linalg.inv(np.asarray(torch.as_tensor(m).cpu().numpy(), np.float64)) for m in mvps]
+    for area, k, rr, cc in cands:
+        for r_, c_ in zip(rr, cc):
+            x = (c_ + 0.5) / W * 2 - 1; y = (r_ + 0.5) / H * 2 - 1
+            p0 = inv[k] @ np.array([x, y, -1.0, 1.0]); p1 = inv[k] @ np.array([x, y, 1.0, 1.0])
+            p0 = p0[:3] / p0[3]; p1 = p1[:3] / p1[3]; dvec = p1 - p0; dvec /= np.linalg.norm(dvec)
+            ray = o3d.core.Tensor(np.concatenate([p0, dvec])[None].astype(np.float32))
+            h1 = sc.cast_rays(ray); t1 = float(h1["t_hit"].numpy()[0])
+            if not np.isfinite(t1): continue
+            fi = int(h1["primitive_ids"].numpy()[0])
+            ray2 = o3d.core.Tensor(np.concatenate([p1, -dvec])[None].astype(np.float32))
+            h2 = sc.cast_rays(ray2); t2 = float(h2["t_hit"].numpy()[0])
+            if not np.isfinite(t2): continue
+            fj = int(h2["primitive_ids"].numpy()[0])
+            if fi == fj or (set(F[fi]) & set(F[fj])): continue
+            ci = V[F[fi]].mean(0); cj = V[F[fj]].mean(0)
+            print(f"[p7] ray evidence: view {k}, hole {area}px, entry face {fi} exit face {fj}, sep {np.linalg.norm(cj-ci):.3f}", flush=True)
+            return fi, fj, ci, cj
+    return None
+
 report("base", V, Fa)
 n_added = 0
 for k in range(MAX_HANDLES):
-    pairs, cen, d = find_tunnel_pairs(V, Fa)
-    print(f"[p7] tunnel-evidence pairs: {len(pairs)}", flush=True)
-    if not pairs: break
-    score, negL, i, j = pairs[0]
+    if DETECT == "rays":
+        hit = find_tunnel_by_rays(V, Fa)
+        if hit is None: print("[p7] tunnel-evidence pairs: 0", flush=True); break
+        i, j, _ci, _cj = hit
+        tri = V[Fa]; cen = tri.mean(1); d = hdist(cen); negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
+        print(f"[p7] tunnel-evidence pairs: 1 (ray)", flush=True)
+    else:
+        pairs, cen, d = find_tunnel_pairs(V, Fa)
+        print(f"[p7] tunnel-evidence pairs: {len(pairs)}", flush=True)
+        if not pairs: break
+        score, negL, i, j = pairs[0]
+    if DRY:
+        print(f"[p7] DRY: best pair {i},{j} out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],2)} {np.round(cen[j],2)}", flush=True); break
     print(f"[p7] add_handle between faces {i},{j}: out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],3)} {np.round(cen[j],3)}", flush=True)
     with tempfile.NamedTemporaryFile("w", suffix=".obj", delete=False) as fh:
         for x, y, zz in V: fh.write(f"v {x} {y} {zz}\n")
