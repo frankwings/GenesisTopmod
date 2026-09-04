@@ -33,13 +33,15 @@ SHAPE = os.environ.get("SHAPE", "rockerarm")
 TAG = os.environ.get("TAG", f"{SHAPE}_p7")
 BASE_NPZ = os.environ["BASE_NPZ"]
 MAX_HANDLES = int(os.environ.get("MAX_HANDLES", "1"))
-TUBE_SUBDIV = int(os.environ.get("TUBE_SUBDIV", "3"))
-PROJECT = int(os.environ.get("PROJECT", "1"))
+TUBE_SUBDIV = int(os.environ.get("TUBE_SUBDIV", "0"))
+PROJECT = int(os.environ.get("PROJECT", "0"))
 EXT_VOX = float(os.environ.get("EXT_VOX", "8.0"))
 MIN_SEP = float(os.environ.get("MIN_SEP", "1.5"))
 PROJ_RADIUS = float(os.environ.get("PROJ_RADIUS", "0.6"))  # also radially project the membrane around the tube (within this radius of the axis) so the mouth eats it; 0 = tube only    # faces closer than this (mean-edge units) are fold/sliver remnants, not a slab   # tunnel must continue hull-free this far beyond BOTH faces (bay vs through-hole)
 DRY = int(os.environ.get("DRY", "0"))
 DETECT = os.environ.get("DETECT", "rays")
+ABSORB = int(os.environ.get("ABSORB", "0"))
+OPEN = os.environ.get("OPEN", "merge")   # merge = collapse membrane interior verts to the rim, delete interior edges -> rim polygon, add_handle(rim1, rim2)   # after add_handle, eat the blocking membrane into the mouth by DLFL collapses (mouth ring grows to the membrane rim)
 HANDLES_JSON = os.environ.get("HANDLES_JSON", "")     # persisted list of handle midpoints across rounds (one handle per tunnel)
 R_DEDUP = float(os.environ.get("R_DEDUP", "0.3"))      # a new candidate closer than this to an existing handle is the SAME tunnel -> skip   # rays = see-through pixels of the training silhouettes (default) | hull = back-to-back faces outside the hull             # 1 = detect and report only       # after refinement, project every vertex that is outside the hull onto the hull boundary (deterministic inflate)  # DLFL-subdivide the new tube faces N times so the hull field can inflate a long tube
 OUT_VOX = float(os.environ.get("OUT_VOX", "4.0"))     # both faces must be > this many voxels outside the hull
@@ -177,6 +179,106 @@ def membrane_patches(V, F):
         chi[root] = len(verts) - len(edges) + len(fs)
     return comp, chi
 
+
+def absorb_membrane(mesh, ring_ids, membrane_ids, max_iter=100000):
+    """Cut the membrane from the mouth outward: repeatedly collapse an edge (ring vertex, membrane
+    vertex) with DLFL collapse_edge_tri, survivor placed at the membrane vertex -> the mouth ring
+    advances one vertex per collapse until it reaches the membrane rim (which lies on the hull =
+    tunnel wall). Euler characteristic preserved (genus fixed by the handle), manifold preserved."""
+    from topmod.high_level_ops import collapse_edge_tri
+    vlist = list(mesh.vertices.values())
+    ring = set(id(vlist[i]) for i in ring_ids)
+    memb = set(id(vlist[i]) for i in membrane_ids) - ring
+    n = 0; stuck = set(); progress = True
+    while progress and n < max_iter:
+        progress = False
+        for v in list(mesh.vertices.values()):
+            if id(v) not in ring or v.id not in mesh.vertices: continue
+            for h in list(v.outgoing_halfedges()):
+                u = h.twin.origin if h.twin else None
+                if u is None or id(u) not in memb or h.edge is None or h.edge.id in stuck: continue
+                ux, uy, uz = u.x, u.y, u.z
+                sv = collapse_edge_tri(mesh, h.edge)
+                if sv is None: stuck.add(h.edge.id); continue
+                sv.x, sv.y, sv.z = ux, uy, uz
+                memb.discard(id(u)); memb.discard(id(sv)); ring.add(id(sv))
+                n += 1; progress = True
+                break
+    return n, len(memb)
+
+
+def _is_boundary(v, faces):
+    for h in v.outgoing_halfedges():
+        if h.face is None or id(h.face) not in faces: return True
+    return False
+
+def membrane_to_polygon(mesh, flist, patch_face_idx):
+    """Turn a membrane patch (disk of triangles) into ONE polygon face whose boundary is the
+    membrane rim: (1) DLFL-collapse every interior vertex into a rim neighbour (survivor placed
+    at the rim vertex), (2) delete_edge on every edge shared by two patch faces. Manifold and
+    Euler characteristic preserved throughout."""
+    from topmod.high_level_ops import collapse_edge_tri
+    from topmod.operators import delete_edge
+    faces = {id(flist[f]): flist[f] for f in patch_face_idx}
+    for _ in range(50):
+        interior = [v for v in {id(v): v for f in faces.values() for v in f.vertices()}.values()
+                    if v.id in mesh.vertices and not _is_boundary(v, faces)]
+        if not interior: break
+        moved = False
+        for v in interior:
+            if v.id not in mesh.vertices: continue
+            for pref in (True, False):
+                ok = False
+                for h in list(v.outgoing_halfedges()):
+                    u = h.twin.origin if h.twin else None
+                    if u is None or h.edge is None: continue
+                    if pref and not _is_boundary(u, faces): continue
+                    ux, uy, uz = u.x, u.y, u.z
+                    fa, fb = h.face, h.twin.face
+                    sv = collapse_edge_tri(mesh, h.edge)
+                    if sv is None: continue
+                    sv.x, sv.y, sv.z = ux, uy, uz; ok = True; moved = True
+                    for f in (fa, fb):
+                        if f is not None and f.id not in mesh.faces: faces.pop(id(f), None)
+                    break
+                if ok: break
+        if not moved: break
+    faces = {k: f for k, f in faces.items() if f.id in mesh.faces}
+    progress = True
+    while progress and len(faces) > 1:
+        progress = False
+        for e in list(mesh.edges.values()):
+            if e.id not in mesh.edges: continue
+            fa, fb = e.he0.face, e.he1.face
+            if fa is None or fb is None or fa is fb: continue
+            if id(fa) in faces and id(fb) in faces:
+                nf = delete_edge(mesh, e)
+                faces.pop(id(fa), None); faces.pop(id(fb), None); faces[id(nf)] = nf
+                progress = True
+    assert len(faces) == 1, f"membrane did not merge into one polygon ({len(faces)} left)"
+    return next(iter(faces.values()))
+
+def open_tunnel_merge(mesh, flist, patch_i, patch_j):
+    """membrane_i -> rim polygon, membrane_j -> rim polygon, equalize vertex counts by DLFL
+    subdivide_edge on the smaller rim, align the start vertices, add_handle(rim_i, rim_j)."""
+    from topmod.high_level_ops import subdivide_edge as dlfl_subdivide_edge
+    f1 = membrane_to_polygon(mesh, flist, patch_i)
+    f2 = membrane_to_polygon(mesh, flist, patch_j)
+    def nverts(f): return len(list(f.halfedges()))
+    while nverts(f1) != nverts(f2):
+        small = f1 if nverts(f1) < nverts(f2) else f2
+        hes = list(small.halfedges())
+        longest = max(hes, key=lambda h: (h.origin.x - h.twin.origin.x)**2 + (h.origin.y - h.twin.origin.y)**2 + (h.origin.z - h.twin.origin.z)**2)
+        dlfl_subdivide_edge(mesh, longest.edge)
+    n = nverts(f1)
+    # align: pair verts1[0] with the rim-2 vertex nearest to it (add_handle pairs verts1[t] with reversed verts2[t])
+    hes1 = list(f1.halfedges()); v0 = hes1[0].origin
+    hes2 = list(f2.halfedges())
+    k = min(range(n), key=lambda t: (hes2[t].origin.x - v0.x)**2 + (hes2[t].origin.y - v0.y)**2 + (hes2[t].origin.z - v0.z)**2)
+    f2.he = hes2[(k + 1) % n]          # reversed list index n-1 -> hes2[k].origin pairs with v0
+    add_handle(mesh, f1, f2)
+    return n
+
 def find_tunnel_by_rays(V, F, min_px=30, prev_handles=()):
     """Image-domain space-carving evidence. In a TRAINING view, a background pixel enclosed by
     foreground (a 2D hole in the GT silhouette) proves free space along its whole ray. If our
@@ -205,6 +307,9 @@ def find_tunnel_by_rays(V, F, min_px=30, prev_handles=()):
     print(f"[p7] see-through blobs >= {min_px}px across training views: {len(cands)}", flush=True)
     inv = [np.linalg.inv(np.asarray(torch.as_tensor(m).cpu().numpy(), np.float64)) for m in mvps]
     for area, k, rr, cc in cands:
+        key = [int(k), int(rr[0]), int(cc[0])]
+        if any(h.get("blob") == key for h in prev_handles if isinstance(h, dict)):
+            continue   # this see-through blob already got its handle (cascade guard: flaps / narrow tubes)
         for r_, c_ in zip(rr, cc):
             x = (c_ + 0.5) / W * 2 - 1; y = (r_ + 0.5) / H * 2 - 1
             p0 = inv[k] @ np.array([x, y, -1.0, 1.0]); p1 = inv[k] @ np.array([x, y, 1.0, 1.0])
@@ -225,7 +330,7 @@ def find_tunnel_by_rays(V, F, min_px=30, prev_handles=()):
                 print(f"[p7]   skip view {k} hole {area}px: membrane patches chi={None if ki is None else chi[ki]},{None if kj is None else chi[kj]} (not disks -> tunnel already pierced / not a membrane)", flush=True)
                 continue
             print(f"[p7] ray evidence: view {k}, hole {area}px, entry face {fi} exit face {fj}, sep {np.linalg.norm(cj-ci):.3f}", flush=True)
-            return fi, fj, ci, cj
+            return fi, fj, ci, cj, key
     return None
 
 report("base", V, Fa)
@@ -236,7 +341,7 @@ for k in range(MAX_HANDLES):
     if DETECT == "rays":
         hit = find_tunnel_by_rays(V, Fa, prev_handles=prev_handles)
         if hit is None: print("[p7] tunnel-evidence pairs: 0", flush=True); break
-        i, j, _ci, _cj = hit
+        i, j, _ci, _cj, _blob = hit
         tri = V[Fa]; cen = tri.mean(1); d = hdist(cen); negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
         print(f"[p7] tunnel-evidence pairs: 1 (ray)", flush=True)
     else:
@@ -253,15 +358,37 @@ for k in range(MAX_HANDLES):
         path = fh.name
     mesh = from_obj(path); os.unlink(path)
     faces = list(mesh.iter_faces())
-    add_handle(mesh, faces[i], faces[j])
+    # membrane vertex sets (front patch of face i, back patch of face j) BEFORE the handle
+    if ABSORB:
+        comp_, chi_ = membrane_patches(V, Fa)
+        memb_faces = [f for f, r in comp_.items() if r in (comp_.get(i), comp_.get(j))]
+        memb_ids = set(int(x) for f in memb_faces for x in Fa[f])
+        ring_ids = set(int(x) for x in Fa[i]) | set(int(x) for x in Fa[j])
+    if OPEN == "merge":
+        comp_, chi_ = membrane_patches(V, Fa)
+        pi = [f for f, r in comp_.items() if r == comp_.get(i)]; pj = [f for f, r in comp_.items() if r == comp_.get(j)]
+        if comp_.get(i) is None: pi = [i]
+        if comp_.get(j) is None: pj = [j]
+        if comp_.get(i) is not None and comp_.get(i) == comp_.get(j):
+            print("[p7] entry and exit faces lie in the SAME membrane patch (thin sheet): using single faces", flush=True); pi, pj = [i], [j]
+        nrim = open_tunnel_merge(mesh, faces, pi, pj)
+        print(f"[p7] membranes merged to rim polygons ({len(pi)}+{len(pj)} faces) -> handle with {nrim}-gon rims", flush=True)
+    else:
+        add_handle(mesh, faces[i], faces[j])
+    if ABSORB:
+        n_abs, left = absorb_membrane(mesh, ring_ids, memb_ids)
+        print(f"[p7] membrane absorbed into the mouth: {n_abs} DLFL collapses ({len(memb_ids)} membrane verts, {left} left)", flush=True)
     for f in list(mesh.faces.values()):
         if len(f.vertices()) > 3: dlfl_stellate(mesh, f)
     vv, ff = to_triangle_arrays(mesh)
     V2, F2 = np.asarray(vv, float), np.asarray(ff, np.int64)
     wt, nbad = check_watertight(F2); assert wt, nbad
-    assert np.allclose(V2[:len(V)], V, atol=1e-9)
-    n_before = len(V)
-    tube_verts = set(map(int, Fa[i])) | set(map(int, Fa[j])) | set(range(n_before, len(V2)))
+    n_before = len(V) if not (ABSORB or OPEN == 'merge') else -1
+    if ABSORB or OPEN == 'merge':
+        # after collapses vertex order changed: tube verts = those outside the hull among the new mesh
+        d2 = hdist(V2); tube_verts = set(np.where(d2 > 0.5 * pitch)[0].tolist())
+    else:
+        tube_verts = set(map(int, Fa[i])) | set(map(int, Fa[j])) | set(range(n_before, len(V2)))
     V, Fa = V2, F2
     a0 = cen[i]; u = cen[j] - cen[i]; L_ = float(np.linalg.norm(u)); u = u / L_   # tunnel axis from the two face centroids
     if PROJECT:
@@ -281,7 +408,7 @@ for k in range(MAX_HANDLES):
         if PROJECT:
             V, mv = radial_project(V, a0, u, L_, tube_verts); print(f"[p7] radial projection: moved {mv} verts", flush=True)
     n_added += 1
-    prev_handles.append(((cen[i] + cen[j]) / 2).tolist())
+    prev_handles.append({"mid": ((cen[i] + cen[j]) / 2).tolist(), "blob": _blob if DETECT == "rays" else None})
     if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
     report(f"after handle {n_added}", V, Fa)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
