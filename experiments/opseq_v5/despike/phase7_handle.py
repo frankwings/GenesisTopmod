@@ -147,6 +147,36 @@ def radial_project(V, a0, u, L, tube_verts):
     return V, len(idx)
 
 
+
+def membrane_patches(V, F):
+    """Connected components (edge adjacency) of faces lying outside the voting hull, with the
+    Euler characteristic of each patch. A membrane that blocks a tunnel is a topological DISK
+    (chi = 1). Once a handle pierces it, the patch becomes an annulus (chi = 0): tunnel already open."""
+    from collections import defaultdict
+    tri = V[F]; cen = tri.mean(1); d = hdist(cen)
+    out = np.where(d > OUT_VOX * pitch)[0]
+    if len(out) == 0: return {}, {}
+    em = defaultdict(list)
+    for fi in out:
+        a, b, c = F[fi]
+        for e in ((a, b), (b, c), (c, a)): em[(min(e), max(e))].append(fi)
+    parent = {int(f): int(f) for f in out}
+    def find(x):
+        while parent[x] != x: parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    for fs in em.values():
+        for f2 in fs[1:]: parent[find(int(fs[0]))] = find(int(f2))
+    comp = {int(f): find(int(f)) for f in out}
+    chi = {}
+    for root in set(comp.values()):
+        fs = [f for f, r in comp.items() if r == root]
+        verts = set(); edges = set()
+        for f in fs:
+            a, b, c = map(int, F[f]); verts |= {a, b, c}
+            for e in ((a, b), (b, c), (c, a)): edges.add((min(e), max(e)))
+        chi[root] = len(verts) - len(edges) + len(fs)
+    return comp, chi
+
 def find_tunnel_by_rays(V, F, min_px=30, prev_handles=()):
     """Image-domain space-carving evidence. In a TRAINING view, a background pixel enclosed by
     foreground (a 2D hole in the GT silhouette) proves free space along its whole ray. If our
@@ -170,6 +200,8 @@ def find_tunnel_by_rays(V, F, min_px=30, prev_handles=()):
             rr, cc = np.where(m); order = np.argsort((rr - rr.mean())**2 + (cc - cc.mean())**2)
             cands.append((area, k, rr[order[:5]], cc[order[:5]]))
     cands.sort(key=lambda x: -x[0])
+    comp, chi = membrane_patches(V, F)
+    print(f"[p7] outside-hull membrane patches: {len(chi)} (disks: {sum(1 for c in chi.values() if c == 1)})", flush=True)
     print(f"[p7] see-through blobs >= {min_px}px across training views: {len(cands)}", flush=True)
     inv = [np.linalg.inv(np.asarray(torch.as_tensor(m).cpu().numpy(), np.float64)) for m in mvps]
     for area, k, rr, cc in cands:
@@ -187,9 +219,11 @@ def find_tunnel_by_rays(V, F, min_px=30, prev_handles=()):
             fj = int(h2["primitive_ids"].numpy()[0])
             if fi == fj or (set(F[fi]) & set(F[fj])): continue
             ci = V[F[fi]].mean(0); cj = V[F[fj]].mean(0)
-            mid = (ci + cj) / 2
-            if any(np.linalg.norm(mid - np.asarray(h)) < R_DEDUP for h in prev_handles):
-                continue   # same tunnel as an earlier handle (seen from another view / remnant membrane): one handle per tunnel
+            # topological one-handle-per-tunnel rule: both membrane patches must still be disks
+            ki, kj = comp.get(fi), comp.get(fj)
+            if ki is None or kj is None or chi[ki] != 1 or chi[kj] != 1:
+                print(f"[p7]   skip view {k} hole {area}px: membrane patches chi={None if ki is None else chi[ki]},{None if kj is None else chi[kj]} (not disks -> tunnel already pierced / not a membrane)", flush=True)
+                continue
             print(f"[p7] ray evidence: view {k}, hole {area}px, entry face {fi} exit face {fj}, sep {np.linalg.norm(cj-ci):.3f}", flush=True)
             return fi, fj, ci, cj
     return None
