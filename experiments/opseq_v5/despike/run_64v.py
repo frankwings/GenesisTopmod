@@ -282,6 +282,13 @@ def main():
     v, t = midpoint_subdivide(v, t); _set_faces(t)
     v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800, "cc3",
                             settle=True, use_tube=True)
+    if os.environ.get("STOP_AFTER") == "cc3":
+        # early-hole experiment: hand the cc3 mesh (1.9k faces) to the handle stage before any further subdivision
+        t = np.asarray(t, np.int32)
+        np.savez(f"{OUT}/cow_{TAG}.npz", verts=np.asarray(v, np.float64), tris=t)
+        ho, hair, mb = heldout_exam(ctx, v, t)
+        print(f"[run_64v] STOP_AFTER=cc3: saved cow_{TAG}.npz V={len(v)} F={len(t)} ho16={ho:.4f} hair={hair}", flush=True)
+        return
     v, t = midpoint_subdivide(v, t); _set_faces(t)
     v, iou_train = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800,
                                     "cc4", settle=True, use_fold=True, use_tube=True)
