@@ -129,7 +129,7 @@ def densify_faces(V, Fa, fids):
     return V2, F2, len(tgt)
 
 
-def dlfl_subdivide_arrays(V, Fa, fids):
+def dlfl_subdivide_arrays(V, Fa, fids, expand_ring=True):
     """Phase 1g: DLFL midpoint subdivision of faces fids + 1-ring.
     subdivide_edge every edge of the region, then triangulate all non-tri
     faces (fan from a midpoint would be degenerate; triangulate_face is not).
@@ -142,7 +142,7 @@ def dlfl_subdivide_arrays(V, Fa, fids):
         return subdivide_all_np(V, Fa)
     tgt = set(int(f) for f in fids)
     vsets = [set(map(int, f)) for f in Fa]
-    for fi in list(tgt):                        # expand to edge-adjacent ring
+    for fi in (list(tgt) if expand_ring else []):   # expand to edge-adjacent ring
         for j, vs in enumerate(vsets):
             if j != fi and len(vsets[fi] & vs) == 2:
                 tgt.add(j)

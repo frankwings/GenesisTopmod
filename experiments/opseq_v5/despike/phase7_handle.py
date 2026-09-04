@@ -33,6 +33,8 @@ SHAPE = os.environ.get("SHAPE", "rockerarm")
 TAG = os.environ.get("TAG", f"{SHAPE}_p7")
 BASE_NPZ = os.environ["BASE_NPZ"]
 MAX_HANDLES = int(os.environ.get("MAX_HANDLES", "1"))
+TUBE_SUBDIV = int(os.environ.get("TUBE_SUBDIV", "3"))
+PROJECT = int(os.environ.get("PROJECT", "1"))       # after refinement, project every vertex that is outside the hull onto the hull boundary (deterministic inflate)  # DLFL-subdivide the new tube faces N times so the hull field can inflate a long tube
 OUT_VOX = float(os.environ.get("OUT_VOX", "2.0"))     # both faces must be > this many voxels outside the hull
 FACE_COS = float(os.environ.get("FACE_COS", "-0.5"))  # n_i . n_j below this (facing each other)
 MAX_SEP = float(os.environ.get("MAX_SEP", "100.0"))   # max centroid separation (mean-edge units); thick slabs need long tubes (3holes: 12 edges)
@@ -82,6 +84,44 @@ def find_tunnel_pairs(V, F):
     pairs.sort(reverse=True)
     return pairs, cen, d
 
+
+def project_to_hull(V, iters=3):
+    """Hard space-carving step: a vertex outside the voting hull is provably misplaced;
+    move it along -grad(dist) onto the hull boundary (trilinear field, few iterations)."""
+    P = torch.tensor(V, dtype=torch.float32, device=DEVICE); moved = 0
+    for it in range(iters):
+        P = P.detach().requires_grad_(True)
+        dd = HF.dist(P); m = dd > 0.5 * pitch
+        if not m.any(): break
+        g, = torch.autograd.grad(dd.sum(), P); g = g / (g.norm(dim=1, keepdim=True) + 1e-9)
+        P = P.detach(); P[m] = P[m] - dd[m, None] * g[m]; moved = max(moved, int(m.sum()))
+    return P.detach().cpu().numpy().astype(np.float64), moved
+
+
+def radial_project(V, a0, u, L, tube_verts):
+    """Vertices in the tunnel near its medial axis have an ill-defined EDT gradient (it flips
+    from vertex to vertex -> faces cross the tunnel and cap it). Instead march each outside
+    vertex RADIALLY away from the tunnel axis (a0 + t*u) until it reaches the hull boundary."""
+    V = V.copy(); rel = V - a0; t = rel @ u
+    radial = rel - t[:, None] * u; r = np.linalg.norm(radial, axis=1)
+    d = hdist(V)
+    near = (d > 0.5 * pitch) & np.isin(np.arange(len(V)), list(tube_verts))   # tube only; the surrounding dimple is left to the DR loop
+    idx = np.where(near)[0]
+    if len(idx) == 0: return V, 0
+    perp1 = np.cross(u, [1.0, 0, 0]); perp1 = perp1 if np.linalg.norm(perp1) > 0.1 else np.cross(u, [0, 1.0, 0]); perp1 /= np.linalg.norm(perp1)
+    perp2 = np.cross(u, perp1)
+    dirs = radial[idx] / (r[idx, None] + 1e-12)
+    deg = r[idx] < 0.5 * pitch
+    ang = 2 * np.pi * (idx[deg] % 7) / 7.0
+    dirs[deg] = np.cos(ang)[:, None] * perp1 + np.sin(ang)[:, None] * perp2
+    steps = np.arange(0.0, 0.5, 0.5 * pitch)
+    P = V[idx][:, None, :] + steps[None, :, None] * dirs[:, None, :]
+    dd = hdist(P.reshape(-1, 3)).reshape(len(idx), len(steps))
+    inside = dd <= 0.5 * pitch
+    first = np.where(inside.any(1), inside.argmax(1), 0)   # no hull boundary found along the ray (e.g. through the mouth) -> leave the vertex
+    V[idx] = V[idx] + steps[first][:, None] * dirs
+    return V, len(idx)
+
 report("base", V, Fa)
 n_added = 0
 for k in range(MAX_HANDLES):
@@ -103,7 +143,27 @@ for k in range(MAX_HANDLES):
     V2, F2 = np.asarray(vv, float), np.asarray(ff, np.int64)
     wt, nbad = check_watertight(F2); assert wt, nbad
     assert np.allclose(V2[:len(V)], V, atol=1e-9)
-    V, Fa = V2, F2; n_added += 1
+    n_before = len(V)
+    tube_verts = set(map(int, Fa[i])) | set(map(int, Fa[j])) | set(range(n_before, len(V2)))
+    V, Fa = V2, F2
+    a0 = cen[i]; u = cen[j] - cen[i]; L_ = float(np.linalg.norm(u)); u = u / L_   # tunnel axis from the two face centroids
+    if PROJECT:
+        # project FIRST (thin tube -> tunnel wall), then refine on the wall, re-project each level.
+        # Refining the thin tube before projecting produced sliver fans that crossed when inflated.
+        V, mv = radial_project(V, a0, u, L_, tube_verts); print(f"[p7] radial projection (pre-refine): moved {mv} verts", flush=True)
+    for _ in range(TUBE_SUBDIV):
+        # a 3-edge-wide tube spanning a thick slab has no interior vertices for the hull
+        # field to act on (3holes: 10 edges long, hole never opened). Refine the tube.
+        from phase1c_pipeline import dlfl_subdivide_arrays
+        fids = [k for k, f in enumerate(Fa) if all(int(x) in tube_verts for x in f)]
+        nb = len(V)
+        V, Fa, ne = dlfl_subdivide_arrays(V, Fa, fids, expand_ring=False)
+        tube_verts |= set(range(nb, len(V)))
+        wt, nbad = check_watertight(Fa); assert wt, nbad
+        print(f"[p7] tube refine: {len(fids)} faces, split {ne} edges -> V={len(V)} F={len(Fa)}", flush=True)
+        if PROJECT:
+            V, mv = radial_project(V, a0, u, L_, tube_verts); print(f"[p7] radial projection: moved {mv} verts", flush=True)
+    n_added += 1
     report(f"after handle {n_added}", V, Fa)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
 print(f"[p7] handles added: {n_added}; saved cow_{SHAPE}_{TAG}.npz", flush=True)
