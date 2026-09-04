@@ -32,6 +32,10 @@ ITERS = int(os.environ.get("ITERS", "5"))
 LAM, MU = float(os.environ.get("LAM", "0.5")), float(os.environ.get("MU", "-0.53"))
 BASE_NPZ = os.environ["BASE_NPZ"]
 TAG = os.environ.get("TAG", f"taubin{ITERS}")
+AUTO = int(os.environ.get("AUTO", "0"))
+AUTO_MIN = int(os.environ.get("AUTO_MIN", "2"))  # floor: training IoU under-smooths (it rewards jitter that fits the training views)   # pick the iteration count that maximizes TRAINING-view IoU (no exam leakage)
+ADAPTIVE = int(os.environ.get("ADAPTIVE", "0"))   # per-vertex strength scaled by local thickness (thin limbs smoothed less)
+T0_EDGES = float(os.environ.get("T0_EDGES", "4.0"))  # thickness (in mean-edge units) at which full strength is reached
 OUTD = "/tmp/liou_cow_viz"
 
 if MODE == "64v":
@@ -72,9 +76,64 @@ def report(tag, V, F):
 d = np.load(BASE_NPZ)
 V, F = d["verts"].astype(float), d["tris"].astype(np.int64)
 report("base", V, F)
-m = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V), o3d.utility.Vector3iVector(F.astype(np.int32)))
-m = m.filter_smooth_taubin(number_of_iterations=ITERS, lambda_filter=LAM, mu=MU)
-V2 = np.asarray(m.vertices)
+def local_thickness(V, F):
+    """Distance from each vertex along -normal to the opposite side of the surface (ray cast on the
+    mesh itself); the local feature size that a smoother must not erase."""
+    m = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V), o3d.utility.Vector3iVector(F.astype(np.int32)))
+    m.compute_vertex_normals(); n = np.asarray(m.vertex_normals)
+    sc = o3d.t.geometry.RaycastingScene()
+    sc.add_triangles(o3d.t.geometry.TriangleMesh(o3d.core.Tensor(V.astype(np.float32)), o3d.core.Tensor(F.astype(np.int32))))
+    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]); me = np.linalg.norm(V[E[:, 0]] - V[E[:, 1]], axis=1).mean()
+    org = (V - 1e-3 * me * n).astype(np.float32)          # start just inside
+    rays = o3d.core.Tensor(np.concatenate([org, (-n).astype(np.float32)], 1))
+    t = sc.cast_rays(rays)["t_hit"].numpy(); t[~np.isfinite(t)] = 1e9
+    return t, me
+
+def taubin_adaptive(V, F, iters, lam, mu, w):
+    """Taubin lambda|mu with per-vertex strength w in [0,1] (uniform umbrella operator)."""
+    V = V.copy(); nv = len(V)
+    src = np.concatenate([F[:, 0], F[:, 1], F[:, 2], F[:, 1], F[:, 2], F[:, 0]])
+    dst = np.concatenate([F[:, 1], F[:, 2], F[:, 0], F[:, 0], F[:, 1], F[:, 2]])
+    deg = np.bincount(src, minlength=nv).astype(float)[:, None]
+    for _ in range(iters):
+        for k in (lam, mu):
+            cen = np.zeros_like(V); np.add.at(cen, src, V[dst]); cen /= np.maximum(deg, 1)
+            V += (k * w)[:, None] * (cen - V)
+    return V
+
+def train_iou(V, F):
+    from cow_v13 import render_views_n, compute_iou_n
+    vt = torch.tensor(np.asarray(V), dtype=torch.float32, device=DEVICE)
+    ft = torch.tensor(np.asarray(F, np.int32), dtype=torch.int32, device=DEVICE)
+    return compute_iou_n(render_views_n(ctx, vt, ft, mvps), gt)
+
+if AUTO:
+    # data-driven strength: the smoothing that best matches the 64 TRAINING views. A coarse mesh
+    # (fertility: mean edge 0.049) over-smooths at 5 iterations; a fine one (armadillo 0.032) wants 5.
+    best = None
+    for it in (0, 1, 2, 3, 5, 8):
+        if it == 0: Vt = V.copy()
+        else:
+            m = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V), o3d.utility.Vector3iVector(F.astype(np.int32)))
+            Vt = np.asarray(m.filter_smooth_taubin(number_of_iterations=it, lambda_filter=LAM, mu=MU).vertices)
+        tiou = train_iou(Vt, F)
+        print(f"[auto] taubin x{it}: train IoU {tiou:.4f}", flush=True)
+        if best is None or tiou > best[0] + 1e-5: best = (tiou, it, Vt)
+    if best[1] < AUTO_MIN:
+        m = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V), o3d.utility.Vector3iVector(F.astype(np.int32)))
+        best = (best[0], AUTO_MIN, np.asarray(m.filter_smooth_taubin(number_of_iterations=AUTO_MIN, lambda_filter=LAM, mu=MU).vertices))
+    ITERS = best[1]; V2 = best[2]
+    print(f"[auto] chosen ITERS={ITERS} (train IoU {best[0]:.4f})", flush=True)
+elif ADAPTIVE:
+    thick, me = local_thickness(V, F)
+    w = np.clip(thick / (T0_EDGES * me), 0.0, 1.0)
+    print(f"[adaptive] thickness median {np.median(thick[thick < 1e8]):.3f} (mean edge {me:.3f}); "
+          f"verts damped (<{T0_EDGES} edges thick): {100 * (w < 1).mean():.1f}%, fully off (<1 edge): {100 * (thick < me).mean():.1f}%", flush=True)
+    V2 = taubin_adaptive(V, F, ITERS, LAM, MU, w)
+else:
+    m = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(V), o3d.utility.Vector3iVector(F.astype(np.int32)))
+    m = m.filter_smooth_taubin(number_of_iterations=ITERS, lambda_filter=LAM, mu=MU)
+    V2 = np.asarray(m.vertices)
 report(f"taubin x{ITERS}", V2, F)
 if os.environ.get("SNAPSHOT_DIR"):
     import viz_snap
