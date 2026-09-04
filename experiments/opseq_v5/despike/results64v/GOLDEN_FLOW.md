@@ -171,3 +171,18 @@ Step 4（低模上的 DLFL 清理）不能删——"先清理再细分"是关键
 `run_64v` (0.9333) → phase4 1200 (0.9867, SI 26.7 %→1.9 %) → SUBDIV_ALL + 1200 → Taubin×5 → **0.9957**, 18,927 v / 37,850 f,
 SI 2.0 %, back 7.7°. Mesh: `cow_armadillo_min1456_taubin5.npz`. Video (5,410 frames, 64-view mosaic per step):
 share page GenesisTopmod/full_chain_1456_64views.mp4 (87 MB, not in git). Tooling: `viz_snap.py` (SNAPSHOT_DIR env).
+
+## Genus > 0: rocker-arm (2026-09-03)
+Chain with the handle stage: 1 → 4 → **7 (hull-evidence add_handle)** → 4 → 5 → 6.
+| stage | genus | ho16 | hair | faces |
+|---|---|---|---|---|
+| 1 sphere → C2F | 0 | 0.9575 | 17,834 | 6.7k |
+| 4 loop | 0 | 0.9608 | 17,617 | 5.7k |
+| 7 add_handle (faces 960/4502, 24/20 voxels outside hull, back-to-back) | **1** | 0.9609 | 17,566 | 5.7k |
+| 4 loop again | 1 | 0.9908 | 245 | 5.1k |
+| 5 SUBDIV_ALL + loop | 1 | 0.9960 | 1 | 29.5k |
+| 6 Taubin ×5 | **1** | **0.9975** | **0** | 29.5k |
+Through-hole ray test along x: GT 1 hole (13,307 px), final 1 hole; the second ring in GT is a blind socket (not a hole).
+`phase7_handle.py`: tunnel evidence = two faces > OUT_VOX voxels outside the voting hull, normals back-to-back,
+segment between them entirely outside the hull → DLFL `add_handle` + stellate the 3 side quads. Known limit:
+a second handle adjacent to the first tube breaks watertightness (needs k-ring exclusion; multi-hole TODO).
