@@ -57,6 +57,7 @@ COLLAPSE_EVERY = int(os.environ.get("COLLAPSE_EVERY", "0"))   # 0 = off
 COLLAPSE_RATIO = float(os.environ.get("COLLAPSE_RATIO", "0.3"))
 COLLAPSE_MAX = int(os.environ.get("COLLAPSE_MAX", "300"))
 SI_PUSH = float(os.environ.get("SI_PUSH", "0.0"))   # nudge intersecting pairs apart (x mean edge)
+SI_EVERY = int(os.environ.get("SI_EVERY", "25"))    # Open3D self-intersection check cadence (5.6 s at 36k faces = the real CPU hog, not DLFL)
 SUBDIV_ALL = int(os.environ.get("SUBDIV_ALL", "0"))
 SUBDIV_TOP = int(os.environ.get("SUBDIV_TOP", "0"))
 SNAPSHOT_EVERY = int(os.environ.get("SNAPSHOT_EVERY", "0"))  # render front/back/back-closeup frames every N steps (video)
@@ -272,7 +273,7 @@ for step in range(STEPS):
             Vn, Fa, nf = flip_sweep(Vn, Fa, passes=3)
             if SMOOTH_ITERS > 0:
                 Vn = tangential_smooth(Vn, Fa, SMOOTH_ITERS, SMOOTH_LAM)
-            if SI_PUSH > 0:
+            if SI_PUSH > 0 and (step + 1) % SI_EVERY == 0:
                 # residual overlaps are non-adjacent near-parallel faces: nudge
                 # each intersecting pair apart along the mean normal (delta =
                 # SI_PUSH x mean edge); DR/target losses pull the shape back.
