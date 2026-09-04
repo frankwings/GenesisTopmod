@@ -56,7 +56,8 @@ FOLD_MULT = float(os.environ.get("FOLD_MULT", "1.0"))
 COLLAPSE_EVERY = int(os.environ.get("COLLAPSE_EVERY", "0"))   # 0 = off
 COLLAPSE_RATIO = float(os.environ.get("COLLAPSE_RATIO", "0.3"))
 COLLAPSE_MAX = int(os.environ.get("COLLAPSE_MAX", "300"))
-COLLAPSE_FRAC = float(os.environ.get("COLLAPSE_FRAC", "0"))  # if >0: per-call cap = frac x current face count (small meshes were eaten by a fixed cap: fertility cc3 1.9k -> 378 faces)
+COLLAPSE_FRAC = float(os.environ.get("COLLAPSE_FRAC", "0"))
+COLLAPSE_ABS = int(os.environ.get("COLLAPSE_ABS", "1"))     # threshold = ratio x INITIAL mean edge (fixed), not the current mean: stops the runaway (3holes final stage ate 24% of V)  # if >0: per-call cap = frac x current face count (small meshes were eaten by a fixed cap: fertility cc3 1.9k -> 378 faces)
 SI_PUSH = float(os.environ.get("SI_PUSH", "0.0"))   # nudge intersecting pairs apart (x mean edge)
 SI_EVERY = int(os.environ.get("SI_EVERY", "25"))    # Open3D self-intersection check cadence (5.6 s at 36k faces = the real CPU hog, not DLFL)
 SUBDIV_ALL = int(os.environ.get("SUBDIV_ALL", "0"))
@@ -241,6 +242,7 @@ def rebuild(Fa):
 
 faces_t, faces_l, src, dst, deg, pairs_t = rebuild(Fa)
 t0 = time.time(); nflips_total = 0; ncollapse_total = 0; npush_total = 0
+_E0 = np.concatenate([Fa[:, [0, 1]], Fa[:, [1, 2]], Fa[:, [2, 0]]]); me0 = float(np.linalg.norm(V[_E0[:, 0]] - V[_E0[:, 1]], axis=1).mean())
 for step in range(STEPS):
     opt.zero_grad()
     me = mean_edge_of(verts_t.detach(), src, dst)
@@ -269,7 +271,7 @@ for step in range(STEPS):
             Vn = verts_t.detach().cpu().numpy().astype(np.float64)
             nc = 0
             if COLLAPSE_EVERY > 0 and (step + 1) % COLLAPSE_EVERY == 0:
-                Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, int(COLLAPSE_FRAC * len(Fa)) if COLLAPSE_FRAC > 0 else COLLAPSE_MAX)
+                Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, int(COLLAPSE_FRAC * len(Fa)) if COLLAPSE_FRAC > 0 else COLLAPSE_MAX, thr_abs=(COLLAPSE_RATIO * me0) if COLLAPSE_ABS else None)
                 ncollapse_total += nc
             Vn, Fa, nf = flip_sweep(Vn, Fa, passes=3)
             if SMOOTH_ITERS > 0:

@@ -66,11 +66,11 @@ def flip_sweep_np(V, F, passes=4, fold_cos=0.0):
     return V, F, total
 
 
-def collapse_short_edges_np(V, F, ratio=0.3, max_n=400):
+def collapse_short_edges_np(V, F, ratio=0.3, max_n=400, thr_abs=None):
     V = np.asarray(V, float).copy(); F = np.asarray(F, np.int64).copy()
     em = _edge_map(F)
     el = {k: np.linalg.norm(V[k[0]] - V[k[1]]) for k in em}
-    thr = ratio * float(np.mean(list(el.values())))
+    thr = thr_abs if thr_abs is not None else ratio * float(np.mean(list(el.values())))
     alive = np.ones(len(F), bool)
     nbr = defaultdict(set)
     for a, b, c in F:

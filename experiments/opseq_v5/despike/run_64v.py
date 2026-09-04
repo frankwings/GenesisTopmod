@@ -276,12 +276,17 @@ def main():
         return escape_mask(vt, mvps, gt, dilate=DILATE).cpu().numpy()
 
     t0 = time.time()
-    _set_faces(t)
-    v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800, "cc2",
-                            use_fold=True, use_tube=True)
-    v, t = midpoint_subdivide(v, t); _set_faces(t)
-    v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800, "cc3",
-                            settle=True, use_tube=True)
+    if os.environ.get("RESUME_FROM"):
+        # early-hole experiment: mesh already went through cc2/cc3 (+ handles); continue with the cc4 phase
+        z = np.load(os.environ["RESUME_FROM"]); v, t = z["verts"].astype(np.float64), z["tris"].astype(np.int64)
+        print(f"[run_64v] RESUME_FROM {os.environ['RESUME_FROM']}: V={len(v)} F={len(t)}", flush=True)
+    else:
+        _set_faces(t)
+        v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800, "cc2",
+                                use_fold=True, use_tube=True)
+        v, t = midpoint_subdivide(v, t); _set_faces(t)
+        v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800, "cc3",
+                                settle=True, use_tube=True)
     if os.environ.get("STOP_AFTER") == "cc3":
         # early-hole experiment: hand the cc3 mesh (1.9k faces) to the handle stage before any further subdivision
         t = np.asarray(t, np.int32)

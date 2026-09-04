@@ -78,7 +78,7 @@ def flip_sweep(V, Fa, passes=4, fold_cos=0.0):
     return V, np.asarray(ff, np.int64), total
 
 
-def collapse_short_edges(V, Fa, ratio=0.3, max_n=400):
+def collapse_short_edges(V, Fa, ratio=0.3, max_n=400, thr_abs=None):
     """DLFL collapse_edge_tri on edges shorter than ratio * mean edge, shortest
     first (link-condition guarded, Euler preserved). Residual self-intersections
     after flips were 46% tiny faces crowded together (6v tail region) -- an
@@ -86,12 +86,12 @@ def collapse_short_edges(V, Fa, ratio=0.3, max_n=400):
     Returns V2, F2, n_collapsed, keep_index (old vertex idx surviving, or -1)."""
     if os.environ.get("GENERIC_OPS") == "1":
         from generic_ops import collapse_short_edges_np
-        return collapse_short_edges_np(V, Fa, ratio, max_n)
+        return collapse_short_edges_np(V, Fa, ratio, max_n, thr_abs)
     from topmod.high_level_ops import collapse_edge_tri
     V = np.asarray(V, float); Fa = np.asarray(Fa, np.int64)
     E = np.concatenate([Fa[:, [0, 1]], Fa[:, [1, 2]], Fa[:, [2, 0]]])
     el = np.linalg.norm(V[E[:, 0]] - V[E[:, 1]], axis=1)
-    thr = ratio * el.mean()
+    thr = thr_abs if thr_abs is not None else ratio * el.mean()
     with tempfile.NamedTemporaryFile("w", suffix=".obj", delete=False) as fh:
         for x, y, z in V: fh.write(f"v {x} {y} {z}\n")
         for a, b, c in Fa: fh.write(f"f {a+1} {b+1} {c+1}\n")
