@@ -67,6 +67,9 @@ def find_tunnel_pairs(V, F):
     d = hdist(cen)
     cand = np.where(d > OUT_VOX * pitch)[0]
     print(f"[p7] faces outside hull by >{OUT_VOX} voxels: {len(cand)} / {len(F)} (pitch {pitch:.4f}, mean edge {me:.4f})", flush=True)
+    import open3d as o3d
+    _scene = o3d.t.geometry.RaycastingScene()
+    _scene.add_triangles(o3d.t.geometry.TriangleMesh(o3d.core.Tensor(V.astype(np.float32)), o3d.core.Tensor(F.astype(np.int32))))
     pairs = []
     for a in range(len(cand)):
         i = cand[a]
@@ -80,6 +83,12 @@ def find_tunnel_pairs(V, F):
             if n[i] @ v >= 0 or n[j] @ (-v) >= 0: continue
             seg = cen[i] + np.linspace(0.05, 0.95, max(9, int(L / (0.5 * pitch))))[:, None] * v   # sample every half voxel
             if (hdist(seg) < 0.5 * pitch).any(): continue               # whole segment outside hull
+            # the segment must not cross OUR mesh either: if it does, it runs through an
+            # existing tube/hole (fertility: 5th handle in an already-opened hole -> genus 5 vs GT 4)
+            if _scene is not None:
+                r = o3d.core.Tensor(np.concatenate([(cen[i] + 0.02 * L * v / L)[None], (v / L)[None]], 1).astype(np.float32))
+                hit = _scene.cast_rays(r)["t_hit"].numpy()[0]
+                if np.isfinite(hit) and hit < L * 0.98: continue
             pairs.append((min(d[i], d[j]) / pitch, -L / me, int(i), int(j)))
     pairs.sort(reverse=True)
     return pairs, cen, d

@@ -7,10 +7,12 @@ cd /home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5
 S=$SHAPE; R=${ROUNDS:-6}; cur=$1; LOOP=${LOOP_STEPS:-400}
 COMMON="FLIP_EVERY=25 COLLAPSE_EVERY=100 COLLAPSE_RATIO=0.5 COLLAPSE_MAX=300 SI_PUSH=0.15"
 for r in $(seq 1 $R); do
+  [ "${SKIP_ROUNDS:-0}" = "1" ] && break
   echo "##### $S round $r: detect + add_handle on $cur"
   out=$(MODE=64v SHAPE=$S TAG=${S}_h$r MAX_HANDLES=1 BASE_NPZ=$cur python3 despike/phase7_handle.py 2>&1 | grep "\[p7\]\|\[after\|Traceback\|Error")
   echo "$out"
   if echo "$out" | grep -q "handles added: 0"; then echo "##### no more tunnel evidence after $((r-1)) handles"; break; fi
+  if [ ! -f /tmp/liou_cow_viz/cow_${S}_${S}_h$r.npz ]; then echo "##### handle stage failed in round $r (see above); stopping with $((r-1)) handles"; break; fi
   cur=/tmp/liou_cow_viz/cow_${S}_${S}_h$r.npz
   echo "##### $S round $r: Stage-4 loop $LOOP steps"
   env MODE=64v SHAPE=$S TAG=${S}_h${r}b STEPS=$LOOP $COMMON BASE_NPZ=$cur python3 despike/phase4_inloop.py 2>&1 | grep "\[final\]\|Traceback\|Error"
