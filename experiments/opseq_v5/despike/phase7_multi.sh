@@ -19,6 +19,8 @@ for r in $(seq 1 $R); do
   env MODE=64v SHAPE=$S TAG=${S}_h${r}b STEPS=$LOOP $COMMON BASE_NPZ=$cur python3 despike/phase4_inloop.py 2>&1 | grep "\[final\]\|Traceback\|Error"
   cur=/tmp/liou_cow_viz/cow_${S}_${S}_h${r}b.npz
 done
+echo "##### $S: last round mesh: $cur"
+[ "${SKIP_FINAL:-0}" = "1" ] && { cp $cur /tmp/liou_cow_viz/cow_${S}_${S}_hlast.npz; echo "##### SKIP_FINAL: saved cow_${S}_${S}_hlast.npz"; exit 0; }
 echo "##### $S: final Stage-4 (1200) -> Stage 5 -> Taubin from $cur"
 env MODE=64v SHAPE=$S TAG=${S}_hfin STEPS=1200 $COMMON BASE_NPZ=$cur python3 despike/phase4_inloop.py 2>&1 | grep "\[final\]\|Traceback\|Error"
 env MODE=64v SHAPE=$S TAG=${S}_p5 SUBDIV_ALL=1 LAP_MULT=3 STEPS=1200 FLIP_EVERY=25 COLLAPSE_EVERY=100 COLLAPSE_RATIO=0.4 COLLAPSE_FRAC=${COLLAPSE_FRAC:-0.02} SI_PUSH=0.15 BASE_NPZ=/tmp/liou_cow_viz/cow_${S}_${S}_hfin.npz python3 despike/phase4_inloop.py 2>&1 | grep "\[final\]\|subdivision\|Traceback\|Error"
