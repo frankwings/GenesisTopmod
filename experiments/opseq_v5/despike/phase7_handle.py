@@ -39,7 +39,9 @@ EXT_VOX = float(os.environ.get("EXT_VOX", "8.0"))
 MIN_SEP = float(os.environ.get("MIN_SEP", "1.5"))
 PROJ_RADIUS = float(os.environ.get("PROJ_RADIUS", "0.6"))  # also radially project the membrane around the tube (within this radius of the axis) so the mouth eats it; 0 = tube only    # faces closer than this (mean-edge units) are fold/sliver remnants, not a slab   # tunnel must continue hull-free this far beyond BOTH faces (bay vs through-hole)
 DRY = int(os.environ.get("DRY", "0"))
-DETECT = os.environ.get("DETECT", "rays")   # rays = see-through pixels of the training silhouettes (default) | hull = back-to-back faces outside the hull             # 1 = detect and report only       # after refinement, project every vertex that is outside the hull onto the hull boundary (deterministic inflate)  # DLFL-subdivide the new tube faces N times so the hull field can inflate a long tube
+DETECT = os.environ.get("DETECT", "rays")
+HANDLES_JSON = os.environ.get("HANDLES_JSON", "")     # persisted list of handle midpoints across rounds (one handle per tunnel)
+R_DEDUP = float(os.environ.get("R_DEDUP", "0.3"))      # a new candidate closer than this to an existing handle is the SAME tunnel -> skip   # rays = see-through pixels of the training silhouettes (default) | hull = back-to-back faces outside the hull             # 1 = detect and report only       # after refinement, project every vertex that is outside the hull onto the hull boundary (deterministic inflate)  # DLFL-subdivide the new tube faces N times so the hull field can inflate a long tube
 OUT_VOX = float(os.environ.get("OUT_VOX", "4.0"))     # both faces must be > this many voxels outside the hull
 FACE_COS = float(os.environ.get("FACE_COS", "-0.5"))  # n_i . n_j below this (facing each other)
 MAX_SEP = float(os.environ.get("MAX_SEP", "100.0"))   # max centroid separation (mean-edge units); thick slabs need long tubes (3holes: 12 edges)
@@ -145,7 +147,7 @@ def radial_project(V, a0, u, L, tube_verts):
     return V, len(idx)
 
 
-def find_tunnel_by_rays(V, F, min_px=30):
+def find_tunnel_by_rays(V, F, min_px=30, prev_handles=()):
     """Image-domain space-carving evidence. In a TRAINING view, a background pixel enclosed by
     foreground (a 2D hole in the GT silhouette) proves free space along its whole ray. If our
     mesh is hit by that ray, the entry and exit faces are the two sides of the membrane that
@@ -185,15 +187,20 @@ def find_tunnel_by_rays(V, F, min_px=30):
             fj = int(h2["primitive_ids"].numpy()[0])
             if fi == fj or (set(F[fi]) & set(F[fj])): continue
             ci = V[F[fi]].mean(0); cj = V[F[fj]].mean(0)
+            mid = (ci + cj) / 2
+            if any(np.linalg.norm(mid - np.asarray(h)) < R_DEDUP for h in prev_handles):
+                continue   # same tunnel as an earlier handle (seen from another view / remnant membrane): one handle per tunnel
             print(f"[p7] ray evidence: view {k}, hole {area}px, entry face {fi} exit face {fj}, sep {np.linalg.norm(cj-ci):.3f}", flush=True)
             return fi, fj, ci, cj
     return None
 
 report("base", V, Fa)
+import json
+prev_handles = json.load(open(HANDLES_JSON)) if HANDLES_JSON and os.path.exists(HANDLES_JSON) else []
 n_added = 0
 for k in range(MAX_HANDLES):
     if DETECT == "rays":
-        hit = find_tunnel_by_rays(V, Fa)
+        hit = find_tunnel_by_rays(V, Fa, prev_handles=prev_handles)
         if hit is None: print("[p7] tunnel-evidence pairs: 0", flush=True); break
         i, j, _ci, _cj = hit
         tri = V[Fa]; cen = tri.mean(1); d = hdist(cen); negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
@@ -240,6 +247,8 @@ for k in range(MAX_HANDLES):
         if PROJECT:
             V, mv = radial_project(V, a0, u, L_, tube_verts); print(f"[p7] radial projection: moved {mv} verts", flush=True)
     n_added += 1
+    prev_handles.append(((cen[i] + cen[j]) / 2).tolist())
+    if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
     report(f"after handle {n_added}", V, Fa)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
 print(f"[p7] handles added: {n_added}; saved cow_{SHAPE}_{TAG}.npz", flush=True)

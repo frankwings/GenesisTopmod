@@ -5,6 +5,7 @@
 set -u
 cd /home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5
 S=$SHAPE; R=${ROUNDS:-6}; cur=$1; LOOP=${LOOP_STEPS:-400}
+export HANDLES_JSON=/tmp/liou_cow_viz/handles_${S}.json; rm -f $HANDLES_JSON
 COMMON="FLIP_EVERY=25 COLLAPSE_EVERY=100 COLLAPSE_RATIO=0.5 COLLAPSE_MAX=300 SI_PUSH=0.15"
 for r in $(seq 1 $R); do
   [ "${SKIP_ROUNDS:-0}" = "1" ] && break
