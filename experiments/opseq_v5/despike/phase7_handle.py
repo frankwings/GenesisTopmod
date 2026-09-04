@@ -35,7 +35,7 @@ BASE_NPZ = os.environ["BASE_NPZ"]
 MAX_HANDLES = int(os.environ.get("MAX_HANDLES", "1"))
 OUT_VOX = float(os.environ.get("OUT_VOX", "2.0"))     # both faces must be > this many voxels outside the hull
 FACE_COS = float(os.environ.get("FACE_COS", "-0.5"))  # n_i . n_j below this (facing each other)
-MAX_SEP = float(os.environ.get("MAX_SEP", "6.0"))     # max centroid separation in mean-edge units
+MAX_SEP = float(os.environ.get("MAX_SEP", "100.0"))   # max centroid separation (mean-edge units); thick slabs need long tubes (3holes: 12 edges)
 OUTD = "/tmp/liou_cow_viz"
 
 z = np.load(BASE_NPZ); V, Fa = z["verts"].astype(np.float64), z["tris"].astype(np.int64)
@@ -76,7 +76,7 @@ def find_tunnel_pairs(V, F):
             # membrane = thin slab of OUR volume inside the GT tunnel: the two faces are
             # back-to-back, outward normals point AWAY from each other
             if n[i] @ v >= 0 or n[j] @ (-v) >= 0: continue
-            seg = cen[i] + np.linspace(0.1, 0.9, 9)[:, None] * v
+            seg = cen[i] + np.linspace(0.05, 0.95, max(9, int(L / (0.5 * pitch))))[:, None] * v   # sample every half voxel
             if (hdist(seg) < 0.5 * pitch).any(): continue               # whole segment outside hull
             pairs.append((min(d[i], d[j]) / pitch, -L / me, int(i), int(j)))
     pairs.sort(reverse=True)
