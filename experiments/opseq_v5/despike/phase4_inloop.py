@@ -38,7 +38,7 @@ import phase1b_pipeline as p1b
 from phase1b_pipeline import heldout_exam, check_watertight
 from eval_dmesh import load_any_mesh
 from dlfl_untangle import (flip_sweep, tangential_smooth, si_faces, fold_frac,
-                           collapse_short_edges)
+                           collapse_short_edges, vertex_dihedral)
 
 SHAPE = os.environ.get("SHAPE", "armadillo")
 MODE = os.environ.get("MODE", "6v")
@@ -55,6 +55,13 @@ W_DIFF = float(os.environ.get("W_DIFF", "1.0"))
 FOLD_MULT = float(os.environ.get("FOLD_MULT", "1.0"))
 COLLAPSE_EVERY = int(os.environ.get("COLLAPSE_EVERY", "0"))   # 0 = off
 COLLAPSE_RATIO = float(os.environ.get("COLLAPSE_RATIO", "0.3"))
+ADAPT_REMESH = int(os.environ.get("ADAPT_REMESH", "0"))   # curvature-adaptive remeshing on DLFL ops (split where curved, collapse where flat)
+ADAPT_LO = float(os.environ.get("ADAPT_LO", "8.0"))        # dihedral (deg) at/below which a vertex counts as flat
+ADAPT_HI = float(os.environ.get("ADAPT_HI", "30.0"))       # dihedral at/above which a vertex counts as fully curved
+ADAPT_TMIN = float(os.environ.get("ADAPT_TMIN", "0.5"))    # target edge length (x me0) in curved regions
+ADAPT_TMAX = float(os.environ.get("ADAPT_TMAX", "1.6"))    # target edge length (x me0) in flat regions
+ADAPT_CRATIO = float(os.environ.get("ADAPT_CRATIO", "0.5"))# collapse edges shorter than CRATIO x local target
+ADAPT_SPLIT_FRAC = float(os.environ.get("ADAPT_SPLIT_FRAC", "0.02"))  # cap: faces split per pass as a fraction of F
 COLLAPSE_MAX = int(os.environ.get("COLLAPSE_MAX", "300"))
 COLLAPSE_FRAC = float(os.environ.get("COLLAPSE_FRAC", "0"))
 COLLAPSE_ABS = int(os.environ.get("COLLAPSE_ABS", "1"))     # threshold = ratio x INITIAL mean edge (fixed), not the current mean: stops the runaway (3holes final stage ate 24% of V)  # if >0: per-call cap = frac x current face count (small meshes were eaten by a fixed cap: fertility cc3 1.9k -> 378 faces)
@@ -241,7 +248,7 @@ def rebuild(Fa):
     return faces_t, faces_t.long(), src, dst, deg, pairs_t
 
 faces_t, faces_l, src, dst, deg, pairs_t = rebuild(Fa)
-t0 = time.time(); nflips_total = 0; ncollapse_total = 0; npush_total = 0
+t0 = time.time(); nflips_total = 0; ncollapse_total = 0; nsplit_total = 0; npush_total = 0
 _E0 = np.concatenate([Fa[:, [0, 1]], Fa[:, [1, 2]], Fa[:, [2, 0]]]); me0 = float(np.linalg.norm(V[_E0[:, 0]] - V[_E0[:, 1]], axis=1).mean())
 for step in range(STEPS):
     opt.zero_grad()
@@ -269,9 +276,36 @@ for step in range(STEPS):
     if FLIP_EVERY > 0 and (step + 1) % FLIP_EVERY == 0 and step + 1 < STEPS:
         with torch.no_grad():
             Vn = verts_t.detach().cpu().numpy().astype(np.float64)
-            nc = 0
+            nc = ns = 0
             if COLLAPSE_EVERY > 0 and (step + 1) % COLLAPSE_EVERY == 0:
-                Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, int(COLLAPSE_FRAC * len(Fa)) if COLLAPSE_FRAC > 0 else COLLAPSE_MAX, thr_abs=(COLLAPSE_RATIO * me0) if COLLAPSE_ABS else None)
+                cap = int(COLLAPSE_FRAC * len(Fa)) if COLLAPSE_FRAC > 0 else COLLAPSE_MAX
+                if ADAPT_REMESH:
+                    # Curvature-adaptive remeshing (Palfinger-style target length, on DLFL ops).
+                    # Per-vertex target L(v) = me0 * lerp(TMAX->TMIN, smoothstep(dihedral)):
+                    # curved -> short target -> subdivide_edge; flat -> long target -> collapse.
+                    # Fixes vertex migration (verts pile into flat/concave regions during the
+                    # sphere->shape deformation and uniform subdivision locks that in).
+                    def _target(Vx, Fx):
+                        kap = vertex_dihedral(Vx, Fx)
+                        t = np.clip((kap - ADAPT_LO) / (ADAPT_HI - ADAPT_LO), 0, 1); t = t * t * (3 - 2 * t)
+                        return me0 * (ADAPT_TMAX - (ADAPT_TMAX - ADAPT_TMIN) * t)
+                    Lt = _target(Vn, Fa)
+                    tri = Vn[Fa]
+                    el3 = np.stack([np.linalg.norm(tri[:, 1] - tri[:, 0], axis=1),
+                                    np.linalg.norm(tri[:, 2] - tri[:, 1], axis=1),
+                                    np.linalg.norm(tri[:, 0] - tri[:, 2], axis=1)], 1)
+                    ratio = el3.max(1) / Lt[Fa].min(1)          # longest edge vs target of most-curved corner
+                    fids = np.where(ratio > 1.0)[0]
+                    if len(fids):
+                        fids = fids[np.argsort(-ratio[fids])][:max(1, int(ADAPT_SPLIT_FRAC * len(Fa)))].tolist()
+                        from phase1c_pipeline import dlfl_subdivide_arrays
+                        Vn, Fa, ns = dlfl_subdivide_arrays(Vn, Fa, fids, expand_ring=False)
+                        wt_, _ = check_watertight(Fa); assert wt_
+                        Lt = _target(Vn, Fa)
+                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, cap, vthr=ADAPT_CRATIO * Lt)
+                    nsplit_total += ns
+                else:
+                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, cap, thr_abs=(COLLAPSE_RATIO * me0) if COLLAPSE_ABS else None)
                 ncollapse_total += nc
             Vn, Fa, nf = flip_sweep(Vn, Fa, passes=3)
             if SMOOTH_ITERS > 0:
@@ -299,7 +333,7 @@ for step in range(STEPS):
                     Vn[m] += disp[m] / cnt[m, None]
                     npush_total += int(len(prs))
             nflips_total += nf
-            if nc > 0:
+            if nc > 0 or ns > 0:
                 # vertex count changed: new parameter tensor + fresh Adam at current lr
                 cur_lr = opt.param_groups[0]["lr"]
                 V = Vn
@@ -318,7 +352,7 @@ for step in range(STEPS):
     if (step + 1) % 100 == 0:
         Vn = verts_t.detach().cpu().numpy().astype(np.float64)
         s = si_faces(Vn, Fa)
-        print(f"[step {step+1}/{STEPS}] sil={sl.item():.4f} flips={nflips_total} collapses={ncollapse_total} pushes={npush_total} V={len(Fa) and len(Vn)} "
+        print(f"[step {step+1}/{STEPS}] sil={sl.item():.4f} flips={nflips_total} collapses={ncollapse_total} splits={nsplit_total} pushes={npush_total} V={len(Fa) and len(Vn)} "
               f"SI={s} ({100*s/len(Fa):.1f}%) folds={100*fold_frac(Vn, Fa):.1f}% "
               f"({time.time()-t0:.0f}s)", flush=True)
 

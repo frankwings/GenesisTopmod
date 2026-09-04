@@ -78,12 +78,40 @@ def flip_sweep(V, Fa, passes=4, fold_cos=0.0):
     return V, np.asarray(ff, np.int64), total
 
 
-def collapse_short_edges(V, Fa, ratio=0.3, max_n=400, thr_abs=None):
+def vertex_dihedral(V, Fa, ring_avg=True):
+    """Per-vertex curvature proxy: mean dihedral angle (deg) over incident edges, optionally
+    averaged over the 1-ring to suppress single-vertex jitter spikes."""
+    V = np.asarray(V, float); Fa = np.asarray(Fa, np.int64); nv = len(V)
+    n = np.cross(V[Fa[:, 1]] - V[Fa[:, 0]], V[Fa[:, 2]] - V[Fa[:, 0]])
+    n /= np.linalg.norm(n, axis=1, keepdims=True) + 1e-12
+    E = np.sort(np.concatenate([Fa[:, [0, 1]], Fa[:, [1, 2]], Fa[:, [2, 0]]]), axis=1)
+    fid = np.tile(np.arange(len(Fa)), 3)
+    order = np.lexsort((E[:, 1], E[:, 0])); E = E[order]; fid = fid[order]
+    same = np.all(E[1:] == E[:-1], axis=1)
+    a, b = fid[:-1][same], fid[1:][same]; ea = E[:-1][same]
+    ang = np.degrees(np.arccos(np.clip((n[a] * n[b]).sum(1), -1, 1)))
+    acc = np.zeros(nv); cnt = np.zeros(nv)
+    np.add.at(acc, ea[:, 0], ang); np.add.at(acc, ea[:, 1], ang)
+    np.add.at(cnt, ea[:, 0], 1); np.add.at(cnt, ea[:, 1], 1)
+    k = acc / np.maximum(cnt, 1)
+    if ring_avg:
+        src = np.concatenate([Fa[:, 0], Fa[:, 1], Fa[:, 2], Fa[:, 1], Fa[:, 2], Fa[:, 0]])
+        dst = np.concatenate([Fa[:, 1], Fa[:, 2], Fa[:, 0], Fa[:, 0], Fa[:, 1], Fa[:, 2]])
+        s2 = np.zeros(nv); c2 = np.zeros(nv)
+        np.add.at(s2, src, k[dst]); np.add.at(c2, src, 1)
+        k = 0.5 * k + 0.5 * s2 / np.maximum(c2, 1)
+    return k
+
+
+def collapse_short_edges(V, Fa, ratio=0.3, max_n=400, thr_abs=None, vthr=None):
     """DLFL collapse_edge_tri on edges shorter than ratio * mean edge, shortest
     first (link-condition guarded, Euler preserved). Residual self-intersections
     after flips were 46% tiny faces crowded together (6v tail region) -- an
     overcrowded triangulation, fixed by remeshing-style short-edge collapse.
-    Returns V2, F2, n_collapsed, keep_index (old vertex idx surviving, or -1)."""
+    vthr: optional per-vertex length threshold (curvature-adaptive remeshing); an edge is
+    collapsed only if shorter than min(vthr[a], vthr[b]). Endpoints are matched to V rows by
+    coordinate (KD-tree) because DLFL vertex ids are a global counter, not row indices.
+    Returns V2, F2, n_collapsed."""
     if os.environ.get("GENERIC_OPS") == "1":
         from generic_ops import collapse_short_edges_np
         return collapse_short_edges_np(V, Fa, ratio, max_n, thr_abs)
@@ -92,6 +120,11 @@ def collapse_short_edges(V, Fa, ratio=0.3, max_n=400, thr_abs=None):
     E = np.concatenate([Fa[:, [0, 1]], Fa[:, [1, 2]], Fa[:, [2, 0]]])
     el = np.linalg.norm(V[E[:, 0]] - V[E[:, 1]], axis=1)
     thr = thr_abs if thr_abs is not None else ratio * el.mean()
+    tree = None
+    if vthr is not None:
+        from scipy.spatial import cKDTree
+        tree = cKDTree(V); vthr = np.asarray(vthr, float)
+        thr = float(vthr.max())              # sort/break bound; per-edge test below
     with tempfile.NamedTemporaryFile("w", suffix=".obj", delete=False) as fh:
         for x, y, z in V: fh.write(f"v {x} {y} {z}\n")
         for a, b, c in Fa: fh.write(f"f {a+1} {b+1} {c+1}\n")
@@ -103,10 +136,16 @@ def collapse_short_edges(V, Fa, ratio=0.3, max_n=400, thr_abs=None):
     def elen(e):
         a, b = e.he0.origin, e.he1.origin
         return (a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2
+    def ethr2(e):
+        if tree is None: return thr * thr
+        a, b = e.he0.origin, e.he1.origin
+        ia = tree.query((a.x, a.y, a.z))[1]; ib = tree.query((b.x, b.y, b.z))[1]
+        t = min(vthr[ia], vthr[ib]); return t * t
     n = 0
     for e in sorted(list(mesh.edges.values()), key=elen):
         if e.id not in mesh.edges: continue
         if elen(e) > thr * thr: break
+        if elen(e) > ethr2(e): continue
         if collapse_edge_tri(mesh, e) is not None:
             n += 1
             if n >= max_n: break
