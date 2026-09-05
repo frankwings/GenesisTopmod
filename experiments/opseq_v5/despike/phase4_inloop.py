@@ -73,6 +73,9 @@ ADAPT_MODE = os.environ.get("ADAPT_MODE", "curvature")       # "curvature" | "re
 ADAPT_CURV_W = float(os.environ.get("ADAPT_CURV_W", "0.0"))    # residual mode: blend in curvature drive, t = max(t_err, W * t_curv)
 ADAPT_E_LO = float(os.environ.get("ADAPT_E_LO", "0.5"))        # residual quantiles (data-adaptive): below E_LO-quantile = fitted (long target)
 ADAPT_E_HI = float(os.environ.get("ADAPT_E_HI", "0.9"))        # above E_HI-quantile = badly fitted (short target)
+ADAPT_R_SPLIT = float(os.environ.get("ADAPT_R_SPLIT", "0.05"))   # residual mode (absolute): mean image error per covered pixel-view above this = unfit -> short target
+ADAPT_R_KEEP = float(os.environ.get("ADAPT_R_KEEP", "0.01"))     # below this AND flat -> may coarsen; in between -> keep current local edge length (never coarsen a region the fit still needs)
+ADAPT_ABS = int(os.environ.get("ADAPT_ABS", "1"))                # 1 = absolute pixel-scale thresholds (shape-agnostic), 0 = quantiles (v7: coarsened fertility to 2.4k V)
 
 def face_residual(Vx, Fx):
     """Per-face image-fit error summed over the training views: |rendered sil - GT sil| + masked
@@ -83,7 +86,7 @@ def face_residual(Vx, Fx):
     from scipy.ndimage import distance_transform_edt
     vt = torch.tensor(Vx, dtype=torch.float32, device=DEVICE)
     ft = torch.tensor(Fx.astype(np.int32), dtype=torch.int32, device=DEVICE)
-    err = np.zeros(len(Fx))
+    err = np.zeros(len(Fx)); cov = np.zeros(len(Fx))
     with torch.no_grad():
         for i in range(NV):
             pos = transform_to_clip(vt, mvps[i])
@@ -101,14 +104,14 @@ def face_residual(Vx, Fx):
             both = fg & gfg
             e[both] += np.abs(ndc[both] - gd[both]) * W_DEPTH          # depth residual, same weight as the loss
             # covered pixels -> their face
-            np.add.at(err, tid[fg], e[fg])
+            np.add.at(err, tid[fg], e[fg]); np.add.at(cov, tid[fg], 1.0)
             # missing pixels (GT fg, we render bg) -> nearest rendered face
             miss = gfg & ~fg
             if miss.any() and fg.any():
                 _, idx = distance_transform_edt(~fg, return_indices=True)
                 near = tid[idx[0][miss], idx[1][miss]]
-                np.add.at(err, near, e[miss] + 1.0)
-    return err
+                np.add.at(err, near, e[miss] + 1.0); np.add.at(cov, near, 1.0)
+    return err, cov
 
 def _taubin_np(Vx, Fx, iters, lam=0.5, mu=-0.53):
     Vx = np.asarray(Vx, float).copy(); nv = len(Vx)
@@ -359,20 +362,47 @@ for step in range(STEPS):
                         kap = vertex_dihedral(_taubin_np(Vx, Fx, ADAPT_SMOOTH_K) if ADAPT_SMOOTH_K > 0 else Vx, Fx)
                         t = np.clip((kap - ADAPT_LO) / (ADAPT_HI - ADAPT_LO), 0, 1); t = t * t * (3 - 2 * t)
                         if ADAPT_MODE == "residual":
-                            ef = face_residual(Vx, Fx)
+                            ef, cf = face_residual(Vx, Fx)
+                            rf = ef / np.maximum(cf, 1.0)                        # mean error per covered pixel-view (absolute, pixel scale)
                             ev = np.zeros(len(Vx))
-                            for k in range(3): np.maximum.at(ev, Fx[:, k], ef)   # vertex = worst incident face
+                            for k in range(3): np.maximum.at(ev, Fx[:, k], rf)   # vertex = worst incident face
+                            if ADAPT_ABS:
+                                # policy: unfit -> refine; fitted+flat -> may coarsen; otherwise KEEP the current
+                                # local edge length (the fit needs it). v7 quantiles labelled half the mesh
+                                # "fitted" by construction and coarsened fertility to 2.4k V.
+                                src_ = np.concatenate([Fx[:, 0], Fx[:, 1], Fx[:, 2], Fx[:, 1], Fx[:, 2], Fx[:, 0]])
+                                dst_ = np.concatenate([Fx[:, 1], Fx[:, 2], Fx[:, 0], Fx[:, 0], Fx[:, 1], Fx[:, 2]])
+                                le = np.zeros(len(Vx)); cnt_ = np.zeros(len(Vx))
+                                np.add.at(le, src_, np.linalg.norm(Vx[src_] - Vx[dst_], axis=1)); np.add.at(cnt_, src_, 1)
+                                le /= np.maximum(cnt_, 1)                                   # current local edge length
+                                unfit = ev > ADAPT_R_SPLIT
+                                coarse_ok = (ev < ADAPT_R_KEEP) & (t < 0.05)                # residual ~0 and flat
+                                Lk = le.copy()
+                                Lk[unfit] = np.minimum(le[unfit] * 0.5, me0 * ADAPT_TMIN)   # halve where unfit
+                                Lk[coarse_ok] = me0 * ADAPT_TMAX
+                                Lk[kap > ADAPT_FOLD] = me0 * ADAPT_TMAX
+                                _target.last_err = rf
+                                Lk = np.maximum(Lk, ADAPT_LMIN_PX * PX_SIZE) if "PX_SIZE" in globals() else Lk
+                                # separate collapse threshold: "keep" verts must not lose their shorter half
+                                # (0.8 x local mean collapses half the incident edges) -> only slivers (< 0.4 x local)
+                                cthr = 0.4 * le
+                                cthr[coarse_ok | (kap > ADAPT_FOLD)] = ADAPT_CRATIO * me0 * ADAPT_TMAX
+                                cthr[unfit] = ADAPT_CRATIO * Lk[unfit]
+                                _target.last_cthr = cthr
+                                return Lk
                             lo, hi = np.quantile(ev, ADAPT_E_LO), np.quantile(ev, ADAPT_E_HI)
                             te = np.clip((ev - lo) / max(hi - lo, 1e-9), 0, 1); te = te * te * (3 - 2 * te)
                             t = np.maximum(te, ADAPT_CURV_W * t)
-                            _target.last_err = ef
+                            _target.last_err = rf
                         t[kap > ADAPT_FOLD] = 0.0                    # tangles get the flat (long) target
                         Lt_ = me0 * (ADAPT_TMAX - (ADAPT_TMAX - ADAPT_TMIN) * t)
                         return np.maximum(Lt_, ADAPT_LMIN_PX * PX_SIZE) if "PX_SIZE" in globals() else Lt_
                     Lt = _target(Vn, Fa)
                     if step + 1 == COLLAPSE_EVERY:
                         _px = globals().get("PX_SIZE", float("nan"))
-                        print(f"[adapt] cfg: me0={me0:.4f} PX_SIZE={_px:.4f} floor={ADAPT_LMIN_PX*_px:.4f} | L min/med/max={Lt.min():.4f}/{np.median(Lt):.4f}/{Lt.max():.4f} | mean edge now={np.linalg.norm(Vn[Fa[:,0]]-Vn[Fa[:,1]],axis=1).mean():.4f}", flush=True)
+                        _re = getattr(_target, "last_err", None)
+                        _rs = f" | face resid/px median={np.median(_re):.3f} p90={np.percentile(_re,90):.3f} unfit(>{ADAPT_R_SPLIT})={100*(_re>ADAPT_R_SPLIT).mean():.0f}%" if _re is not None else ""
+                        print(f"[adapt] cfg: me0={me0:.4f} PX_SIZE={_px:.4f} floor={ADAPT_LMIN_PX*_px:.4f} | L min/med/max={Lt.min():.4f}/{np.median(Lt):.4f}/{Lt.max():.4f} | mean edge now={np.linalg.norm(Vn[Fa[:,0]]-Vn[Fa[:,1]],axis=1).mean():.4f}{_rs}", flush=True)
                     tri = Vn[Fa]
                     el3 = np.stack([np.linalg.norm(tri[:, 1] - tri[:, 0], axis=1),
                                     np.linalg.norm(tri[:, 2] - tri[:, 1], axis=1),
@@ -397,7 +427,8 @@ for step in range(STEPS):
                     # a 2 % cap on both is asymmetric (a split adds ~4 verts, a collapse removes 1) -> linear growth
                     # to the face cap regardless of L. Tangle safety comes from the SI-ring exclusion + gate, not the cap.
                     _t0 = time.time()
-                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, int(ADAPT_COLLAPSE_FRAC * len(Fa)), vthr=ADAPT_CRATIO * Lt)
+                    _cthr = getattr(_target, "last_cthr", None)
+                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, int(ADAPT_COLLAPSE_FRAC * len(Fa)), vthr=(_cthr if (_cthr is not None and len(_cthr) == len(Vn)) else ADAPT_CRATIO * Lt))
                     print(f"[adapt] step {step+1}: +{ns} split edges, -{nc} collapses -> V={len(Vn)} F={len(Fa)} ({time.time()-_t0:.0f}s collapse)", flush=True)
                     nsplit_total += ns
                 else:
