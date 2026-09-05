@@ -62,12 +62,52 @@ ADAPT_TMIN = float(os.environ.get("ADAPT_TMIN", "0.5"))    # target edge length 
 ADAPT_TMAX = float(os.environ.get("ADAPT_TMAX", "1.6"))    # target edge length (x me0) in flat regions
 ADAPT_CRATIO = float(os.environ.get("ADAPT_CRATIO", "0.8"))   # collapse edges shorter than CRATIO x local target (Botsch-Kobbelt 4/5)
 ADAPT_SRATIO = float(os.environ.get("ADAPT_SRATIO", "1.3333")) # split faces whose longest edge exceeds SRATIO x local target (4/3): midpoint split then lands in [2/3, 1]*L, not [1/2, 1]*L
-ADAPT_SPLIT_FRAC = float(os.environ.get("ADAPT_SPLIT_FRAC", "0.02"))  # cap: faces split per pass as a fraction of F
+ADAPT_SPLIT_FRAC = float(os.environ.get("ADAPT_SPLIT_FRAC", "1.0"))  # cap: faces split per pass as a fraction of F
 ADAPT_MAX_F = int(os.environ.get("ADAPT_MAX_F", "60000"))   # stop splitting above this face count (256^2 supervision ceiling; pure-Python DLFL cost)
 ADAPT_FOLD = float(os.environ.get("ADAPT_FOLD", "70.0"))    # dihedral above this = tangle/fold, not a feature: never split, let collapse clean it
 ADAPT_SMOOTH_K = int(os.environ.get("ADAPT_SMOOTH_K", "3"))  # measure curvature on a Taubin-smoothed copy: real curvature survives, SI jitter does not
 ADAPT_SI_GATE = float(os.environ.get("ADAPT_SI_GATE", "0.05"))  # no splits while the self-intersecting face fraction exceeds this (clean before subdividing)
 ADAPT_LMIN_PX = float(os.environ.get("ADAPT_LMIN_PX", "2.0"))  # floor on target edge length in PIXELS of the training images: below ~2 px the loss cannot see an edge, refinement is pure cost
+ADAPT_MODE = os.environ.get("ADAPT_MODE", "curvature")       # "curvature" | "residual": what decides the target edge length
+ADAPT_CURV_W = float(os.environ.get("ADAPT_CURV_W", "0.0"))    # residual mode: blend in curvature drive, t = max(t_err, W * t_curv)
+ADAPT_E_LO = float(os.environ.get("ADAPT_E_LO", "0.5"))        # residual quantiles (data-adaptive): below E_LO-quantile = fitted (long target)
+ADAPT_E_HI = float(os.environ.get("ADAPT_E_HI", "0.9"))        # above E_HI-quantile = badly fitted (short target)
+
+def face_residual(Vx, Fx):
+    """Per-face image-fit error summed over the training views: |rendered sil - GT sil| + masked
+    |depth - GT depth| on pixels the face covers (nvdiffrast triangle-id buffer), plus GT-foreground
+    pixels we fail to cover ("missing"), attributed to the nearest rendered face. This is where the
+    loss says the fit is bad -- refinement goes there, not to whatever is merely thin/curved."""
+    from pipeline.cameras import transform_to_clip
+    from scipy.ndimage import distance_transform_edt
+    vt = torch.tensor(Vx, dtype=torch.float32, device=DEVICE)
+    ft = torch.tensor(Fx.astype(np.int32), dtype=torch.int32, device=DEVICE)
+    err = np.zeros(len(Fx))
+    with torch.no_grad():
+        for i in range(NV):
+            pos = transform_to_clip(vt, mvps[i])
+            H = W = int(targets.shape[1])
+            rast, _ = dr.rasterize(ctx, pos, ft, resolution=[H, W])
+            tid = rast[0, :, :, 3].long().cpu().numpy() - 1          # -1 = background
+            fg = tid >= 0
+            ones = torch.ones(1, len(Vx), 3, dtype=torch.float32, device=DEVICE)
+            col, _ = dr.interpolate(ones, rast, ft)
+            sil = dr.antialias(col, rast, pos, ft)[0, :, :, 0].cpu().numpy()
+            zw, _ = dr.interpolate(pos[0, :, 2:4].unsqueeze(0).contiguous(), rast, ft)
+            ndc = (zw[0, :, :, 0] / zw[0, :, :, 1].clamp(min=1e-6)).cpu().numpy()
+            gsil = targets[i, :, :, 0].cpu().numpy(); gfg = gtfg_t[i].cpu().numpy(); gd = gtd_t[i].cpu().numpy()
+            e = np.abs(sil - gsil)                                     # silhouette disagreement
+            both = fg & gfg
+            e[both] += np.abs(ndc[both] - gd[both]) * W_DEPTH          # depth residual, same weight as the loss
+            # covered pixels -> their face
+            np.add.at(err, tid[fg], e[fg])
+            # missing pixels (GT fg, we render bg) -> nearest rendered face
+            miss = gfg & ~fg
+            if miss.any() and fg.any():
+                _, idx = distance_transform_edt(~fg, return_indices=True)
+                near = tid[idx[0][miss], idx[1][miss]]
+                np.add.at(err, near, e[miss] + 1.0)
+    return err
 
 def _taubin_np(Vx, Fx, iters, lam=0.5, mu=-0.53):
     Vx = np.asarray(Vx, float).copy(); nv = len(Vx)
@@ -317,10 +357,21 @@ for step in range(STEPS):
                     def _target(Vx, Fx):
                         kap = vertex_dihedral(_taubin_np(Vx, Fx, ADAPT_SMOOTH_K) if ADAPT_SMOOTH_K > 0 else Vx, Fx)
                         t = np.clip((kap - ADAPT_LO) / (ADAPT_HI - ADAPT_LO), 0, 1); t = t * t * (3 - 2 * t)
+                        if ADAPT_MODE == "residual":
+                            ef = face_residual(Vx, Fx)
+                            ev = np.zeros(len(Vx))
+                            for k in range(3): np.maximum.at(ev, Fx[:, k], ef)   # vertex = worst incident face
+                            lo, hi = np.quantile(ev, ADAPT_E_LO), np.quantile(ev, ADAPT_E_HI)
+                            te = np.clip((ev - lo) / max(hi - lo, 1e-9), 0, 1); te = te * te * (3 - 2 * te)
+                            t = np.maximum(te, ADAPT_CURV_W * t)
+                            _target.last_err = ef
                         t[kap > ADAPT_FOLD] = 0.0                    # tangles get the flat (long) target
                         Lt_ = me0 * (ADAPT_TMAX - (ADAPT_TMAX - ADAPT_TMIN) * t)
                         return np.maximum(Lt_, ADAPT_LMIN_PX * PX_SIZE) if "PX_SIZE" in globals() else Lt_
                     Lt = _target(Vn, Fa)
+                    if step + 1 == COLLAPSE_EVERY:
+                        _px = globals().get("PX_SIZE", float("nan"))
+                        print(f"[adapt] cfg: me0={me0:.4f} PX_SIZE={_px:.4f} floor={ADAPT_LMIN_PX*_px:.4f} | L min/med/max={Lt.min():.4f}/{np.median(Lt):.4f}/{Lt.max():.4f} | mean edge now={np.linalg.norm(Vn[Fa[:,0]]-Vn[Fa[:,1]],axis=1).mean():.4f}", flush=True)
                     tri = Vn[Fa]
                     el3 = np.stack([np.linalg.norm(tri[:, 1] - tri[:, 0], axis=1),
                                     np.linalg.norm(tri[:, 2] - tri[:, 1], axis=1),
@@ -335,10 +386,16 @@ for step in range(STEPS):
                     if len(fids):
                         fids = fids[np.argsort(-ratio[fids])][:max(1, int(ADAPT_SPLIT_FRAC * len(Fa)))].tolist()
                         from phase1c_pipeline import dlfl_subdivide_arrays
+                        cy = Vn[Fa[fids]].mean(1)[:, 1]
+                        hist, _ = np.histogram(cy, bins=np.linspace(Vn[:, 1].min(), Vn[:, 1].max(), 7))
+                        print(f"[adapt] step {step+1}: split {len(fids)} faces, y-bands bottom->top {hist.tolist()}", flush=True)
                         Vn, Fa, ns = dlfl_subdivide_arrays(Vn, Fa, fids, expand_ring=False)
                         wt_, _ = check_watertight(Fa); assert wt_
                         Lt = _target(Vn, Fa)
-                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, cap, vthr=ADAPT_CRATIO * Lt)
+                    # Botsch-Kobbelt converges only if split and collapse both run to completion each pass;
+                    # a 2 % cap on both is asymmetric (a split adds ~4 verts, a collapse removes 1) -> linear growth
+                    # to the face cap regardless of L. Tangle safety comes from the SI-ring exclusion + gate, not the cap.
+                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, len(Fa), vthr=ADAPT_CRATIO * Lt)
                     nsplit_total += ns
                 else:
                     Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, cap, thr_abs=(COLLAPSE_RATIO * me0) if COLLAPSE_ABS else None)
