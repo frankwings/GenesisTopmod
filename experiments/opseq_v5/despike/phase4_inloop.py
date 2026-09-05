@@ -60,7 +60,8 @@ ADAPT_LO = float(os.environ.get("ADAPT_LO", "8.0"))        # dihedral (deg) at/b
 ADAPT_HI = float(os.environ.get("ADAPT_HI", "30.0"))       # dihedral at/above which a vertex counts as fully curved
 ADAPT_TMIN = float(os.environ.get("ADAPT_TMIN", "0.5"))    # target edge length (x me0) in curved regions
 ADAPT_TMAX = float(os.environ.get("ADAPT_TMAX", "1.6"))    # target edge length (x me0) in flat regions
-ADAPT_CRATIO = float(os.environ.get("ADAPT_CRATIO", "0.5"))# collapse edges shorter than CRATIO x local target
+ADAPT_CRATIO = float(os.environ.get("ADAPT_CRATIO", "0.8"))   # collapse edges shorter than CRATIO x local target (Botsch-Kobbelt 4/5)
+ADAPT_SRATIO = float(os.environ.get("ADAPT_SRATIO", "1.3333")) # split faces whose longest edge exceeds SRATIO x local target (4/3): midpoint split then lands in [2/3, 1]*L, not [1/2, 1]*L
 ADAPT_SPLIT_FRAC = float(os.environ.get("ADAPT_SPLIT_FRAC", "0.02"))  # cap: faces split per pass as a fraction of F
 ADAPT_MAX_F = int(os.environ.get("ADAPT_MAX_F", "60000"))   # stop splitting above this face count (256^2 supervision ceiling; pure-Python DLFL cost)
 ADAPT_FOLD = float(os.environ.get("ADAPT_FOLD", "70.0"))    # dihedral above this = tangle/fold, not a feature: never split, let collapse clean it
@@ -330,7 +331,7 @@ for step in range(STEPS):
                     gate_open = si_frac <= ADAPT_SI_GATE and len(Fa) < ADAPT_MAX_F
                     if not gate_open:
                         print(f"[adapt] step {step+1}: splits skipped (SI {100*si_frac:.1f}% > gate {100*ADAPT_SI_GATE:.0f}% or F>={ADAPT_MAX_F}); collapse/flip only", flush=True)
-                    fids = np.where(ratio > 1.0)[0] if gate_open else np.zeros(0, int)
+                    fids = np.where(ratio > ADAPT_SRATIO)[0] if gate_open else np.zeros(0, int)
                     if len(fids):
                         fids = fids[np.argsort(-ratio[fids])][:max(1, int(ADAPT_SPLIT_FRAC * len(Fa)))].tolist()
                         from phase1c_pipeline import dlfl_subdivide_arrays
