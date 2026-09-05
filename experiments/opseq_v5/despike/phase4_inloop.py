@@ -65,7 +65,8 @@ ADAPT_SPLIT_FRAC = float(os.environ.get("ADAPT_SPLIT_FRAC", "0.02"))  # cap: fac
 ADAPT_MAX_F = int(os.environ.get("ADAPT_MAX_F", "60000"))   # stop splitting above this face count (256^2 supervision ceiling; pure-Python DLFL cost)
 ADAPT_FOLD = float(os.environ.get("ADAPT_FOLD", "70.0"))    # dihedral above this = tangle/fold, not a feature: never split, let collapse clean it
 ADAPT_SMOOTH_K = int(os.environ.get("ADAPT_SMOOTH_K", "3"))  # measure curvature on a Taubin-smoothed copy: real curvature survives, SI jitter does not
-ADAPT_SI_GATE = float(os.environ.get("ADAPT_SI_GATE", "0.02"))  # no splits while the self-intersecting face fraction exceeds this (clean before subdividing)
+ADAPT_SI_GATE = float(os.environ.get("ADAPT_SI_GATE", "0.05"))  # no splits while the self-intersecting face fraction exceeds this (clean before subdividing)
+ADAPT_LMIN_PX = float(os.environ.get("ADAPT_LMIN_PX", "2.0"))  # floor on target edge length in PIXELS of the training images: below ~2 px the loss cannot see an edge, refinement is pure cost
 
 def _taubin_np(Vx, Fx, iters, lam=0.5, mu=-0.53):
     Vx = np.asarray(Vx, float).copy(); nv = len(Vx)
@@ -141,6 +142,7 @@ if MODE == "64v":
     gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
     gvn = normalize_to_range(gv)
     mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
+    PX_SIZE = 2.0 * float(np.linalg.norm(gvn, axis=1).max()) / 256.0   # image half-height = max_radius (fov 2*atan(0.5), R = 2*max_radius)
     gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
     cow_v13.N_VIEWS = 64
     HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=512, vote=2)
@@ -315,7 +317,8 @@ for step in range(STEPS):
                         kap = vertex_dihedral(_taubin_np(Vx, Fx, ADAPT_SMOOTH_K) if ADAPT_SMOOTH_K > 0 else Vx, Fx)
                         t = np.clip((kap - ADAPT_LO) / (ADAPT_HI - ADAPT_LO), 0, 1); t = t * t * (3 - 2 * t)
                         t[kap > ADAPT_FOLD] = 0.0                    # tangles get the flat (long) target
-                        return me0 * (ADAPT_TMAX - (ADAPT_TMAX - ADAPT_TMIN) * t)
+                        Lt_ = me0 * (ADAPT_TMAX - (ADAPT_TMAX - ADAPT_TMIN) * t)
+                        return np.maximum(Lt_, ADAPT_LMIN_PX * PX_SIZE) if "PX_SIZE" in globals() else Lt_
                     Lt = _target(Vn, Fa)
                     tri = Vn[Fa]
                     el3 = np.stack([np.linalg.norm(tri[:, 1] - tri[:, 0], axis=1),
