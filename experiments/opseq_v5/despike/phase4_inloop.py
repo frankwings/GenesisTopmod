@@ -62,7 +62,8 @@ ADAPT_TMIN = float(os.environ.get("ADAPT_TMIN", "0.5"))    # target edge length 
 ADAPT_TMAX = float(os.environ.get("ADAPT_TMAX", "1.6"))    # target edge length (x me0) in flat regions
 ADAPT_CRATIO = float(os.environ.get("ADAPT_CRATIO", "0.8"))   # collapse edges shorter than CRATIO x local target (Botsch-Kobbelt 4/5)
 ADAPT_SRATIO = float(os.environ.get("ADAPT_SRATIO", "1.3333")) # split faces whose longest edge exceeds SRATIO x local target (4/3): midpoint split then lands in [2/3, 1]*L, not [1/2, 1]*L
-ADAPT_SPLIT_FRAC = float(os.environ.get("ADAPT_SPLIT_FRAC", "1.0"))  # cap: faces split per pass as a fraction of F
+ADAPT_SPLIT_FRAC = float(os.environ.get("ADAPT_SPLIT_FRAC", "0.05"))
+ADAPT_COLLAPSE_FRAC = float(os.environ.get("ADAPT_COLLAPSE_FRAC", "0.2"))  # collapse cap per pass (x F): ~4x the split cap in vertex terms so a pass can be net-negative (B-K needs collapse to keep up); uncapped pure-Python DLFL was 100% CPU for 25 min with no pass done  # cap: faces split per pass as a fraction of F
 ADAPT_MAX_F = int(os.environ.get("ADAPT_MAX_F", "60000"))   # stop splitting above this face count (256^2 supervision ceiling; pure-Python DLFL cost)
 ADAPT_FOLD = float(os.environ.get("ADAPT_FOLD", "70.0"))    # dihedral above this = tangle/fold, not a feature: never split, let collapse clean it
 ADAPT_SMOOTH_K = int(os.environ.get("ADAPT_SMOOTH_K", "3"))  # measure curvature on a Taubin-smoothed copy: real curvature survives, SI jitter does not
@@ -395,7 +396,9 @@ for step in range(STEPS):
                     # Botsch-Kobbelt converges only if split and collapse both run to completion each pass;
                     # a 2 % cap on both is asymmetric (a split adds ~4 verts, a collapse removes 1) -> linear growth
                     # to the face cap regardless of L. Tangle safety comes from the SI-ring exclusion + gate, not the cap.
-                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, len(Fa), vthr=ADAPT_CRATIO * Lt)
+                    _t0 = time.time()
+                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, int(ADAPT_COLLAPSE_FRAC * len(Fa)), vthr=ADAPT_CRATIO * Lt)
+                    print(f"[adapt] step {step+1}: +{ns} split edges, -{nc} collapses -> V={len(Vn)} F={len(Fa)} ({time.time()-_t0:.0f}s collapse)", flush=True)
                     nsplit_total += ns
                 else:
                     Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, cap, thr_abs=(COLLAPSE_RATIO * me0) if COLLAPSE_ABS else None)
