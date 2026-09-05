@@ -76,6 +76,7 @@ ADAPT_E_HI = float(os.environ.get("ADAPT_E_HI", "0.9"))        # above E_HI-quan
 ADAPT_R_SPLIT = float(os.environ.get("ADAPT_R_SPLIT", "0.05"))   # residual mode (absolute): mean image error per covered pixel-view above this = unfit -> short target
 ADAPT_R_KEEP = float(os.environ.get("ADAPT_R_KEEP", "0.01"))     # below this AND flat -> may coarsen; in between -> keep current local edge length (never coarsen a region the fit still needs)
 ADAPT_ABS = int(os.environ.get("ADAPT_ABS", "1"))                # 1 = absolute pixel-scale thresholds (shape-agnostic), 0 = quantiles (v7: coarsened fertility to 2.4k V)
+ADAPT_KEEP_FLAT = int(os.environ.get("ADAPT_KEEP_FLAT", "1"))  # 1: coarsen only where fitted AND flat; 0: coarsen wherever fitted (a fitted thin limb does not need its density either)
 
 def face_residual(Vx, Fx):
     """Per-face image-fit error summed over the training views: |rendered sil - GT sil| + masked
@@ -376,7 +377,7 @@ for step in range(STEPS):
                                 np.add.at(le, src_, np.linalg.norm(Vx[src_] - Vx[dst_], axis=1)); np.add.at(cnt_, src_, 1)
                                 le /= np.maximum(cnt_, 1)                                   # current local edge length
                                 unfit = ev > ADAPT_R_SPLIT
-                                coarse_ok = (ev < ADAPT_R_KEEP) & (t < 0.05)                # residual ~0 and flat
+                                coarse_ok = (ev < ADAPT_R_KEEP) & ((t < 0.05) if ADAPT_KEEP_FLAT else True)   # residual ~0 (and flat, if KEEP_FLAT)
                                 Lk = le.copy()
                                 Lk[unfit] = np.minimum(le[unfit] * 0.5, me0 * ADAPT_TMIN)   # halve where unfit
                                 Lk[coarse_ok] = me0 * ADAPT_TMAX
