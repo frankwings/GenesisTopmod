@@ -77,6 +77,50 @@ ADAPT_R_SPLIT = float(os.environ.get("ADAPT_R_SPLIT", "0.05"))   # residual mode
 ADAPT_R_KEEP = float(os.environ.get("ADAPT_R_KEEP", "0.01"))     # below this AND flat -> may coarsen; in between -> keep current local edge length (never coarsen a region the fit still needs)
 ADAPT_ABS = int(os.environ.get("ADAPT_ABS", "1"))                # 1 = absolute pixel-scale thresholds (shape-agnostic), 0 = quantiles (v7: coarsened fertility to 2.4k V)
 ADAPT_KEEP_FLAT = int(os.environ.get("ADAPT_KEEP_FLAT", "1"))  # 1: coarsen only where fitted AND flat; 0: coarsen wherever fitted (a fitted thin limb does not need its density either)
+ADAPT_EPS_PX = float(os.environ.get("ADAPT_EPS_PX", "0.5"))     # dunyach: approximation tolerance epsilon in pixels -> L = sqrt(6 eps/k - 3 eps^2)
+ADAPT_GRADE = float(os.environ.get("ADAPT_GRADE", "0.0"))       # sizing-field gradation (Lipschitz alpha): L(v) <= L(u) + alpha*|uv|; 0 = off (Dunyach / attention-flow analogue)
+ADAPT_NU_GAIN = float(os.environ.get("ADAPT_NU_GAIN", "0.2"))   # velocity mode (Palfinger): ref_len *= 1 + (nu/nu_med - 1) * gain
+# ADAPT_MODE: curvature (dihedral proxy) | dunyach (principal curvature + eps) | velocity (Palfinger closed loop)
+#             | curv_uniform (3DV-2026: high-curvature split + uniform split by mean edge) | residual (image residual, ours)
+
+def principal_kmax(Vx, Fx):
+    """max |principal curvature| per vertex from cotangent mean curvature H (Meyer 2003) and
+    angle-deficit Gaussian curvature K: kmax = |H| + sqrt(max(H^2 - K, 0)). Barycentric area."""
+    Vx = np.asarray(Vx, float); Fx = np.asarray(Fx, np.int64); nv = len(Vx)
+    A = np.zeros(nv); KH = np.zeros((nv, 3)); ang_sum = np.zeros(nv)
+    fa = 0.5 * np.linalg.norm(np.cross(Vx[Fx[:, 1]] - Vx[Fx[:, 0]], Vx[Fx[:, 2]] - Vx[Fx[:, 0]]), axis=1)
+    for k in range(3): np.add.at(A, Fx[:, k], fa / 3.0)
+    for k in range(3):
+        i0, i1, i2 = Fx[:, k], Fx[:, (k + 1) % 3], Fx[:, (k + 2) % 3]
+        e1 = Vx[i1] - Vx[i0]; e2 = Vx[i2] - Vx[i0]
+        cosang = (e1 * e2).sum(1) / (np.linalg.norm(e1, axis=1) * np.linalg.norm(e2, axis=1) + 1e-12)
+        ang = np.arccos(np.clip(cosang, -1, 1)); np.add.at(ang_sum, i0, ang)
+        # cot at vertex i0 weights edge (i1,i2): contributes to KH of i1 and i2
+        cot = cosang / (np.sqrt(np.clip(1 - cosang ** 2, 1e-12, None)))
+        d = Vx[i1] - Vx[i2]
+        np.add.at(KH, i1, cot[:, None] * d); np.add.at(KH, i2, -cot[:, None] * d)
+    A = np.maximum(A, 1e-12)
+    H = np.linalg.norm(KH, axis=1) / (4.0 * A)             # |mean curvature normal| / 2 -> H
+    Kg = (2 * np.pi - ang_sum) / A
+    disc = np.maximum(H * H - Kg, 0.0)
+    return H + np.sqrt(disc)
+
+def grade_sizing(Vx, Fx, L, alpha, passes=8):
+    """Lipschitz gradation: L(v) <= L(u) + alpha*|uv| over edges (Dunyach 2013; attention-flow analogue)."""
+    src = np.concatenate([Fx[:, 0], Fx[:, 1], Fx[:, 2], Fx[:, 1], Fx[:, 2], Fx[:, 0]])
+    dst = np.concatenate([Fx[:, 1], Fx[:, 2], Fx[:, 0], Fx[:, 0], Fx[:, 1], Fx[:, 2]])
+    el = np.linalg.norm(Vx[src] - Vx[dst], axis=1); L = L.copy()
+    for _ in range(passes):
+        cand = L[dst] + alpha * el
+        np.minimum.at(L, src, cand)
+    return L
+
+def local_edge_len(Vx, Fx):
+    src = np.concatenate([Fx[:, 0], Fx[:, 1], Fx[:, 2], Fx[:, 1], Fx[:, 2], Fx[:, 0]])
+    dst = np.concatenate([Fx[:, 1], Fx[:, 2], Fx[:, 0], Fx[:, 0], Fx[:, 1], Fx[:, 2]])
+    le = np.zeros(len(Vx)); c = np.zeros(len(Vx))
+    np.add.at(le, src, np.linalg.norm(Vx[src] - Vx[dst], axis=1)); np.add.at(c, src, 1)
+    return le / np.maximum(c, 1)
 
 def face_residual(Vx, Fx):
     """Per-face image-fit error summed over the training views: |rendered sil - GT sil| + masked
@@ -362,6 +406,41 @@ for step in range(STEPS):
                     def _target(Vx, Fx):
                         kap = vertex_dihedral(_taubin_np(Vx, Fx, ADAPT_SMOOTH_K) if ADAPT_SMOOTH_K > 0 else Vx, Fx)
                         t = np.clip((kap - ADAPT_LO) / (ADAPT_HI - ADAPT_LO), 0, 1); t = t * t * (3 - 2 * t)
+                        _floor = ADAPT_LMIN_PX * PX_SIZE if "PX_SIZE" in globals() else 0.0
+                        _Lmax = me0 * ADAPT_TMAX
+                        _target.last_cthr = None
+                        if ADAPT_MODE == "dunyach":
+                            # Dunyach 2013 sizing field: L = sqrt(6 eps/k - 3 eps^2), eps in pixels -> tied to supervision
+                            kmax = principal_kmax(_taubin_np(Vx, Fx, ADAPT_SMOOTH_K) if ADAPT_SMOOTH_K > 0 else Vx, Fx)
+                            eps = ADAPT_EPS_PX * (PX_SIZE if "PX_SIZE" in globals() else me0 / 6)
+                            Ld = np.sqrt(np.maximum(6 * eps / np.maximum(kmax, 1e-9) - 3 * eps * eps, 0.0))
+                            Ld[kap > ADAPT_FOLD] = _Lmax
+                            Ld = np.clip(Ld, _floor, _Lmax)
+                            if ADAPT_GRADE > 0: Ld = grade_sizing(Vx, Fx, Ld, ADAPT_GRADE)
+                            return Ld
+                        if ADAPT_MODE == "velocity":
+                            # Palfinger 2022: closed loop on vertex speed. Faster than median -> coarser, slower -> finer.
+                            le = local_edge_len(Vx, Fx)
+                            Vl = getattr(_target, "V_last", None); rl = getattr(_target, "ref_len", None)
+                            if Vl is None or len(Vl) != len(Vx) or rl is None or len(rl) != len(Vx):
+                                rl = le.copy(); nu = np.ones(len(Vx))
+                            else:
+                                nu = np.linalg.norm(Vx - Vl, axis=1) / max(me0, 1e-9)
+                            nu_med = max(np.median(nu), 1e-9)
+                            rl = rl * np.clip(1 + (nu / nu_med - 1) * ADAPT_NU_GAIN, 0.5, 2.0)
+                            rl[kap > ADAPT_FOLD] = _Lmax
+                            rl = np.clip(rl, _floor, _Lmax)
+                            if ADAPT_GRADE > 0: rl = grade_sizing(Vx, Fx, rl, ADAPT_GRADE)
+                            _target.ref_len = rl; _target.nu = nu
+                            return rl
+                        if ADAPT_MODE == "curv_uniform":
+                            # 3DV-2026: split high-curvature edges; elsewhere uniform split by the average edge length
+                            Lu = np.full(len(Vx), float(np.mean(local_edge_len(Vx, Fx))))
+                            Lu[t > 0.5] = me0 * ADAPT_TMIN
+                            Lu[kap > ADAPT_FOLD] = _Lmax
+                            Lu = np.clip(Lu, _floor, _Lmax)
+                            if ADAPT_GRADE > 0: Lu = grade_sizing(Vx, Fx, Lu, ADAPT_GRADE)
+                            return Lu
                         if ADAPT_MODE == "residual":
                             ef, cf = face_residual(Vx, Fx)
                             rf = ef / np.maximum(cf, 1.0)                        # mean error per covered pixel-view (absolute, pixel scale)
@@ -390,6 +469,7 @@ for step in range(STEPS):
                                 cthr[coarse_ok | (kap > ADAPT_FOLD)] = ADAPT_CRATIO * me0 * ADAPT_TMAX
                                 cthr[unfit] = ADAPT_CRATIO * Lk[unfit]
                                 _target.last_cthr = cthr
+                                if ADAPT_GRADE > 0: Lk = grade_sizing(Vx, Fx, Lk, ADAPT_GRADE)
                                 return Lk
                             lo, hi = np.quantile(ev, ADAPT_E_LO), np.quantile(ev, ADAPT_E_HI)
                             te = np.clip((ev - lo) / max(hi - lo, 1e-9), 0, 1); te = te * te * (3 - 2 * te)
@@ -397,7 +477,9 @@ for step in range(STEPS):
                             _target.last_err = rf
                         t[kap > ADAPT_FOLD] = 0.0                    # tangles get the flat (long) target
                         Lt_ = me0 * (ADAPT_TMAX - (ADAPT_TMAX - ADAPT_TMIN) * t)
-                        return np.maximum(Lt_, ADAPT_LMIN_PX * PX_SIZE) if "PX_SIZE" in globals() else Lt_
+                        Lt_ = np.maximum(Lt_, _floor)
+                        if ADAPT_GRADE > 0: Lt_ = grade_sizing(Vx, Fx, Lt_, ADAPT_GRADE)
+                        return Lt_
                     Lt = _target(Vn, Fa)
                     if step + 1 == COLLAPSE_EVERY:
                         _px = globals().get("PX_SIZE", float("nan"))
@@ -431,6 +513,8 @@ for step in range(STEPS):
                     _cthr = getattr(_target, "last_cthr", None)
                     Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, int(ADAPT_COLLAPSE_FRAC * len(Fa)), vthr=(_cthr if (_cthr is not None and len(_cthr) == len(Vn)) else ADAPT_CRATIO * Lt))
                     print(f"[adapt] step {step+1}: +{ns} split edges, -{nc} collapses -> V={len(Vn)} F={len(Fa)} ({time.time()-_t0:.0f}s collapse)", flush=True)
+                    _target.V_last = Vn.copy()
+                    if getattr(_target, 'ref_len', None) is not None and len(_target.ref_len) != len(Vn): _target.ref_len = None
                     nsplit_total += ns
                 else:
                     Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, cap, thr_abs=(COLLAPSE_RATIO * me0) if COLLAPSE_ABS else None)
