@@ -62,6 +62,8 @@ ADAPT_TMIN = float(os.environ.get("ADAPT_TMIN", "0.5"))    # target edge length 
 ADAPT_TMAX = float(os.environ.get("ADAPT_TMAX", "1.6"))    # target edge length (x me0) in flat regions
 ADAPT_CRATIO = float(os.environ.get("ADAPT_CRATIO", "0.5"))# collapse edges shorter than CRATIO x local target
 ADAPT_SPLIT_FRAC = float(os.environ.get("ADAPT_SPLIT_FRAC", "0.02"))  # cap: faces split per pass as a fraction of F
+ADAPT_MAX_F = int(os.environ.get("ADAPT_MAX_F", "60000"))   # stop splitting above this face count (256^2 supervision ceiling; pure-Python DLFL cost)
+ADAPT_FOLD = float(os.environ.get("ADAPT_FOLD", "70.0"))    # dihedral above this = tangle/fold, not a feature: never split, let collapse clean it
 COLLAPSE_MAX = int(os.environ.get("COLLAPSE_MAX", "300"))
 COLLAPSE_FRAC = float(os.environ.get("COLLAPSE_FRAC", "0"))
 COLLAPSE_ABS = int(os.environ.get("COLLAPSE_ABS", "1"))     # threshold = ratio x INITIAL mean edge (fixed), not the current mean: stops the runaway (3holes final stage ate 24% of V)  # if >0: per-call cap = frac x current face count (small meshes were eaten by a fixed cap: fertility cc3 1.9k -> 378 faces)
@@ -288,6 +290,7 @@ for step in range(STEPS):
                     def _target(Vx, Fx):
                         kap = vertex_dihedral(Vx, Fx)
                         t = np.clip((kap - ADAPT_LO) / (ADAPT_HI - ADAPT_LO), 0, 1); t = t * t * (3 - 2 * t)
+                        t[kap > ADAPT_FOLD] = 0.0                    # tangles get the flat (long) target
                         return me0 * (ADAPT_TMAX - (ADAPT_TMAX - ADAPT_TMIN) * t)
                     Lt = _target(Vn, Fa)
                     tri = Vn[Fa]
@@ -295,7 +298,7 @@ for step in range(STEPS):
                                     np.linalg.norm(tri[:, 2] - tri[:, 1], axis=1),
                                     np.linalg.norm(tri[:, 0] - tri[:, 2], axis=1)], 1)
                     ratio = el3.max(1) / Lt[Fa].min(1)          # longest edge vs target of most-curved corner
-                    fids = np.where(ratio > 1.0)[0]
+                    fids = np.where(ratio > 1.0)[0] if len(Fa) < ADAPT_MAX_F else np.zeros(0, int)
                     if len(fids):
                         fids = fids[np.argsort(-ratio[fids])][:max(1, int(ADAPT_SPLIT_FRAC * len(Fa)))].tolist()
                         from phase1c_pipeline import dlfl_subdivide_arrays

@@ -120,10 +120,9 @@ def collapse_short_edges(V, Fa, ratio=0.3, max_n=400, thr_abs=None, vthr=None):
     E = np.concatenate([Fa[:, [0, 1]], Fa[:, [1, 2]], Fa[:, [2, 0]]])
     el = np.linalg.norm(V[E[:, 0]] - V[E[:, 1]], axis=1)
     thr = thr_abs if thr_abs is not None else ratio * el.mean()
-    tree = None
+    tree = None; vmap = None
     if vthr is not None:
-        from scipy.spatial import cKDTree
-        tree = cKDTree(V); vthr = np.asarray(vthr, float)
+        vthr = np.asarray(vthr, float)
         thr = float(vthr.max())              # sort/break bound; per-edge test below
     with tempfile.NamedTemporaryFile("w", suffix=".obj", delete=False) as fh:
         for x, y, z in V: fh.write(f"v {x} {y} {z}\n")
@@ -136,10 +135,23 @@ def collapse_short_edges(V, Fa, ratio=0.3, max_n=400, thr_abs=None, vthr=None):
     def elen(e):
         a, b = e.he0.origin, e.he1.origin
         return (a.x-b.x)**2 + (a.y-b.y)**2 + (a.z-b.z)**2
+    if vthr is not None:
+        # DLFL vertex ids are a global counter -> sorted by id == OBJ (row) order. O(1) lookup;
+        # verified on coordinates, KD-tree fallback if the order assumption ever breaks.
+        vs = sorted(mesh.vertices.values(), key=lambda v: v.id)
+        ok_order = len(vs) == len(V) and all(
+            abs(vs[i].x - V[i, 0]) + abs(vs[i].y - V[i, 1]) + abs(vs[i].z - V[i, 2]) < 1e-9
+            for i in np.linspace(0, len(vs) - 1, min(64, len(vs))).astype(int))
+        if ok_order:
+            vmap = {v.id: i for i, v in enumerate(vs)}
+        else:
+            from scipy.spatial import cKDTree
+            tree = cKDTree(V)
     def ethr2(e):
-        if tree is None: return thr * thr
+        if vthr is None: return thr * thr
         a, b = e.he0.origin, e.he1.origin
-        ia = tree.query((a.x, a.y, a.z))[1]; ib = tree.query((b.x, b.y, b.z))[1]
+        if vmap is not None: ia, ib = vmap[a.id], vmap[b.id]
+        else: ia = tree.query((a.x, a.y, a.z))[1]; ib = tree.query((b.x, b.y, b.z))[1]
         t = min(vthr[ia], vthr[ib]); return t * t
     n = 0
     for e in sorted(list(mesh.edges.values()), key=elen):
