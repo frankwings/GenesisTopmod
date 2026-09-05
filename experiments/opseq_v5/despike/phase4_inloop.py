@@ -64,6 +64,30 @@ ADAPT_CRATIO = float(os.environ.get("ADAPT_CRATIO", "0.5"))# collapse edges shor
 ADAPT_SPLIT_FRAC = float(os.environ.get("ADAPT_SPLIT_FRAC", "0.02"))  # cap: faces split per pass as a fraction of F
 ADAPT_MAX_F = int(os.environ.get("ADAPT_MAX_F", "60000"))   # stop splitting above this face count (256^2 supervision ceiling; pure-Python DLFL cost)
 ADAPT_FOLD = float(os.environ.get("ADAPT_FOLD", "70.0"))    # dihedral above this = tangle/fold, not a feature: never split, let collapse clean it
+ADAPT_SMOOTH_K = int(os.environ.get("ADAPT_SMOOTH_K", "3"))  # measure curvature on a Taubin-smoothed copy: real curvature survives, SI jitter does not
+ADAPT_SI_GATE = float(os.environ.get("ADAPT_SI_GATE", "0.02"))  # no splits while the self-intersecting face fraction exceeds this (clean before subdividing)
+
+def _taubin_np(Vx, Fx, iters, lam=0.5, mu=-0.53):
+    Vx = np.asarray(Vx, float).copy(); nv = len(Vx)
+    src = np.concatenate([Fx[:, 0], Fx[:, 1], Fx[:, 2], Fx[:, 1], Fx[:, 2], Fx[:, 0]])
+    dst = np.concatenate([Fx[:, 1], Fx[:, 2], Fx[:, 0], Fx[:, 0], Fx[:, 1], Fx[:, 2]])
+    deg = np.bincount(src, minlength=nv).astype(float)[:, None]
+    for _ in range(iters):
+        for k in (lam, mu):
+            cen = np.zeros_like(Vx); np.add.at(cen, src, Vx[dst]); cen /= np.maximum(deg, 1)
+            Vx += k * (cen - Vx)
+    return Vx
+
+def _si_ring_mask(Vx, Fx):
+    """faces that self-intersect, plus every face sharing a vertex with one (1-ring)."""
+    om = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vx), o3d.utility.Vector3iVector(Fx.astype(np.int32)))
+    prs = np.asarray(om.get_self_intersecting_triangles())
+    bad = np.zeros(len(Fx), bool)
+    if len(prs):
+        bad[np.unique(prs)] = True
+        badv = np.zeros(len(Vx), bool); badv[np.unique(Fx[bad])] = True
+        bad |= badv[Fx].any(1)
+    return bad, (len(np.unique(prs)) / len(Fx) if len(prs) else 0.0)
 COLLAPSE_MAX = int(os.environ.get("COLLAPSE_MAX", "300"))
 COLLAPSE_FRAC = float(os.environ.get("COLLAPSE_FRAC", "0"))
 COLLAPSE_ABS = int(os.environ.get("COLLAPSE_ABS", "1"))     # threshold = ratio x INITIAL mean edge (fixed), not the current mean: stops the runaway (3holes final stage ate 24% of V)  # if >0: per-call cap = frac x current face count (small meshes were eaten by a fixed cap: fertility cc3 1.9k -> 378 faces)
@@ -288,7 +312,7 @@ for step in range(STEPS):
                     # Fixes vertex migration (verts pile into flat/concave regions during the
                     # sphere->shape deformation and uniform subdivision locks that in).
                     def _target(Vx, Fx):
-                        kap = vertex_dihedral(Vx, Fx)
+                        kap = vertex_dihedral(_taubin_np(Vx, Fx, ADAPT_SMOOTH_K) if ADAPT_SMOOTH_K > 0 else Vx, Fx)
                         t = np.clip((kap - ADAPT_LO) / (ADAPT_HI - ADAPT_LO), 0, 1); t = t * t * (3 - 2 * t)
                         t[kap > ADAPT_FOLD] = 0.0                    # tangles get the flat (long) target
                         return me0 * (ADAPT_TMAX - (ADAPT_TMAX - ADAPT_TMIN) * t)
@@ -298,7 +322,12 @@ for step in range(STEPS):
                                     np.linalg.norm(tri[:, 2] - tri[:, 1], axis=1),
                                     np.linalg.norm(tri[:, 0] - tri[:, 2], axis=1)], 1)
                     ratio = el3.max(1) / Lt[Fa].min(1)          # longest edge vs target of most-curved corner
-                    fids = np.where(ratio > 1.0)[0] if len(Fa) < ADAPT_MAX_F else np.zeros(0, int)
+                    si_bad, si_frac = _si_ring_mask(Vn, Fa)
+                    ratio[si_bad] = 0.0                          # never refine a tangle or its ring
+                    gate_open = si_frac <= ADAPT_SI_GATE and len(Fa) < ADAPT_MAX_F
+                    if not gate_open:
+                        print(f"[adapt] step {step+1}: splits skipped (SI {100*si_frac:.1f}% > gate {100*ADAPT_SI_GATE:.0f}% or F>={ADAPT_MAX_F}); collapse/flip only", flush=True)
+                    fids = np.where(ratio > 1.0)[0] if gate_open else np.zeros(0, int)
                     if len(fids):
                         fids = fids[np.argsort(-ratio[fids])][:max(1, int(ADAPT_SPLIT_FRAC * len(Fa)))].tolist()
                         from phase1c_pipeline import dlfl_subdivide_arrays
