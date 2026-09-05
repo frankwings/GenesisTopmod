@@ -11,6 +11,9 @@ ROOT = "/home/kingy/Projects/Genesis/GenesisTopmod"
 for p in (f"{ROOT}/experiments/opseq_v5", f"{ROOT}/experiments/opseq_v5/despike", ROOT, f"{ROOT}/Resource/continuous-remeshing"):
     sys.path.insert(0, p)
 os.chdir(f"{ROOT}/experiments/opseq_v5"); os.environ.setdefault("MODE", "64v")
+import shutil
+_shim = f"{ROOT}/Resource/continuous-remeshing/torch_scatter.py"
+if not os.path.exists(_shim): shutil.copy(f"{ROOT}/experiments/opseq_v5/despike/torch_scatter_shim.py", _shim)  # Resource/ is not versioned
 import numpy as np, torch, nvdiffrast.torch as dr
 import cow_v13
 from eval_local_refine import load_obj, normalize_to_range, BUNNY_PATH

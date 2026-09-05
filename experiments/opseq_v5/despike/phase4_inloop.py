@@ -80,6 +80,7 @@ ADAPT_KEEP_FLAT = int(os.environ.get("ADAPT_KEEP_FLAT", "1"))  # 1: coarsen only
 ADAPT_EPS_PX = float(os.environ.get("ADAPT_EPS_PX", "0.5"))     # dunyach: approximation tolerance epsilon in pixels -> L = sqrt(6 eps/k - 3 eps^2)
 ADAPT_GRADE = float(os.environ.get("ADAPT_GRADE", "0.0"))       # sizing-field gradation (Lipschitz alpha): L(v) <= L(u) + alpha*|uv|; 0 = off (Dunyach / attention-flow analogue)
 ADAPT_NU_GAIN = float(os.environ.get("ADAPT_NU_GAIN", "0.2"))   # velocity mode (Palfinger): ref_len *= 1 + (nu/nu_med - 1) * gain
+ADAPT_VEL_GUARD = float(os.environ.get("ADAPT_VEL_GUARD", "0.0"))  # Palfinger-style guard for ANY mode: faces whose vertices moved > K x median displacement since the last remesh are still moving/jittering -> not split this pass (0 = off)
 # ADAPT_MODE: curvature (dihedral proxy) | dunyach (principal curvature + eps) | velocity (Palfinger closed loop)
 #             | curv_uniform (3DV-2026: high-curvature split + uniform split by mean edge) | residual (image residual, ours)
 
@@ -493,6 +494,12 @@ for step in range(STEPS):
                     ratio = el3.max(1) / Lt[Fa].min(1)          # longest edge vs target of most-curved corner
                     si_bad, si_frac = _si_ring_mask(Vn, Fa)
                     ratio[si_bad] = 0.0                          # never refine a tangle or its ring
+                    if ADAPT_VEL_GUARD > 0:
+                        _Vl = getattr(_target, "V_last", None)
+                        if _Vl is not None and len(_Vl) == len(Vn):
+                            _nu = np.linalg.norm(Vn - _Vl, axis=1); _mov = _nu > ADAPT_VEL_GUARD * max(np.median(_nu), 1e-12)
+                            _fm = _mov[Fa].any(1); ratio[_fm] = 0.0
+                            print(f"[adapt] step {step+1}: velocity guard excluded {100*_fm.mean():.0f}% of faces (still moving)", flush=True)
                     gate_open = si_frac <= ADAPT_SI_GATE and len(Fa) < ADAPT_MAX_F
                     if not gate_open:
                         print(f"[adapt] step {step+1}: splits skipped (SI {100*si_frac:.1f}% > gate {100*ADAPT_SI_GATE:.0f}% or F>={ADAPT_MAX_F}); collapse/flip only", flush=True)
