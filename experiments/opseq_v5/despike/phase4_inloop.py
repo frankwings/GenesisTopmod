@@ -52,6 +52,7 @@ SMOOTH_LAM = float(os.environ.get("SMOOTH_LAM", "0.2"))
 W_T = float(os.environ.get("W_T", "20.0"))
 W_QUAL = float(os.environ.get("W_QUAL", "0.01"))
 W_DIFF = float(os.environ.get("W_DIFF", "1.0"))
+W_NORMAL = float(os.environ.get("W_NORMAL", "0.0"))   # L1 on camera-space normal image (Palfinger-style); 0 = off
 FOLD_MULT = float(os.environ.get("FOLD_MULT", "1.0"))
 COLLAPSE_EVERY = int(os.environ.get("COLLAPSE_EVERY", "0"))   # 0 = off
 COLLAPSE_RATIO = float(os.environ.get("COLLAPSE_RATIO", "0.3"))
@@ -239,6 +240,7 @@ if MODE == "64v":
     HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=512, vote=2)
     DEAD = 1.0 * HF.pitch
     gtdf_t = [torch.from_numpy(gtdiff[i]).float().to(DEVICE) for i in range(64)]
+    gtn_t = run_64v.make_gt_normals(ctx, mvps, views, SHAPE) if float(os.environ.get("W_NORMAL", "0")) > 0 else None
     def field_dist(pts): return F.relu(HF.dist(pts) - DEAD)
 else:
     scene = setup_scene(SHAPE, DEVICE)
@@ -372,17 +374,19 @@ _E0 = np.concatenate([Fa[:, [0, 1]], Fa[:, [1, 2]], Fa[:, [2, 0]]]); me0 = float
 for step in range(STEPS):
     opt.zero_grad()
     me = mean_edge_of(verts_t.detach(), src, dst)
-    sl = dl = fl = torch.tensor(0.0, device=DEVICE)
+    sl = dl = fl = nl = torch.tensor(0.0, device=DEVICE)
     for i in range(NV):
         if MODE == "64v":
             sil, ndc_z, fg, diff = render_sdd(ctx, verts_t, faces_t, mvps[i], views[i])
             fl = fl + F.l1_loss(diff, gtdf_t[i])
+            if W_NORMAL > 0:
+                nl = nl + F.l1_loss(run_64v.render_normals(ctx, verts_t, faces_t, mvps[i], views[i]), gtn_t[i])
         else:
             sil, ndc_z, fg = render_sil_and_depth(ctx, verts_t, faces_t, mvps[i])
         sl = sl + F.l1_loss(sil[0], targets[i])
         dl = dl + depth_loss_masked(ndc_z, fg, gtd_t[i], gtfg_t[i])
-    sl, dl, fl = sl / NV, dl / NV, fl / NV
-    loss = (sl + W_DEPTH * dl + W_DIFF * fl
+    sl, dl, fl, nl = sl / NV, dl / NV, fl / NV, nl / NV
+    loss = (sl + W_DEPTH * dl + W_DIFF * fl + W_NORMAL * nl
             + W_LAP * LAP_MULT * laplacian_loss(verts_t, faces_t)
             + W_EDGE * edge_length_loss(verts_t, faces_t)
             + W_QUAL * _qual_loss(verts_t, faces_t)

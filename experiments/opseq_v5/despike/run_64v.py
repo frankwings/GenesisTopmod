@@ -114,6 +114,28 @@ def render_sdd(ctx, verts_t, faces_t, mvp, view):
     return sil, ndc_z, fg, diff
 
 
+def render_normals(ctx, verts_t, faces_t, mvp, view):
+    """camera-space normal image (H,W,3), zero outside fg. Palfinger-style supervision."""
+    H = W = IMG_RES
+    pos_clip = transform_to_clip(verts_t, mvp)
+    rast, _ = dr.rasterize(ctx, pos_clip, faces_t, resolution=[H, W])
+    faces_l = faces_t.long()
+    vn = vertex_normals(verts_t, faces_l, verts_t.shape[0])
+    vn_cam = (vn @ view[:3, :3].T).unsqueeze(0).contiguous()
+    nimg, _ = dr.interpolate(vn_cam, rast, faces_t)
+    fg = (rast[0, :, :, 3] > 0).float().unsqueeze(-1)
+    return nimg[0] * fg
+
+
+def make_gt_normals(ctx, mvps, views, shape):
+    gv, gf = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{shape}.obj"))
+    gv = normalize_to_range(gv)
+    vt = torch.tensor(gv, dtype=torch.float32, device=DEVICE)
+    ft = torch.tensor(gf, dtype=torch.int32, device=DEVICE)
+    with torch.no_grad():
+        return [render_normals(ctx, vt, ft, mvps[i], views[i]) for i in range(NV)]
+
+
 def make_gt(ctx, mvps, views, shape):
     gv, gf = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{shape}.obj"))
     gv = normalize_to_range(gv)
