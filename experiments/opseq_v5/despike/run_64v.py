@@ -58,6 +58,7 @@ W_DIFF = float(os.environ.get("W_DIFF", "1.0"))
 DILATE = int(os.environ.get("DILATE", "2"))
 cow_v13.TUBE_THR = float(os.environ.get("TUBE_THR", "0.4"))
 NV = 64
+TRAIN_RES = int(os.environ.get("TRAIN_RES", str(IMG_RES)))   # supervision resolution (GT + training renders); exam stays IMG_RES
 print(f"[run_64v] SHAPE={SHAPE} TAG={TAG} W_QUAL={W_QUAL} W_DIFF={W_DIFF}", flush=True)
 
 
@@ -94,7 +95,7 @@ def vertex_normals(verts_t, faces_l, nv):
 
 def render_sdd(ctx, verts_t, faces_t, mvp, view):
     """silhouette, ndc_z, fg, diffuse (camera-space headlight)."""
-    H = W = IMG_RES
+    H = W = TRAIN_RES
     pos_clip = transform_to_clip(verts_t, mvp)
     rast, _ = dr.rasterize(ctx, pos_clip, faces_t, resolution=[H, W])
     faces_l = faces_t.long()
@@ -116,7 +117,7 @@ def render_sdd(ctx, verts_t, faces_t, mvp, view):
 
 def render_normals(ctx, verts_t, faces_t, mvp, view):
     """camera-space normal image (H,W,3), zero outside fg. Palfinger-style supervision."""
-    H = W = IMG_RES
+    H = W = TRAIN_RES
     pos_clip = transform_to_clip(verts_t, mvp)
     rast, _ = dr.rasterize(ctx, pos_clip, faces_t, resolution=[H, W])
     faces_l = faces_t.long()

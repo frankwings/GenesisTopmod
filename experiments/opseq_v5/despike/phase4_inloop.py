@@ -234,13 +234,14 @@ if SUBDIV_TOP > 0:
     print(f"[p4] partial DLFL subdivision of {SUBDIV_TOP} largest faces: split {ne} edges -> V={len(V)} F={len(Fa)}", flush=True)
 if MODE == "64v":
     import run_64v
+    from eval_extrude_v3 import IMG_RES
     from run_64v import render_sdd
     from hull_field import build_vote_hull
     ctx = dr.RasterizeCudaContext()
     gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
     gvn = normalize_to_range(gv)
     mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
-    PX_SIZE = 2.0 * float(np.linalg.norm(gvn, axis=1).max()) / 256.0   # image half-height = max_radius (fov 2*atan(0.5), R = 2*max_radius)
+    PX_SIZE = 2.0 * float(np.linalg.norm(gvn, axis=1).max()) / run_64v.TRAIN_RES   # image half-height = max_radius (fov 2*atan(0.5), R = 2*max_radius)
     gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
     cow_v13.N_VIEWS = 64
     HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=512, vote=2)
@@ -352,6 +353,12 @@ def _snapshot64(step, Vn, Fa, res=192, cols=8):
 def iou_fn(vv, ff):
     vt = torch.tensor(np.asarray(vv), dtype=torch.float32, device=DEVICE)
     ft = torch.tensor(np.asarray(ff, np.int32), dtype=torch.int32, device=DEVICE)
+    if MODE == "64v" and run_64v.TRAIN_RES != IMG_RES:      # training IoU at the supervision resolution
+        from eval_extrude_v3 import render_silhouette
+        R = run_64v.TRAIN_RES
+        with torch.no_grad():
+            sils = np.stack([render_silhouette(ctx, vt, ft, mvps[i], resolution=(R, R))[0, :, :, 0].cpu().numpy() for i in range(mvps.shape[0])])
+        return compute_iou_n(sils, gt)
     return compute_iou_n(render_views_n(ctx, vt, ft, mvps), gt)
 
 def report(tag, V, Fa):
