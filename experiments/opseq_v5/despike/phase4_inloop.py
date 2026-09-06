@@ -150,6 +150,12 @@ def face_residual(Vx, Fx):
             e = np.abs(sil - gsil)                                     # silhouette disagreement
             both = fg & gfg
             e[both] += np.abs(ndc[both] - gd[both]) * W_DEPTH          # depth residual, same weight as the loss
+            if W_NORMAL > 0 and gtn_t is not None:                     # normal residual, same weight as the loss
+                vn = run_64v.vertex_normals(vt, ft.long(), len(Vx))
+                vn_cam = (vn @ views[i][:3, :3].T).unsqueeze(0).contiguous()
+                nimg, _ = dr.interpolate(vn_cam, rast, ft)
+                en = (nimg[0] - gtn_t[i]).abs().mean(-1).cpu().numpy()
+                e[both] += en[both] * W_NORMAL
             # covered pixels -> their face
             np.add.at(err, tid[fg], e[fg]); np.add.at(cov, tid[fg], 1.0)
             # missing pixels (GT fg, we render bg) -> nearest rendered face
@@ -575,7 +581,7 @@ for step in range(STEPS):
     if (step + 1) % 100 == 0:
         Vn = verts_t.detach().cpu().numpy().astype(np.float64)
         s = si_faces(Vn, Fa)
-        print(f"[step {step+1}/{STEPS}] sil={sl.item():.4f} flips={nflips_total} collapses={ncollapse_total} splits={nsplit_total} pushes={npush_total} V={len(Fa) and len(Vn)} "
+        print(f"[step {step+1}/{STEPS}] sil={sl.item():.4f} nrm={nl.item():.4f} flips={nflips_total} collapses={ncollapse_total} splits={nsplit_total} pushes={npush_total} V={len(Fa) and len(Vn)} "
               f"SI={s} ({100*s/len(Fa):.1f}%) folds={100*fold_frac(Vn, Fa):.1f}% "
               f"({time.time()-t0:.0f}s)", flush=True)
 
