@@ -20,7 +20,7 @@ one-page summary the paper tables will be built from. Meshes: `results_genus/`.
 |---|---|---|---|---|---|---|---|
 | armadillo | 0 | 0 | 0.9972 | 0.9885 | – | 56.8k | 0.5 % |
 | kitten | 1 | **1** | 0.9994 | 0.9982 | 0.00666 | 19.4k | 0 % |
-| fertility | 5 | **5** | 0.9974 (v8) / 0.9969 (v8b) | 0.9861 (v8b) | 0.00708 | 18.8k / 9.4k | 0.5 % |
+| fertility | **4** | 5 (one spurious handle, see LESSONS 19.5) | 0.9974 (v8) / 0.9969 (v8b) | 0.9861 (v8b) | 0.00708 | 18.8k / 9.4k | 0.5 % |
 | rocker-arm | 1 | **1** | 0.9985 | 0.9937 | 0.00584 | 25.2k | 0 % |
 | three-holes | 3 | **3** | 0.9966 | – | – | – | – |
 
