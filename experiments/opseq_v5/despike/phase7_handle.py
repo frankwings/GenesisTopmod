@@ -55,7 +55,7 @@ gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"));
 mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
 gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE); cow_v13.N_VIEWS = 64
 p1b._MVPS, p1b._GT = mvps, gt; p1b.SHAPE = SHAPE
-HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=512, vote=2)
+HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)
 pitch = HF.pitch
 
 def genus(V, F):

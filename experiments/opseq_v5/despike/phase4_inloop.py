@@ -244,7 +244,7 @@ if MODE == "64v":
     PX_SIZE = 2.0 * float(np.linalg.norm(gvn, axis=1).max()) / run_64v.TRAIN_RES   # image half-height = max_radius (fov 2*atan(0.5), R = 2*max_radius)
     gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
     cow_v13.N_VIEWS = 64
-    HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=512, vote=2)
+    HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)
     DEAD = 1.0 * HF.pitch
     gtdf_t = [torch.from_numpy(gtdiff[i]).float().to(DEVICE) for i in range(64)]
     gtn_t = run_64v.make_gt_normals(ctx, mvps, views, SHAPE) if float(os.environ.get("W_NORMAL", "0")) > 0 else None
