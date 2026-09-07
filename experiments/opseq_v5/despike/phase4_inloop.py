@@ -599,4 +599,5 @@ hof, sif = report("final", V, Fa)
 print(f"[p4] ho16 {ho0:.4f} -> {hof:.4f} ({(hof-ho0)*100:+.2f}) | SI {100*si0/len(Fa):.1f}% -> "
       f"{100*sif/len(Fa):.1f}% | total flips={nflips_total}", flush=True)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
+print(f"[vram] peak {torch.cuda.max_memory_allocated()/2**30:.2f} GB (reserved {torch.cuda.max_memory_reserved()/2**30:.2f} GB)", flush=True)
 print(f"[p4] saved cow_{SHAPE}_{TAG}.npz", flush=True)

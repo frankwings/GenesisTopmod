@@ -249,3 +249,4 @@ with open(out.replace(".npz", ".obj"), "w") as fh:
     for x, y, z in V2: fh.write(f"v {x} {y} {z}\n")
     for a, b, c in F: fh.write(f"f {a+1} {b+1} {c+1}\n")
 print(f"saved {out} (+.obj)", flush=True)
+import torch as _t; print(f"[vram] peak {_t.cuda.max_memory_allocated()/2**30:.2f} GB (reserved {_t.cuda.max_memory_reserved()/2**30:.2f} GB)", flush=True)
