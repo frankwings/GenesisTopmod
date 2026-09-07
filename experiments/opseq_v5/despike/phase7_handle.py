@@ -39,6 +39,7 @@ EXT_VOX = float(os.environ.get("EXT_VOX", "8.0"))
 MIN_SEP = float(os.environ.get("MIN_SEP", "1.5"))
 PROJ_RADIUS = float(os.environ.get("PROJ_RADIUS", "0.6"))  # also radially project the membrane around the tube (within this radius of the axis) so the mouth eats it; 0 = tube only    # faces closer than this (mean-edge units) are fold/sliver remnants, not a slab   # tunnel must continue hull-free this far beyond BOTH faces (bay vs through-hole)
 DRY = int(os.environ.get("DRY", "0"))
+PRE_SUBDIV = int(os.environ.get("PRE_SUBDIV", "0"))   # 1 = always pre-subdivide entry/exit faces before add_handle (auto when their 1-rings overlap)
 DETECT = os.environ.get("DETECT", "rays")
 ABSORB = int(os.environ.get("ABSORB", "0"))
 OPEN = os.environ.get("OPEN", "merge")   # merge = collapse membrane interior verts to the rim, delete interior edges -> rim polygon, add_handle(rim1, rim2)   # after add_handle, eat the blocking membrane into the mouth by DLFL collapses (mouth ring grows to the membrane rim)
@@ -352,6 +353,25 @@ for k in range(MAX_HANDLES):
     if DRY:
         print(f"[p7] DRY: best pair {i},{j} out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],2)} {np.round(cen[j],2)}", flush=True); break
     print(f"[p7] add_handle between faces {i},{j}: out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],3)} {np.round(cen[j],3)}", flush=True)
+    # Thin/pinched membrane: entry and exit faces are on different sheets but their 1-rings overlap
+    # (sheets touch at 1-ring distance) -> the tube's side quads would duplicate existing edges and break
+    # watertightness (fertility 4th tunnel: sep 0.9 edges, ring overlap 10). Step each face away from the
+    # other sheet: pick the nearest face (by centroid) on the same side whose vertex 1-ring is disjoint
+    # from the other face's vertex 1-ring.
+    _vf = {}
+    for _k, _f in enumerate(Fa):
+        for _x in _f: _vf.setdefault(int(_x), []).append(_k)
+    def _ringverts(f):                       # vertices of all faces sharing a vertex with face f
+        return set(int(x) for v in Fa[f] for k in _vf[int(v)] for x in Fa[k])
+    def _disjoint(a, b): return not (_ringverts(a) & set(int(x) for x in Fa[b])) and not (_ringverts(b) & set(int(x) for x in Fa[a]))
+    if not _disjoint(i, j):
+        _i0, _j0 = i, j
+        _ni = np.argsort(np.linalg.norm(cen - cen[i], axis=1))[:80]; _nj = np.argsort(np.linalg.norm(cen - cen[j], axis=1))[:80]
+        _ni = [int(k) for k in _ni if d[k] > 0]; _nj = [int(k) for k in _nj if d[k] > 0]     # stay outside the hull (on the membrane)
+        _pairs = [(a_, b_) for a_ in _ni for b_ in _nj if _disjoint(a_, b_)]
+        if _pairs:
+            i, j = min(_pairs, key=lambda ab: np.linalg.norm(cen[ab[0]] - cen[_i0]) + np.linalg.norm(cen[ab[1]] - cen[_j0]))
+        print(f"[p7] pinched membrane (1-rings overlapped): stepped faces {_i0},{_j0} -> {i},{j}; candidates={len(_pairs)}, new sep {np.linalg.norm(cen[j]-cen[i])/np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean():.2f} edges", flush=True)
     def _load_mesh():
         with tempfile.NamedTemporaryFile("w", suffix=".obj", delete=False) as fh:
             for x, y, zz in V: fh.write(f"v {x} {y} {zz}\n")
