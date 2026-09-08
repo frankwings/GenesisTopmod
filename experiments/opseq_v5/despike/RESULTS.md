@@ -19,6 +19,18 @@ one-page summary the paper tables will be built from. Meshes: `results_genus/`.
 `ADAM_BETAS=0.8,0.8 PALF_LAP=0.02 PALF_CLIP=10 LR_EDGE=0.3 ADAPT_REMESH=1 ADAPT_MODE=velocity ADAPT_NU_GAIN=0.2 ADAPT_LMIN_PX=1.3 ADAPT_MAX_F=100000 ADAPT_SI_GATE=0.3 COLLAPSE_EVERY=50 FLIP_EVERY=25 COLLAPSE_RATIO=0.4 SI_PUSH=0.15 STEPS=1200` + AUTO Taubin (optional).
 What changed vs v8: Palfinger's optimizer (betas 0.8, nu-weighted Laplacian on the gradient, clip, lr = 0.3 x edge) and the edge floor 3 px -> 1.3 px (V 27.7k -> 49.8k). Full command in LESSONS 22. Genus shapes not yet re-run with it.
 
+
+## 0c. Version history (what "golden vN" and "chain vN" mean)
+| version | date | what | armadillo ho16 / VolIoU / V |
+|---|---|---|---|
+| golden v1 | 09-02 | icosphere → carve → hull → in-loop DLFL → global subdiv → Taubin x5 (`p5_64_taubin5`) | 0.9957 / – / 18.3k |
+| golden v2 | 09-03 | + partial DLFL subdiv of 1500 largest faces + 1200 steps + Taubin (`p6_50k_taubin5`) | 0.9972 / 0.9885 / 28.4k |
+| chain v1–v5 | 09-04 | in-loop adaptive remeshing, curvature (dihedral) criterion, SI-ring guards, px floor (LESSONS 13) | genus shapes only |
+| chain v7 | 09-05 | residual criterion, quantile-normalised (negative) | genus shapes only |
+| chain v8 / v8b | 09-05 | residual criterion, absolute px thresholds (+ coarsen-where-fitted); + vel guard (15c) = the genus-shape headlines in §1–2 | genus shapes only |
+| **golden v3 = chain v9** | 09-08 | v2 mesh + Palfinger optimizer params + 1.3 px edge floor (LESSONS 22, §0b) | **0.9983 / 0.9948 / 49.8k** |
+Nine numbered iterations in total (golden 1–3, chain 1–9 with v6 skipped); golden v3 is the current reference for genus-0, v8b + vel-guard for genus > 0 until the v9 re-runs land.
+
 ## 1. Our best per shape (v8 chain; armadillo = v9)
 | shape | GT genus | genus found | ho16 | VolIoU | CD | V | SI |
 |---|---|---|---|---|---|---|---|

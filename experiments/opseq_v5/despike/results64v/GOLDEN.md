@@ -1,3 +1,13 @@
+# GOLDEN v3 (2026-09-08) — armadillo, same 64-view setup, Palfinger optimizer params on the DLFL loop
+**Mesh**: `cow_armadillo_golden_v3.npz` (Taubin) / `cow_armadillo_golden_v3_raw.npz` (no Taubin) — V=49,795 F=99,586, watertight, genus 0, **SI 0 %**
+**Exam**: ho16 **0.9983** (raw 0.9978), **VolIoU 0.9948** (raw 0.9943), CD 0.00620 — beats Palfinger 2022 original code (0.9965 / 0.9938 / 0.00678, 37.9k V) on all three; DMesh 0.9894 / 0.9634; Nicolet 0.9593 / 0.8985.
+**Chain**: golden v2 pre-Taubin mesh (`cow_armadillo_p6_50k.npz`) + 1200 in-loop steps with
+`ADAM_BETAS=0.8,0.8 PALF_LAP=0.02 PALF_CLIP=10 LR_EDGE=0.3 ADAPT_REMESH=1 ADAPT_MODE=velocity ADAPT_NU_GAIN=0.2 ADAPT_LMIN_PX=1.3 ADAPT_MAX_F=100000 ADAPT_SI_GATE=0.3 COLLAPSE_EVERY=50 FLIP_EVERY=25 COLLAPSE_RATIO=0.4 SI_PUSH=0.15` → AUTO Taubin (x2). Details: LESSONS 22.
+**Caveat**: 49.8k V vs Palfinger 37.9k (+31 %); wall 71 min vs 3.6 min. Genus shapes not yet re-run with v3 params.
+
+---
+# GOLDEN v2 / v1 (2026-09-02..03) — kept below for the chain history
+
 # GOLDEN — armadillo, 64 training views (DMesh mv-recon setup), pure GenesisTopmod
 
 **Mesh**: `cow_armadillo_p5_64_taubin5.npz` (+ .obj) — V=18,253 F=36,502, watertight, genus 0
