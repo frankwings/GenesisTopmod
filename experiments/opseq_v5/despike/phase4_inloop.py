@@ -52,7 +52,9 @@ SMOOTH_LAM = float(os.environ.get("SMOOTH_LAM", "0.2"))
 W_T = float(os.environ.get("W_T", "20.0"))
 W_QUAL = float(os.environ.get("W_QUAL", "0.01"))
 W_DIFF = float(os.environ.get("W_DIFF", "1.0"))
-W_NORMAL = float(os.environ.get("W_NORMAL", "0.0"))   # L1 on camera-space normal image (Palfinger-style); 0 = off
+W_NORMAL = float(os.environ.get("W_NORMAL", "0.0"))
+W_VLAP = float(os.environ.get("W_VLAP", "0.0"))      # Palfinger-style in-loop smoothing: per-vertex velocity-weighted Laplacian penalty (0 = off)
+VLAP_BETA = float(os.environ.get("VLAP_BETA", "0.8"))  # EMA of per-vertex displacement -> relative velocity nu   # L1 on camera-space normal image (Palfinger-style); 0 = off
 FOLD_MULT = float(os.environ.get("FOLD_MULT", "1.0"))
 COLLAPSE_EVERY = int(os.environ.get("COLLAPSE_EVERY", "0"))   # 0 = off
 COLLAPSE_RATIO = float(os.environ.get("COLLAPSE_RATIO", "0.3"))
@@ -399,7 +401,19 @@ for step in range(STEPS):
         sl = sl + F.l1_loss(sil[0], targets[i])
         dl = dl + depth_loss_masked(ndc_z, fg, gtd_t[i], gtfg_t[i])
     sl, dl, fl, nl = sl / NV, dl / NV, fl / NV, nl / NV
-    loss = (sl + W_DEPTH * dl + W_DIFF * fl + W_NORMAL * nl
+    if W_VLAP > 0:
+        # velocity-weighted Laplacian (Palfinger core/opt.py: grad += w * nu * (v - mean(neighbors))):
+        # vertices that are still moving get smoothed, converged ones keep their detail.
+        _nv = verts_t.shape[0]
+        if "_vl_nu" not in globals() or _vl_nu.shape[0] != _nv:
+            _vl_nu = torch.ones(_nv, device=DEVICE); _vl_prev = verts_t.detach().clone()
+        _nbr = torch.zeros_like(verts_t).index_add_(0, src, verts_t[dst]) / deg
+        _lap2 = ((verts_t - _nbr) ** 2).sum(-1)
+        _w = (_vl_nu / (_vl_nu.median() + 1e-12)).clamp(max=5.0).detach()
+        vlap = (_w * _lap2).mean() / (me.detach() ** 2 + 1e-12)
+    else:
+        vlap = torch.tensor(0.0, device=DEVICE)
+    loss = (sl + W_DEPTH * dl + W_DIFF * fl + W_NORMAL * nl + W_VLAP * vlap
             + W_LAP * LAP_MULT * laplacian_loss(verts_t, faces_t)
             + W_EDGE * edge_length_loss(verts_t, faces_t)
             + W_QUAL * _qual_loss(verts_t, faces_t)
@@ -409,6 +423,12 @@ for step in range(STEPS):
             + W_T * field_loss(verts_t, faces_l))
     loss.backward()
     opt.step(); sched.step()
+    if W_VLAP > 0 and verts_t.shape[0] == _vl_prev.shape[0]:
+        with torch.no_grad():
+            _disp = (verts_t.detach() - _vl_prev).norm(dim=-1)
+            _vl_nu.mul_(VLAP_BETA).add_((1 - VLAP_BETA) * _disp)
+            _vl_nu_n = _vl_nu / (_vl_nu.median() + 1e-12)           # relative velocity, O(1)
+            _vl_prev = verts_t.detach().clone()
     if FLIP_EVERY > 0 and (step + 1) % FLIP_EVERY == 0 and step + 1 < STEPS:
         with torch.no_grad():
             Vn = verts_t.detach().cpu().numpy().astype(np.float64)
@@ -588,7 +608,7 @@ for step in range(STEPS):
     if (step + 1) % 100 == 0:
         Vn = verts_t.detach().cpu().numpy().astype(np.float64)
         s = si_faces(Vn, Fa)
-        print(f"[step {step+1}/{STEPS}] sil={sl.item():.4f} nrm={nl.item():.4f} flips={nflips_total} collapses={ncollapse_total} splits={nsplit_total} pushes={npush_total} V={len(Fa) and len(Vn)} "
+        print(f"[step {step+1}/{STEPS}] sil={sl.item():.4f} nrm={nl.item():.4f} vlap={vlap.item():.4f} flips={nflips_total} collapses={ncollapse_total} splits={nsplit_total} pushes={npush_total} V={len(Fa) and len(Vn)} "
               f"SI={s} ({100*s/len(Fa):.1f}%) folds={100*fold_frac(Vn, Fa):.1f}% "
               f"({time.time()-t0:.0f}s)", flush=True)
 
