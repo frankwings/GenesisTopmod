@@ -18,7 +18,7 @@ one-page summary the paper tables will be built from. Meshes: `results_genus/`.
 ## 1. Our best per shape (v8 chain)
 | shape | GT genus | genus found | ho16 | VolIoU | CD | V | SI |
 |---|---|---|---|---|---|---|---|
-| armadillo | 0 | 0 | 0.9979 | 0.9932 (W_VLAP 0.03, LESSONS 21) | 0.00628 | 27.7k V | 0 % |
+| armadillo | 0 | 0 | 0.9983 | 0.9948 (Palfinger optimizer params, LESSONS 22) | 0.00620 | 49.8k V | 0 % |
 | kitten | 1 | **1** | 0.9994 | 0.9982 | 0.00666 | 19.4k | 0 % |
 | fertility | 4 | **4** (rebuilt base, LESSONS 19b) | 0.9973 | 0.9809 | 0.00668 | 16.0k | 1.7 % |
 | fertility (old chain, genus 5 = one spurious handle) | 4 | 5 | 0.9969 (v8b) | 0.9861 | 0.00708 | 9.4k | 0.5 % |
@@ -29,10 +29,10 @@ one-page summary the paper tables will be built from. Meshes: `results_genus/`.
 | method | venue | topology | supervision used | armadillo VolIoU | kitten VolIoU | fertility VolIoU | rocker-arm VolIoU |
 |---|---|---|---|---|---|---|---|
 | Nicolet 2021 (large-steps) | TOG/SIGA | fixed genus 0 | ours (sil+depth+diffuse) | 0.8985 | 0.9684 | 0.8262 | 0.9249 |
-| Palfinger 2022 | CAVW | fixed genus 0 | its own (3-ch normal image + alpha) | **0.9938** | 0.9968 | 0.9599 | 0.9382 |
+| Palfinger 2022 | CAVW | fixed genus 0 | its own (3-ch normal image + alpha) | 0.9938 | 0.9968 | 0.9599 | 0.9382 |
 | DMesh 2024 | NeurIPS | free (non-manifold soup) | ours (sil+depth) | 0.9634 | 0.9895 | 0.9788 | 0.9803 |
 | 3DV-2026 (published, genus GIVEN, 36 views @1024²) | 3DV | genus given | theirs | 0.928 | 0.713 | – | – |
-| **ours** | – | **manifold, genus discovered** | ours | 0.9932 | **0.9982** | **0.9809** (g4; old g5 chain 0.9861) | **0.9937** |
+| **ours** | – | **manifold, genus discovered** | ours | **0.9948** | **0.9982** | **0.9809** (g4; old g5 chain 0.9861) | **0.9937** |
 
 ho16 silhouette IoU, same rows: Nicolet 0.9593 / 0.9768 / 0.8963 / 0.9581; Palfinger 0.9965 / 0.9991 /
 0.9398 / 0.9674; DMesh 0.9894 / 0.9944 / 0.9886 / 0.9928; ours 0.9972 / 0.9994 / 0.9974 / 0.9985.
@@ -48,6 +48,7 @@ Wall (single run): Nicolet 5–15 min, Palfinger 4–15 min, DMesh 10–20 min, 
 - **Velocity guard** (Palfinger's rule on top of residual; 15c): fertility SI 1.4→0.7 %, VolIoU 0.976→0.983;
   rocker-arm neutral. Kept on.
 - **Early hole opening** (12/12b): open holes at ~1.8k faces then cc4 — cleaner, SI 0, rocker-arm 0.9979.
+- **Palfinger optimizer parameters on our loop** (22): armadillo 0.9983 / 0.9948 / SI 0 at 49.8k V, beats Palfinger on all metrics; remesh every 50 vs 100 steps identical.
 - **In-loop velocity-weighted Laplacian W_VLAP** (21): armadillo raw VolIoU 0.985 -> 0.992, SI 2.5 % -> 0, Taubin becomes a no-op; headline 0.9932 (Palfinger 0.9938). Should become default.
 - **Normal-map supervision on armadillo, no Taubin** (20): +0.001 raw, 0 after Taubin; Taubin itself is +0.006 VolIoU. Palfinger's armadillo edge is not explained by normals or smoothing.
 - **Normal-map supervision** (17b/17c): W=1 unnormalised collapses V (negative); with the normal residual in
@@ -65,8 +66,9 @@ Wall (single run): Nicolet 5–15 min, Palfinger 4–15 min, DMesh 10–20 min, 
 2. Fixed-genus methods do not "fail" on wide tunnels — they fill them with a membrane/plug that silhouettes
    barely see (kitten: Palfinger loses only 0.0014 VolIoU); topology matters for the metric in proportion
    to tunnel width (fertility/rocker-arm: 0.03–0.06 VolIoU).
-3. Honest weakness: on genus-0 armadillo Palfinger (normal-image supervision, 55k V) beats us 0.9938 vs
-   0.9885 VolIoU. Our accuracy ceiling on smooth genus-0 shapes is not the best in class.
+3. armadillo (genus 0): with Palfinger's optimizer settings (betas 0.8, nu-weighted Laplacian on the gradient,
+   lr = 0.3 x edge, 1.3 px edge floor) our loop passes Palfinger: 0.9948 vs 0.9938 VolIoU (LESSONS 22). Before
+   that (0.9885-0.9932) it was behind; the gap was vertex budget + jitter, not supervision.
 4. Where to refine is decided best by **image residual**, not curvature (ours) and not velocity (Palfinger);
    3DV-2026's curvature+uniform is the strongest published criterion and the right baseline row.
 5. Neither normal-map supervision nor 512² supervision moves the numbers: the remaining error is at the
