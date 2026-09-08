@@ -18,7 +18,7 @@ one-page summary the paper tables will be built from. Meshes: `results_genus/`.
 ## 1. Our best per shape (v8 chain)
 | shape | GT genus | genus found | ho16 | VolIoU | CD | V | SI |
 |---|---|---|---|---|---|---|---|
-| armadillo | 0 | 0 | 0.9972 | 0.9885 | – | 56.8k | 0.5 % |
+| armadillo | 0 | 0 | 0.9971 | 0.9912 (+1200 steps, LESSONS 20) | 0.00656 | 27.7k V | 1.3 % |
 | kitten | 1 | **1** | 0.9994 | 0.9982 | 0.00666 | 19.4k | 0 % |
 | fertility | 4 | **4** (rebuilt base, LESSONS 19b) | 0.9973 | 0.9809 | 0.00668 | 16.0k | 1.7 % |
 | fertility (old chain, genus 5 = one spurious handle) | 4 | 5 | 0.9969 (v8b) | 0.9861 | 0.00708 | 9.4k | 0.5 % |
@@ -32,7 +32,7 @@ one-page summary the paper tables will be built from. Meshes: `results_genus/`.
 | Palfinger 2022 | CAVW | fixed genus 0 | its own (3-ch normal image + alpha) | **0.9938** | 0.9968 | 0.9599 | 0.9382 |
 | DMesh 2024 | NeurIPS | free (non-manifold soup) | ours (sil+depth) | 0.9634 | 0.9895 | 0.9788 | 0.9803 |
 | 3DV-2026 (published, genus GIVEN, 36 views @1024²) | 3DV | genus given | theirs | 0.928 | 0.713 | – | – |
-| **ours** | – | **manifold, genus discovered** | ours | 0.9885 | **0.9982** | **0.9809** (g4; old g5 chain 0.9861) | **0.9937** |
+| **ours** | – | **manifold, genus discovered** | ours | 0.9912 | **0.9982** | **0.9809** (g4; old g5 chain 0.9861) | **0.9937** |
 
 ho16 silhouette IoU, same rows: Nicolet 0.9593 / 0.9768 / 0.8963 / 0.9581; Palfinger 0.9965 / 0.9991 /
 0.9398 / 0.9674; DMesh 0.9894 / 0.9944 / 0.9886 / 0.9928; ours 0.9972 / 0.9994 / 0.9974 / 0.9985.
@@ -48,6 +48,7 @@ Wall (single run): Nicolet 5–15 min, Palfinger 4–15 min, DMesh 10–20 min, 
 - **Velocity guard** (Palfinger's rule on top of residual; 15c): fertility SI 1.4→0.7 %, VolIoU 0.976→0.983;
   rocker-arm neutral. Kept on.
 - **Early hole opening** (12/12b): open holes at ~1.8k faces then cc4 — cleaner, SI 0, rocker-arm 0.9979.
+- **Normal-map supervision on armadillo, no Taubin** (20): +0.001 raw, 0 after Taubin; Taubin itself is +0.006 VolIoU. Palfinger's armadillo edge is not explained by normals or smoothing.
 - **Normal-map supervision** (17b/17c): W=1 unnormalised collapses V (negative); with the normal residual in
   the split criterion and W=0.3: kitten +0.0003 VolIoU (noise floor), fertility −0.010. Off by default.
 - **Hull-field fairness** (19/19b): hull built from 512² GT silhouettes. kitten and fertility: no effect (no-hull = hull); rocker-arm: +0.04 VolIoU (0.9567 without). Report the no-hull row or give competitors the same term.
