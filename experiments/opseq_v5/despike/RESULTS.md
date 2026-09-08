@@ -15,7 +15,11 @@ one-page summary the paper tables will be built from. Meshes: `results_genus/`.
   256³ occupancy grid after ICP; **CD** = symmetric Chamfer after ICP (3DV-2026 metric family,
   `eval_cd_iou.py`). Always report SI (self-intersecting faces), genus, V.
 
-## 1. Our best per shape (v8 chain)
+## 0b. Parameters of the current best (armadillo, LESSONS 22) — proposed default "v9"
+`ADAM_BETAS=0.8,0.8 PALF_LAP=0.02 PALF_CLIP=10 LR_EDGE=0.3 ADAPT_REMESH=1 ADAPT_MODE=velocity ADAPT_NU_GAIN=0.2 ADAPT_LMIN_PX=1.3 ADAPT_MAX_F=100000 ADAPT_SI_GATE=0.3 COLLAPSE_EVERY=50 FLIP_EVERY=25 COLLAPSE_RATIO=0.4 SI_PUSH=0.15 STEPS=1200` + AUTO Taubin (optional).
+What changed vs v8: Palfinger's optimizer (betas 0.8, nu-weighted Laplacian on the gradient, clip, lr = 0.3 x edge) and the edge floor 3 px -> 1.3 px (V 27.7k -> 49.8k). Full command in LESSONS 22. Genus shapes not yet re-run with it.
+
+## 1. Our best per shape (v8 chain; armadillo = v9)
 | shape | GT genus | genus found | ho16 | VolIoU | CD | V | SI |
 |---|---|---|---|---|---|---|---|
 | armadillo | 0 | 0 | 0.9983 | 0.9948 (Palfinger optimizer params, LESSONS 22) | 0.00620 | 49.8k V | 0 % |
