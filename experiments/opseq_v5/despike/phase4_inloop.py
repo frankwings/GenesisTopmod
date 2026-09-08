@@ -53,6 +53,10 @@ W_T = float(os.environ.get("W_T", "20.0"))
 W_QUAL = float(os.environ.get("W_QUAL", "0.01"))
 W_DIFF = float(os.environ.get("W_DIFF", "1.0"))
 W_NORMAL = float(os.environ.get("W_NORMAL", "0.0"))
+ADAM_BETAS = tuple(float(x) for x in os.environ.get("ADAM_BETAS", "0.9,0.999").split(","))   # Palfinger: 0.8,0.8
+PALF_LAP = float(os.environ.get("PALF_LAP", "0.0"))    # Palfinger core/opt.py: grad += PALF_LAP * nu * (v - nbr_mean), nu = |m1/sqrt(m2)| from Adam state (0 = off)
+PALF_CLIP = float(os.environ.get("PALF_CLIP", "0.0"))  # Palfinger: clip grad to |m1| * PALF_CLIP (10); 0 = off
+LR_EDGE = float(os.environ.get("LR_EDGE", "0.0"))      # Palfinger: lr = LR_EDGE * mean edge (0.3), overrides the cosine schedule; 0 = off
 W_VLAP = float(os.environ.get("W_VLAP", "0.0"))      # Palfinger-style in-loop smoothing: per-vertex velocity-weighted Laplacian penalty (0 = off)
 VLAP_BETA = float(os.environ.get("VLAP_BETA", "0.8"))  # EMA of per-vertex displacement -> relative velocity nu   # L1 on camera-space normal image (Palfinger-style); 0 = off
 FOLD_MULT = float(os.environ.get("FOLD_MULT", "1.0"))
@@ -374,7 +378,7 @@ def report(tag, V, Fa):
 # ---------------------------------------------------------------- optimize
 ho0, si0 = report("base", V, Fa)
 verts_t = torch.tensor(V, dtype=torch.float32, device=DEVICE).requires_grad_(True)
-opt = torch.optim.Adam([verts_t], lr=LR)
+opt = torch.optim.Adam([verts_t], lr=LR, betas=ADAM_BETAS)
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=STEPS, eta_min=LR_MIN)
 
 def rebuild(Fa):
@@ -422,6 +426,25 @@ for step in range(STEPS):
             + W_FOLD * FOLD_MULT * fold_loss(verts_t, faces_l, pairs_t)
             + W_T * field_loss(verts_t, faces_l))
     loss.backward()
+    if PALF_LAP > 0 or PALF_CLIP > 0:
+        # Palfinger MeshOptimizer.step(): nu = |m1 / sqrt(m2)| (Adam-normalised velocity, O(1) while moving,
+        # -> 0 when converged/oscillating); grad += lap_w * nu * (v - mean(neighbors)); clip grad to |m1|*10.
+        _st = opt.state.get(verts_t, {})
+        with torch.no_grad():
+            if "exp_avg" in _st:
+                _m1 = _st["exp_avg"]; _m2 = _st["exp_avg_sq"]
+                _nu = (_m1 / (_m2.sqrt() + 1e-8)).norm(dim=-1)
+            else:
+                _m1 = None; _nu = torch.ones(verts_t.shape[0], device=DEVICE)
+            if PALF_LAP > 0:
+                _nbr = torch.zeros_like(verts_t).index_add_(0, src, verts_t.detach()[dst]) / deg
+                verts_t.grad.add_((verts_t.detach() - _nbr) * _nu[:, None], alpha=PALF_LAP)
+            if PALF_CLIP > 0 and _m1 is not None:
+                _lim = _m1.abs() * PALF_CLIP
+                verts_t.grad.copy_(torch.maximum(torch.minimum(verts_t.grad, _lim), -_lim))
+            _palf_nu_mean = float(_nu.mean())
+    if LR_EDGE > 0:
+        for _g in opt.param_groups: _g["lr"] = LR_EDGE * float(me)
     opt.step(); sched.step()
     if W_VLAP > 0 and verts_t.shape[0] == _vl_prev.shape[0]:
         with torch.no_grad():
@@ -594,7 +617,7 @@ for step in range(STEPS):
                 cur_lr = opt.param_groups[0]["lr"]
                 V = Vn
                 verts_t = torch.tensor(Vn, dtype=torch.float32, device=DEVICE).requires_grad_(True)
-                opt = torch.optim.Adam([verts_t], lr=cur_lr)
+                opt = torch.optim.Adam([verts_t], lr=cur_lr, betas=ADAM_BETAS)
                 sched = torch.optim.lr_scheduler.CosineAnnealingLR(
                     opt, T_max=max(1, STEPS - step - 1), eta_min=LR_MIN)
                 faces_t, faces_l, src, dst, deg, pairs_t = rebuild(Fa)
@@ -608,7 +631,7 @@ for step in range(STEPS):
     if (step + 1) % 100 == 0:
         Vn = verts_t.detach().cpu().numpy().astype(np.float64)
         s = si_faces(Vn, Fa)
-        print(f"[step {step+1}/{STEPS}] sil={sl.item():.4f} nrm={nl.item():.4f} vlap={vlap.item():.4f} flips={nflips_total} collapses={ncollapse_total} splits={nsplit_total} pushes={npush_total} V={len(Fa) and len(Vn)} "
+        print(f"[step {step+1}/{STEPS}] sil={sl.item():.4f} nrm={nl.item():.4f} vlap={vlap.item():.4f} nu={globals().get("_palf_nu_mean", 0.0):.3f} lr={opt.param_groups[0]["lr"]:.5f} flips={nflips_total} collapses={ncollapse_total} splits={nsplit_total} pushes={npush_total} V={len(Fa) and len(Vn)} "
               f"SI={s} ({100*s/len(Fa):.1f}%) folds={100*fold_frac(Vn, Fa):.1f}% "
               f"({time.time()-t0:.0f}s)", flush=True)
 
