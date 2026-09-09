@@ -70,6 +70,10 @@ def report(tag, V, F):
     ho = heldout_exam(ctx, V, F); wt, _ = check_watertight(F)
     print(f"[{tag}] V={len(V)} F={len(F)} watertight={wt} genus={genus(V, F)} | ho16={ho[0]:.4f} hair={ho[1]} maxblob={ho[2]}", flush=True)
 
+def _snap(title, V, F, hold=30):
+    if os.environ.get("SNAPSHOT_DIR"):
+        import viz_snap; viz_snap.snap(ctx, mvps, V, F, title, hold=hold)
+
 def find_tunnel_pairs(V, F):
     tri = V[F]; cen = tri.mean(1)
     n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]); n /= np.linalg.norm(n, axis=1, keepdims=True) + 1e-12
@@ -334,7 +338,7 @@ def find_tunnel_by_rays(V, F, min_px=int(os.environ.get("MIN_PX", "30")), prev_h
             return fi, fj, ci, cj, key
     return None
 
-report("base", V, Fa)
+report("base", V, Fa); _snap(f"Stage 7 [genus discovery] base genus={genus(V, Fa)}", V, Fa)
 import json
 prev_handles = json.load(open(HANDLES_JSON)) if HANDLES_JSON and os.path.exists(HANDLES_JSON) else []
 n_added = 0
@@ -449,6 +453,6 @@ for k in range(MAX_HANDLES):
     n_added += 1
     prev_handles.append({"mid": ((cen[i] + cen[j]) / 2).tolist(), "blob": _blob if DETECT == "rays" else None})
     if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
-    report(f"after handle {n_added}", V, Fa)
+    report(f"after handle {n_added}", V, Fa); _snap(f"Stage 7 [DLFL add_handle #{n_added}] genus={genus(V, Fa)}", V, Fa, hold=45)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
 print(f"[p7] handles added: {n_added}; saved cow_{SHAPE}_{TAG}.npz", flush=True)
