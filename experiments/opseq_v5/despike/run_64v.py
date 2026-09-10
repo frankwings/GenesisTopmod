@@ -221,6 +221,17 @@ def optimize_phase64(ctx, verts_np, tris_np, gt, gtd, gtdiff, mvps, views,
     return verts_t.detach().cpu().numpy().astype(np.float64), iou
 
 
+C2F_SUBDIV = os.environ.get("C2F_SUBDIV", "midpoint")   # midpoint (numpy 1->4) | cc (TopMod Catmull-Clark; quads kept through Stage 1)
+
+def _c2f(v, t, polys):
+    """Coarse-to-fine refinement between the cc levels. Returns (v, tris, polys-or-None)."""
+    if C2F_SUBDIV == "cc":
+        import cc_subdiv
+        v, polys, t = cc_subdiv.cc_subdivide(v, polys if polys is not None else np.asarray(t).tolist())
+        print(f"[run_64v] TopMod Catmull-Clark: V={len(v)} polys={len(polys)} tris={len(t)}", flush=True)
+        return v, t, polys
+    v, t = midpoint_subdivide(v, t); return v, t, None
+
 _CUR_ADJ = None
 _MVPS = None
 _GT = None
@@ -286,7 +297,10 @@ def main():
           f"{gt.shape} {gtd.shape} {gtdiff.shape}", flush=True)
 
     scene = setup_scene(SHAPE, DEVICE)  # only for init icosphere
-    v, t = scene["init_verts"], scene["init_tris"]
+    v, t = scene["init_verts"], scene["init_tris"]; polys = None
+    if C2F_SUBDIV == "cc":
+        import cc_subdiv; v, polys, t = cc_subdiv.icosphere_cc2()
+        print(f"[run_64v] C2F_SUBDIV=cc: TopMod icosphere cc2 V={len(v)} quads={len(polys)} tris={len(t)}", flush=True)
     viz_snap.snap(ctx, mvps, v, t, "Stage 1 [init icosphere]", hold=30)
 
     def iou_fn(vv, ff):
@@ -301,13 +315,13 @@ def main():
     t0 = time.time()
     if os.environ.get("RESUME_FROM"):
         # early-hole experiment: mesh already went through cc2/cc3 (+ handles); continue with the cc4 phase
-        z = np.load(os.environ["RESUME_FROM"]); v, t = z["verts"].astype(np.float64), z["tris"].astype(np.int64)
+        z = np.load(os.environ["RESUME_FROM"]); v, t = z["verts"].astype(np.float64), z["tris"].astype(np.int64); polys = None
         print(f"[run_64v] RESUME_FROM {os.environ['RESUME_FROM']}: V={len(v)} F={len(t)}", flush=True)
     else:
         _set_faces(t)
         v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800, "cc2",
                                 use_fold=True, use_tube=True)
-        v, t = midpoint_subdivide(v, t); _set_faces(t)
+        v, t, polys = _c2f(v, t, polys); _set_faces(t)
         v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800, "cc3",
                                 settle=True, use_tube=True)
     if os.environ.get("STOP_AFTER") == "cc3":
@@ -317,7 +331,7 @@ def main():
         ho, hair, mb = heldout_exam(ctx, v, t)
         print(f"[run_64v] STOP_AFTER=cc3: saved cow_{TAG}.npz V={len(v)} F={len(t)} ho16={ho:.4f} hair={hair}", flush=True)
         return
-    v, t = midpoint_subdivide(v, t); _set_faces(t)
+    v, t, polys = _c2f(v, t, polys); _set_faces(t)
     v, iou_train = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800,
                                     "cc4", settle=True, use_fold=True, use_tube=True)
     print(f"[train] iou={iou_train:.4f} V={len(v)} ({time.time()-t0:.0f}s)", flush=True)
