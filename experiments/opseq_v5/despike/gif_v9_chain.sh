@@ -2,7 +2,7 @@
 # Golden v3 (= chain v9, Palfinger optimizer params) on ALL shapes from the icosphere, SERIAL, GPU guard,
 # idempotent (skips stages whose output exists), with per-step 64-view mosaic frames -> GIF per shape.
 # Uniform pipeline for every shape (genus discovered, never given):
-#   1 run_64v (cc2 800 -> cc3 800, stop)  2 phase4 400 (clean)  3 phase7_multi (tunnel evidence -> DLFL add_handle, <=8 rounds)
+#   1 run_64v (cc2 800 -> TopMod catmull_clark -> cc3 800, stop; C2F_SUBDIV=cc default since 2026-09-11)  2 phase4 400 (clean)  3 phase7_multi (tunnel evidence -> DLFL add_handle, <=8 rounds)
 #   4 run_64v RESUME (cc4 800 + despike surgery + settle)  5 phase4 v9 1200  6 phase4 v9 LAP_MULT=3 1200  7 AUTO Taubin
 set -u
 cd /home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5; ln -sfn $PWD/out_liou /tmp/liou_cow_viz; O=/tmp/liou_cow_viz

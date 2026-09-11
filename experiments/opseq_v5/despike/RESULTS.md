@@ -17,7 +17,7 @@ one-page summary the paper tables will be built from. Meshes: `results_genus/`.
 
 ## 0b. Parameters of the current best (armadillo, LESSONS 22) — proposed default "v9"
 `ADAM_BETAS=0.8,0.8 PALF_LAP=0.02 PALF_CLIP=10 LR_EDGE=0.3 ADAPT_REMESH=1 ADAPT_MODE=velocity ADAPT_NU_GAIN=0.2 ADAPT_LMIN_PX=1.3 ADAPT_MAX_F=100000 ADAPT_SI_GATE=0.3 COLLAPSE_EVERY=50 FLIP_EVERY=25 COLLAPSE_RATIO=0.4 SI_PUSH=0.15 STEPS=1200` + AUTO Taubin (optional).
-What changed vs v8: Palfinger's optimizer (betas 0.8, nu-weighted Laplacian on the gradient, clip, lr = 0.3 x edge) and the edge floor 3 px -> 1.3 px (V 27.7k -> 49.8k). Full command in LESSONS 22. Genus shapes not yet re-run with it.
+What changed vs v8: Palfinger's optimizer (betas 0.8, nu-weighted Laplacian on the gradient, clip, lr = 0.3 x edge) and the edge floor 3 px -> 1.3 px (V 27.7k -> 49.8k). Full command in LESSONS 22. Since 2026-09-11 the Stage-1/4 coarse-to-fine refinement is TopMod `catmull_clark` + `triangulate_all` (`C2F_SUBDIV=cc` default; = numpy midpoint, LESSONS 23), so every topology change in the chain is a TopMod operator.
 
 
 ## 0c. Version history (what "golden vN" and "chain vN" mean)

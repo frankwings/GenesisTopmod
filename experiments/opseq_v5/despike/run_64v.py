@@ -221,7 +221,7 @@ def optimize_phase64(ctx, verts_np, tris_np, gt, gtd, gtdiff, mvps, views,
     return verts_t.detach().cpu().numpy().astype(np.float64), iou
 
 
-C2F_SUBDIV = os.environ.get("C2F_SUBDIV", "midpoint")   # midpoint (numpy 1->4) | cc (TopMod Catmull-Clark; quads kept through Stage 1)
+C2F_SUBDIV = os.environ.get("C2F_SUBDIV", "cc")   # DEFAULT cc (TopMod Catmull-Clark + triangulate_all; quads kept through Stage 1) since 2026-09-11 (LESSONS 23: = midpoint) | midpoint (numpy 1->4, legacy)
 
 def _c2f(v, t, polys):
     """Coarse-to-fine refinement between the cc levels. Returns (v, tris, polys-or-None)."""

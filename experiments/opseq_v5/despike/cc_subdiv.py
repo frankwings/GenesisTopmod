@@ -8,8 +8,18 @@ import sys, numpy as np
 sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod")
 from topmod.primitives import make_icosahedron, _build_mesh
 from topmod.subdivision import catmull_clark
-from topmod.diffgeo import mesh_to_arrays, _fan_triangulate
+from topmod.diffgeo import mesh_to_arrays
+from topmod.high_level_ops import triangulate_all
+from topmod.io import to_triangle_arrays
 from topmod.validate import check_all
+
+def tris_of(v, polys):
+    """Render triangulation of the polygon mesh via TopMod triangulate_all (DLFL insert_edge fan); vertex order kept."""
+    m = _build_mesh([tuple(map(float, p)) for p in np.asarray(v)], [list(map(int, f)) for f in polys])
+    triangulate_all(m)
+    ok, errs = check_all(m); assert ok, errs
+    _, tris = to_triangle_arrays(m)
+    return np.asarray(tris, np.int32)
 
 def _norm(v):
     mn, mx = float(v.min()), float(v.max())
@@ -18,7 +28,7 @@ def _norm(v):
 def icosphere_cc2():
     m = make_icosahedron(); m = catmull_clark(m); m = catmull_clark(m)
     pos, polys = mesh_to_arrays(m)
-    return _norm(np.array(pos, np.float64)), polys, np.array(_fan_triangulate(polys), np.int32)
+    v = _norm(np.array(pos, np.float64)); return v, polys, tris_of(v, polys)
 
 def cc_subdivide(v, polys):
     """One TopMod Catmull-Clark round on (positions, polygon faces). Returns (v', polys', tris')."""
@@ -26,4 +36,4 @@ def cc_subdivide(v, polys):
     m2 = catmull_clark(m)
     ok, errs = check_all(m2); assert ok, errs
     pos, polys2 = mesh_to_arrays(m2)
-    return np.array(pos, np.float64), polys2, np.array(_fan_triangulate(polys2), np.int32)
+    v2 = np.array(pos, np.float64); return v2, polys2, tris_of(v2, polys2)
