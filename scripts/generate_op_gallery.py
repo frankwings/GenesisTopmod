@@ -7,6 +7,9 @@ Usage:
     python3 scripts/generate_op_gallery.py            # images + markdown
     python3 scripts/generate_op_gallery.py --md-only  # regenerate markdown only
 
+--md-only needs nothing but the standard library and the topmod core;
+matplotlib is imported only when images are actually rendered.
+
 Output:
     docs/assets/ops/<name>.png   — side-by-side before/after render
     docs/operators.md            — full operator reference (generated)
@@ -27,10 +30,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+# matplotlib is only needed to render the image gallery. --md-only has to
+# work without it (and without numpy), so it is loaded on demand.
+plt = None
+Poly3DCollection = None
+
+
+def _load_matplotlib() -> None:
+    global plt, Poly3DCollection
+    if plt is not None:
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as _plt
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection as _Poly3DCollection
+    plt = _plt
+    Poly3DCollection = _Poly3DCollection
 
 from topmod import (
     DLFLMesh,
@@ -407,10 +422,17 @@ OPS: List[OpEntry] = [
             "specified by a directed vertex pair: A→B means the half-edge "
             "originating at A and pointing toward B, which belongs to the face "
             "containing the directed edge A→B in its boundary loop.\n\n"
-            "**Blender addon selection**: select 4 vertices **in click order** "
-            "(vertex mode). V1→V2 defines half-edge 1, V3→V4 defines half-edge "
-            "2. The new edge connects V1 and V3. Selection order is read via "
-            "`bm.select_history`.\n\n"
+            "**Blender addon selection**: pick the two corners in the "
+            "viewport — click a face, then one of its corners, twice "
+            "(Mesh → TopMod → Edge Ops → Insert Edge). A corner is a "
+            "(face, vertex) pair, which is exactly one half-edge. The two "
+            "corners may be on one face or on two different faces (see "
+            "`insert_edge_cross`), and their vertices may already be "
+            "joined — that adds a second, parallel edge bounding a 2-gon, "
+            "which Blender stores as long as the addon writes each loop's "
+            "edge index explicitly. The only refusals are picking the same "
+            "corner twice, and two corners on one vertex, both of which "
+            "hang.\n\n"
             "If both half-edges lie on the *same* face, the face is split in "
             "two (shown: a diagonal chord splits a cube quad into two "
             "triangles). If they lie on *different* faces, the two faces merge "
@@ -431,10 +453,17 @@ OPS: List[OpEntry] = [
             "same straight line between two vertices, but the face structure "
             "changes: the two original faces become one connected face that "
             "loops through the new edge like a bridge.\n\n"
-            "**Blender addon selection**: same as insert_edge — select 4 "
-            "vertices in order. V1→V2 on face A, V3→V4 on face B. The "
-            "direction determines exactly which faces are merged, eliminating "
-            "all ambiguity.",
+            "**Blender addon selection**: pick two corners on two "
+            "different faces — same operator, same two clicks per "
+            "corner. The merged face repeats the two endpoint vertices, "
+            "so the addon writes results back with `Mesh.from_pydata` "
+            "rather than `bmesh.faces.new`, which refuses to build a "
+            "face that visits a vertex twice. Blender's `Mesh` stores "
+            "polygons as runs of loops and holds it exactly; the "
+            "topology survives Edit Mode round trips and further "
+            "TopMod operators. Note that `mesh.validate()` deletes such "
+            "polygons, and the subdivision operators do not yet handle "
+            "them.",
             "he0 = face_A.halfedges()[0]\n"
             "he1 = face_B.halfedges()[0]\n"
             "insert_edge(mesh, he0, he1)  # merge two faces",
@@ -1072,12 +1101,13 @@ def gen_markdown() -> None:
             lines.append(f"\n![{op.name}](assets/ops/{op.name}.png)\n")
 
     lines.append(MD_USAGE_FOOTER)
-    with open(MD_PATH, "w") as fh:
+    with open(MD_PATH, "w", encoding="utf-8") as fh:
         fh.write("".join(lines))
     print(f"wrote {MD_PATH}")
 
 
 def gen_images() -> None:
+    _load_matplotlib()
     os.makedirs(ASSET_DIR, exist_ok=True)
     for op in OPS:
         if op.no_image or op.apply is None:
