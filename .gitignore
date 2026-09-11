@@ -17,3 +17,11 @@ experiments/opseq_v4/eval_out/
 experiments/opseq_v5/data/
 experiments/opseq_v5/ckpt/
 logs/
+
+# large intermediates / external repos (2026-09-10)
+experiments/opseq_v5/out_liou/
+experiments/opseq_v5/despike/results_genus/gifs/*
+!experiments/opseq_v5/despike/results_genus/gifs/*_discord.gif
+experiments/opseq_b/ckpt/
+experiments/opseq_v2/ckpt/
+Resource/
