@@ -9,7 +9,8 @@ parameters (FloatProperty, IntProperty, etc.).  All operators:
 3. Support Undo.
 
 Operators are grouped into categories matching docs/operators.md:
-  1. Fundamental   (insert_edge, delete_edge — local, need selection)
+  1. Fundamental   (insert_edge — modal corner picking, see corner_pick.py;
+                    delete_edge — local, needs selection)
   2. High-level    (extrude_face, stellate, subdivide_edge/face,
                     add_handle, stellate_all)
   3. Classic subdivision (catmull_clark, dual, doo_sabin, simplest,
@@ -26,8 +27,9 @@ import bpy
 from bpy.props import FloatProperty, IntProperty
 
 from .converter import (apply_op, apply_local_face_op, apply_local_edge_op,
-                        apply_two_face_op, apply_insert_edge,
-                        apply_delete_vertex)
+                        apply_two_face_op, apply_delete_vertex)
+# insert_edge is modal (interactive corner picking), so it lives on its own
+from .corner_pick import TOPMOD_OT_insert_edge
 
 # Import topmod ops via the bundled sub-package
 from .topmod import (
@@ -221,7 +223,7 @@ def _make_two_face_op(idname, label, description, op_fn):
 
 
 def _make_special_op(idname, label, description, execute_fn):
-    """Factory for ops with custom execute (insert_edge, delete_vertex)."""
+    """Factory for ops with custom execute (delete_vertex)."""
     attrs = {
         "bl_idname": idname,
         "bl_label": label,
@@ -682,38 +684,7 @@ TOPMOD_OT_punch_hole = _make_two_face_op(
 )
 
 # Special ops
-def _exec_insert_edge(self, context):
-    try:
-        result = apply_insert_edge(context)
-        if result == "select_error":
-            self.report({'ERROR'},
-                        "Select exactly 4 vertices in order: "
-                        "V1→V2 (half-edge 1), V3→V4 (half-edge 2)")
-            return {'CANCELLED'}
-        if result == "he1_error":
-            self.report({'ERROR'},
-                        "V1→V2 does not correspond to a valid half-edge "
-                        "(vertices must share a face)")
-            return {'CANCELLED'}
-        if result == "he2_error":
-            self.report({'ERROR'},
-                        "V3→V4 does not correspond to a valid half-edge "
-                        "(vertices must share a face)")
-            return {'CANCELLED'}
-        if result is None:
-            self.report({'ERROR'}, "insert_edge failed")
-            return {'CANCELLED'}
-    except Exception as e:
-        self.report({'ERROR'}, str(e))
-        return {'CANCELLED'}
-    return {'FINISHED'}
-
-TOPMOD_OT_insert_edge = _make_special_op(
-    "topmod.insert_edge", "Insert Edge",
-    "Insert edge between 2 half-edges defined by 4 vertices: "
-    "select V1,V2 (half-edge 1) then V3,V4 (half-edge 2) in order",
-    _exec_insert_edge,
-)
+# (topmod.insert_edge is TOPMOD_OT_insert_edge, imported from corner_pick)
 
 def _exec_delete_vertex(self, context):
     try:

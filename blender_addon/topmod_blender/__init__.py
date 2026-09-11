@@ -12,9 +12,9 @@ bl_info = {
     "name": "TopMod (DLFL Mesh Operators)",
     "author": "Zengyn42 / GenesisTopmod",
     "version": (1, 0, 0),
-    "blender": (3, 6, 0),
+    "blender": (5, 0, 0),
     "location": "View3D > Mesh > TopMod / Sidebar > TopMod",
-    "description": "29 topology-preserving 2-manifold mesh operators based "
+    "description": "46 topology-preserving 2-manifold mesh operators based "
                    "on Akleman & Chen's DLFL theory",
     "category": "Mesh",
 }

@@ -119,7 +119,7 @@ delete_vertex(mesh, v)
 
 Inserts a new edge between two half-edges. Each half-edge is specified by a directed vertex pair: A→B means the half-edge originating at A and pointing toward B, which belongs to the face containing the directed edge A→B in its boundary loop.
 
-**Blender addon selection**: select 4 vertices **in click order** (vertex mode). V1→V2 defines half-edge 1, V3→V4 defines half-edge 2. The new edge connects V1 and V3. Selection order is read via `bm.select_history`.
+**Blender addon selection**: pick the two corners in the viewport — click a face, then one of its corners, twice (Mesh → TopMod → Edge Ops → Insert Edge). A corner is a (face, vertex) pair, which is exactly one half-edge. The two corners may be on one face or on two different faces (see `insert_edge_cross`), and their vertices may already be joined — that adds a second, parallel edge bounding a 2-gon, which Blender stores as long as the addon writes each loop's edge index explicitly. The only refusals are picking the same corner twice, and two corners on one vertex, both of which hang.
 
 If both half-edges lie on the *same* face, the face is split in two (shown: a diagonal chord splits a cube quad into two triangles). If they lie on *different* faces, the two faces merge into one — this is how components are joined and handles are opened. One of the two core DLFL operators; the mesh is a valid 2-manifold after every single call.
 
@@ -141,7 +141,7 @@ insert_edge(mesh, hes[0], hes[2])  # diagonal across the quad
 
 Cross-face variant: when the two half-edges lie on different faces, those faces merge into one large face with the new edge traversed twice (once per direction) in the boundary loop. Topologically this adds a handle (genus +1). The geometry is the same straight line between two vertices, but the face structure changes: the two original faces become one connected face that loops through the new edge like a bridge.
 
-**Blender addon selection**: same as insert_edge — select 4 vertices in order. V1→V2 on face A, V3→V4 on face B. The direction determines exactly which faces are merged, eliminating all ambiguity.
+**Blender addon selection**: pick two corners on two different faces — same operator, same two clicks per corner. The merged face repeats the two endpoint vertices, so the addon writes results back with `Mesh.from_pydata` rather than `bmesh.faces.new`, which refuses to build a face that visits a vertex twice. Blender's `Mesh` stores polygons as runs of loops and holds it exactly; the topology survives Edit Mode round trips and further TopMod operators. Note that `mesh.validate()` deletes such polygons, and the subdivision operators do not yet handle them.
 
 - **Signature**: `insert_edge(mesh, he1, he2) -> Edge`
 - **Token**: `IE`

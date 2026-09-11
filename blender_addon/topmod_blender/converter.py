@@ -4,18 +4,42 @@ BMesh ↔ DLFLMesh converter.
 This is the only file that touches both the Blender API (bmesh) and
 the topmod core.  The topmod package itself never imports bpy.
 
+Both directions go through per-corner ``(vertex index, edge index)`` lists
+rather than face-vertex lists, because a DLFL mesh can hold topology a
+vertex list cannot describe:
+
+* a face may walk the same edge twice — the cross-face ``insert_edge``
+  merge, whose two faces become one;
+* two edges may join the same pair of vertices — inserting between corners
+  that are already joined, which yields a 2-gon;
+* an edge may run from a vertex to itself.
+
+Blender stores all three quite happily (verified on 4.4 and 5.3, through
+Edit Mode round trips and ``.blend`` save/reload), but neither
+``bmesh.faces.new`` nor ``bmesh.edges.new`` will *build* them, and
+``Mesh.from_pydata`` resolves a corner's edge by looking its vertex pair
+up, which collapses parallel edges.  So the writer fills Blender's mesh
+arrays directly — including each loop's ``edge_index`` — and the reader
+takes corners straight off the BMesh loops.
+
+Never call ``mesh.validate()`` on the result: it deletes duplicate edges and
+faces that repeat a vertex.
+
 Public API
 ----------
-bmesh_to_dlfl(bm) -> (DLFLMesh, idx_maps)
+bmesh_to_dlfl(bm) -> DLFLMesh                 # with _bv/_bf/_be index maps
 dlfl_to_bmesh(mesh, bm, obj=None)
 apply_op(context, op_fn, ...) -> DLFLMesh     # global ops
 apply_local_face_op(context, op_fn, ...)      # selected-face ops
 apply_local_edge_op(context, op_fn, ...)      # selected-edge ops
+apply_two_face_op(context, op_fn, ...)        # exactly-2-selected-face ops
+apply_insert_edge_corners(context, a, b)      # two picked corners
+apply_delete_vertex(context)                  # one selected isolated vertex
 """
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, List, Optional
 
 import bmesh
 import bpy
@@ -23,50 +47,103 @@ from mathutils import Vector
 
 # topmod core is shipped as a sub-package inside the addon
 from .topmod.dlfl import DLFLMesh
-from .topmod.primitives import _build_mesh
+from .corner_rules import (MIN_FACE_CORNERS, build_dlfl_from_corners,
+                           degenerate_edges, dlfl_corner_arrays,
+                           unwritable_faces)
 
 
 def bmesh_to_dlfl(bm: bmesh.types.BMesh) -> DLFLMesh:
     """
     Convert a Blender BMesh to a DLFLMesh.
 
-    The BMesh must be a closed, orientable 2-manifold (no loose verts,
-    no boundary edges, no non-manifold edges).  Raises ValueError
-    otherwise (_build_mesh will fail on unpaired half-edges).
+    Each face is read as its loops' ``(vertex index, edge index)`` pairs, so
+    two parallel edges stay distinct.  The BMesh must be a closed,
+    orientable 2-manifold; ValueError otherwise.
+
+    The result carries three lookup tables used by the operators:
+    ``_bv_map`` (BMesh vertex index -> Vertex), ``_bf_map`` (face index ->
+    Face) and ``_be_map`` (edge index -> Edge).  All three are exact, keyed
+    on Blender's own indices rather than resolved by position or by vertex
+    pair.
     """
     bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
+    bm.verts.index_update()
+    bm.edges.index_update()
+    bm.faces.index_update()
 
-    positions: List[Tuple[float, float, float]] = [
-        (v.co.x, v.co.y, v.co.z) for v in bm.verts
-    ]
-    face_indices: List[List[int]] = [
-        [v.index for v in f.verts] for f in bm.faces
-    ]
-    mesh = _build_mesh(positions, face_indices)
+    positions = [(v.co.x, v.co.y, v.co.z) for v in bm.verts]
+    faces_corners = [[(loop.vert.index, loop.edge.index) for loop in f.loops]
+                     for f in bm.faces]
 
-    # Build index maps: BMesh index → DLFL element
+    mesh, edges_by_index = build_dlfl_from_corners(positions, faces_corners)
+
     dlfl_verts = list(mesh.vertices.values())
     dlfl_faces = list(mesh.faces.values())
-    dlfl_edges = list(mesh.edges.values())
-
-    bv_to_dlfl_v = {i: dlfl_verts[i] for i in range(len(dlfl_verts))}
-    bf_to_dlfl_f = {i: dlfl_faces[i] for i in range(len(dlfl_faces))}
-
-    # Edge map: find DLFL edge by endpoint vertex indices
-    be_to_dlfl_e: Dict[int, object] = {}
-    for i, be in enumerate(bm.edges):
-        v0_idx, v1_idx = be.verts[0].index, be.verts[1].index
-        dv0, dv1 = dlfl_verts[v0_idx], dlfl_verts[v1_idx]
-        de = mesh.find_edge(dv0, dv1)
-        if de is not None:
-            be_to_dlfl_e[i] = de
-
-    mesh._bv_map = bv_to_dlfl_v
-    mesh._bf_map = bf_to_dlfl_f
-    mesh._be_map = be_to_dlfl_e
+    mesh._bv_map = {i: dlfl_verts[i] for i in range(len(dlfl_verts))}
+    mesh._bf_map = {f.index: dlfl_faces[i] for i, f in enumerate(bm.faces)}
+    mesh._be_map = dict(edges_by_index)
 
     return mesh
+
+
+def _load_dlfl_into_bmesh(bm: bmesh.types.BMesh, mesh: DLFLMesh) -> None:
+    """
+    Replace the contents of *bm* with *mesh*.
+
+    Fills a throwaway ``Mesh``'s arrays directly — vertices, edges, and one
+    loop per corner carrying both its vertex *and* its edge — then hands
+    that to ``bm.from_mesh``.  Writing the loop's edge explicitly is what
+    keeps two parallel edges apart; ``Mesh.from_pydata`` would look the edge
+    up by vertex pair and merge them.
+
+    ``mesh.validate()`` is never called: it deletes duplicate edges and any
+    face that repeats a vertex.
+    """
+    coords, edge_pairs, faces_corners = dlfl_corner_arrays(mesh)
+
+    # A single-corner polygon crashes Blender's Mesh->BMesh conversion.
+    # create_vertex's degenerate loop face is the only source of one.
+    writable = [corners for corners in faces_corners
+                if len(corners) >= MIN_FACE_CORNERS]
+
+    corner_verts: List[int] = []
+    corner_edges: List[int] = []
+    loop_starts: List[int] = []
+    for corners in writable:
+        loop_starts.append(len(corner_verts))
+        for vertex_index, edge_index in corners:
+            corner_verts.append(vertex_index)
+            corner_edges.append(edge_index)
+
+    scratch = bpy.data.meshes.new("_topmod_scratch")
+    try:
+        scratch.vertices.add(len(coords))
+        scratch.vertices.foreach_set(
+            "co", [value for co in coords for value in co])
+        scratch.edges.add(len(edge_pairs))
+        scratch.edges.foreach_set(
+            "vertices", [index for pair in edge_pairs for index in pair])
+        scratch.loops.add(len(corner_verts))
+        scratch.loops.foreach_set("vertex_index", corner_verts)
+        scratch.loops.foreach_set("edge_index", corner_edges)
+        scratch.polygons.add(len(writable))
+        scratch.polygons.foreach_set("loop_start", loop_starts)
+        scratch.update()
+
+        bm.clear()
+        bm.from_mesh(scratch)
+    finally:
+        bpy.data.meshes.remove(scratch)
+
+    bm.verts.ensure_lookup_table()
+    bm.edges.ensure_lookup_table()
+    bm.faces.ensure_lookup_table()
+    bm.verts.index_update()
+    bm.edges.index_update()
+    bm.faces.index_update()
+    bm.normal_update()
 
 
 def dlfl_to_bmesh(mesh: DLFLMesh, bm: bmesh.types.BMesh,
@@ -77,33 +154,8 @@ def dlfl_to_bmesh(mesh: DLFLMesh, bm: bmesh.types.BMesh,
     If *obj* is given, the mesh data is written back to the Blender
     object and the BMesh is freed.
     """
-    bm.clear()
+    _load_dlfl_into_bmesh(bm, mesh)
 
-    # Vertices
-    vid_to_bv: Dict[int, bmesh.types.BMVert] = {}
-    for v in mesh.vertices.values():
-        bv = bm.verts.new((v.x, v.y, v.z))
-        vid_to_bv[v.id] = bv
-    bm.verts.ensure_lookup_table()
-    bm.verts.index_update()
-
-    # Faces
-    for f in mesh.faces.values():
-        verts = f.vertices()
-        if len(verts) < 3:
-            continue
-        try:
-            bm.faces.new([vid_to_bv[v.id] for v in verts])
-        except ValueError:
-            # Duplicate face (shouldn't happen with valid DLFL, but guard)
-            pass
-    bm.faces.ensure_lookup_table()
-    bm.faces.index_update()
-
-    # Normals
-    bm.normal_update()
-
-    # Write back
     if obj is not None:
         bm.to_mesh(obj.data)
         bm.free()
@@ -144,27 +196,8 @@ def apply_op(context: bpy.types.Context,
     if isinstance(out, tuple):
         out = out[0]
 
-    # Clear the existing edit-mode BMesh and rebuild from DLFL result
-    bm.clear()
-
-    vid_to_bv: Dict[int, bmesh.types.BMVert] = {}
-    for v in out.vertices.values():
-        bv = bm.verts.new((v.x, v.y, v.z))
-        vid_to_bv[v.id] = bv
-    bm.verts.ensure_lookup_table()
-    bm.verts.index_update()
-
-    for f in out.faces.values():
-        verts = f.vertices()
-        if len(verts) < 3:
-            continue
-        try:
-            bm.faces.new([vid_to_bv[v.id] for v in verts])
-        except ValueError:
-            pass
-    bm.faces.ensure_lookup_table()
-    bm.normal_update()
-
+    # Clear the existing edit-mode BMesh and rebuild from the DLFL result
+    _load_dlfl_into_bmesh(bm, out)
     bmesh.update_edit_mesh(me)
 
     return out
@@ -172,23 +205,7 @@ def apply_op(context: bpy.types.Context,
 
 def _rebuild_bmesh(bm, dlfl_mesh, me):
     """Clear bm and rebuild from DLFL mesh, then update edit mesh."""
-    bm.clear()
-    vid_to_bv: Dict[int, bmesh.types.BMVert] = {}
-    for v in dlfl_mesh.vertices.values():
-        bv = bm.verts.new((v.x, v.y, v.z))
-        vid_to_bv[v.id] = bv
-    bm.verts.ensure_lookup_table()
-    bm.verts.index_update()
-    for f in dlfl_mesh.faces.values():
-        verts = f.vertices()
-        if len(verts) < 3:
-            continue
-        try:
-            bm.faces.new([vid_to_bv[v.id] for v in verts])
-        except ValueError:
-            pass
-    bm.faces.ensure_lookup_table()
-    bm.normal_update()
+    _load_dlfl_into_bmesh(bm, dlfl_mesh)
     bmesh.update_edit_mesh(me)
 
 
@@ -280,75 +297,94 @@ def apply_two_face_op(context, op_fn, **kwargs):
     return dlfl
 
 
-def _find_halfedge(dlfl, bv_map, vi_from, vi_to):
-    """Find the DLFL half-edge from vi_from toward vi_to.
-
-    Two vertices A→B define a directed edge, which corresponds to
-    exactly one half-edge: the one originating at A whose face contains
-    both A and B, and whose next walk goes toward B.
-
-    Returns the half-edge, or None if not found.
+def apply_insert_edge_corners(context, corner_a, corner_b):
     """
-    dv_from = bv_map[vi_from]
-    dv_to   = bv_map[vi_to]
-    for he in dv_from.outgoing_halfedges():
-        # Walk the face to check if dv_to is the next vertex
-        if he.next.origin is dv_to:
-            return he
-    # Fallback: dv_to is on the same face but not immediately next
-    for he in dv_from.outgoing_halfedges():
-        face_verts = set(id(v) for v in he.face.vertices())
-        if id(dv_to) in face_verts:
-            return he
-    return None
+    insert_edge from two picked *corners*.
 
+    Each corner is a ``(face_index, corner_position)`` pair as recorded by
+    the interactive picker in ``corner_pick.py``.  ``corner_position`` is a
+    position in the face's loop order, which is also the DLFL face's
+    half-edge order because ``build_dlfl_from_corners`` wires them in that
+    order.  Resolving by position rather than by vertex matters once a face
+    visits a vertex more than once, which a merged face does.
 
-def apply_insert_edge(context):
-    """
-    insert_edge: user selects exactly 4 vertices **in order** (via
-    select history).
+    A corner is precisely one half-edge, which is what ``insert_edge``
+    takes.  Corners on one face split it; corners on two faces merge them
+    into a single face whose boundary runs through the new edge once per
+    direction (genus +1).  Corners whose vertices are already joined add a
+    second, parallel edge and a 2-gon.  All of those round-trip through
+    Blender; a self-loop would not, and is refused.
 
-    Vertices 1→2 define half-edge 1 (origin = V1, direction toward V2).
-    Vertices 3→4 define half-edge 2 (origin = V3, direction toward V4).
-    The new edge connects V1 and V3.
-
-    The direction (A→B) determines which face the half-edge belongs to,
-    eliminating all ambiguity in the cross-face case.
+    Returns ``(dlfl_mesh, new_edge_index)`` on success, where the index
+    locates the inserted edge in the rebuilt BMesh, or a human-readable
+    error string on failure. The index is what identifies it: with a
+    parallel edge alongside, its vertex pair no longer would.
     """
     from .topmod.operators import insert_edge as _insert_edge
+    from .corner_rules import corner_pair_error, resolve_corner_halfedge
 
     obj = context.edit_object
     if obj is None or obj.type != 'MESH':
-        return None
+        return "No mesh in Edit Mode"
     me = obj.data
     bm = bmesh.from_edit_mesh(me)
     bm.verts.ensure_lookup_table()
     bm.faces.ensure_lookup_table()
+    bm.verts.index_update()
+    bm.faces.index_update()
 
-    # Use select history to get ordered selection
-    history = [e for e in bm.select_history if isinstance(e, bmesh.types.BMVert)]
-    if len(history) != 4:
-        return "select_error"
+    picked = []           # (face_index, corner, vert_index)
+    for face_index, corner in (corner_a, corner_b):
+        if not 0 <= face_index < len(bm.faces):
+            return f"Face {face_index} no longer exists"
+        face = bm.faces[face_index]
+        corner %= len(face.loops)
+        picked.append((face_index, corner,
+                       face.loops[corner].vert.index))
 
-    v1, v2, v3, v4 = [v.index for v in history]
+    (fa, ca, va), (fb, cb, vb) = picked
+    reason = corner_pair_error(fa, ca, va, fb, cb, vb)
+    if reason is not None:
+        return f"Cannot insert edge: {reason}"
 
-    dlfl = bmesh_to_dlfl(bm)
-    bv_map = dlfl._bv_map
+    try:
+        dlfl = bmesh_to_dlfl(bm)
+    except ValueError as exc:
+        return f"Mesh must be a closed 2-manifold ({exc})"
 
-    # V1→V2 defines half-edge 1
-    he0 = _find_halfedge(dlfl, bv_map, v1, v2)
-    # V3→V4 defines half-edge 2
-    he1 = _find_halfedge(dlfl, bv_map, v3, v4)
+    halfedges = []
+    for face_index, corner, _vert_index in picked:
+        dlfl_face = dlfl._bf_map.get(face_index)
+        if dlfl_face is None:
+            return "Could not map the picked corner onto the DLFL mesh"
+        he = resolve_corner_halfedge(dlfl_face, corner)
+        if he is None:
+            return f"Face {face_index} has no corner {corner}"
+        halfedges.append(he)
 
-    if he0 is None:
-        return "he1_error"
-    if he1 is None:
-        return "he2_error"
+    new_edge = _insert_edge(dlfl, halfedges[0], halfedges[1])
 
-    _insert_edge(dlfl, he0, he1)
+    # Safety net behind corner_pair_error. Blender takes duplicate edges and
+    # faces that repeat a vertex, but a single-corner polygon crashes its
+    # Mesh->BMesh conversion and a self-loop edge hangs it. The BMesh is
+    # still untouched here, so refusing costs nothing.
+    broken = unwritable_faces(dlfl)
+    if broken:
+        return ("Cannot insert edge: the result contains "
+                f"{len(broken)} face(s) with fewer than {MIN_FACE_CORNERS} "
+                "corners, which Blender cannot store")
+    loops = degenerate_edges(dlfl)
+    if loops:
+        return ("Cannot insert edge: the result contains "
+                f"{len(loops)} self-loop edge(s), which hang Blender")
+
+    # dlfl_corner_arrays numbers edges by DLFL insertion order and the
+    # writer keeps that order, so the edge just appended is the last one.
+    edge_order = list(dlfl.edges.values())
+    new_edge_index = edge_order.index(new_edge)
 
     _rebuild_bmesh(bm, dlfl, me)
-    return dlfl
+    return dlfl, new_edge_index
 
 
 def apply_delete_vertex(context):
