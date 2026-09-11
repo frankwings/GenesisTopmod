@@ -1,0 +1,188 @@
+{
+  "shapes": [
+    "cow"
+  ],
+  "budgets": [
+    800
+  ],
+  "variants": [
+    "LIOU_EX"
+  ],
+  "trials": 6,
+  "total_steps": 2400,
+  "K": 20,
+  "baselines_cow_800F": {
+    "_note": "from liou_h1_cow.json n=6",
+    "LIOU": {
+      "mean": 0.9459,
+      "std": 0.0041
+    },
+    "LIOU_RND": {
+      "mean": 0.9494,
+      "std": 0.0053
+    },
+    "cc3": {
+      "mean": 0.9662,
+      "std": 0.0007
+    }
+  },
+  "results": {
+    "cow": {
+      "800": {
+        "LIOU_EX": {
+          "iou": {
+            "n": 6,
+            "mean": 0.9463018022495789,
+            "std": 0.0026824465623180253,
+            "min": 0.942903932628163,
+            "max": 0.9506823414305533,
+            "values": [
+              0.9460698325527362,
+              0.9506823414305533,
+              0.9460791705051381,
+              0.9444566050875945,
+              0.942903932628163,
+              0.947618931293289
+            ]
+          },
+          "iou_valid": {
+            "n": 6,
+            "mean": 0.9463018022495789,
+            "std": 0.0026824465623180253,
+            "min": 0.942903932628163,
+            "max": 0.9506823414305533,
+            "values": [
+              0.9460698325527362,
+              0.9506823414305533,
+              0.9460791705051381,
+              0.9444566050875945,
+              0.942903932628163,
+              0.947618931293289
+            ]
+          },
+          "faces_mean": 780.6666666666666,
+          "rounds_mean": 9.0,
+          "time_mean": 39.311406215031944,
+          "n_valid": 6,
+          "n_invalid": 0,
+          "per_trial": [
+            {
+              "iou": 0.9460698325527362,
+              "faces": 782,
+              "n_rounds": 9,
+              "n_extrudes": 3,
+              "valid": true,
+              "triggers": [
+                "extrude",
+                "extrude",
+                "extrude",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 40.554481506347656
+            },
+            {
+              "iou": 0.9506823414305533,
+              "faces": 800,
+              "n_rounds": 9,
+              "n_extrudes": 3,
+              "valid": true,
+              "triggers": [
+                "extrude",
+                "extrude",
+                "extrude",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 37.80755829811096
+            },
+            {
+              "iou": 0.9460791705051381,
+              "faces": 766,
+              "n_rounds": 9,
+              "n_extrudes": 3,
+              "valid": true,
+              "triggers": [
+                "extrude",
+                "extrude",
+                "extrude",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 39.539591789245605
+            },
+            {
+              "iou": 0.9444566050875945,
+              "faces": 772,
+              "n_rounds": 9,
+              "n_extrudes": 3,
+              "valid": true,
+              "triggers": [
+                "extrude",
+                "extrude",
+                "extrude",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 38.63373255729675
+            },
+            {
+              "iou": 0.942903932628163,
+              "faces": 778,
+              "n_rounds": 9,
+              "n_extrudes": 3,
+              "valid": true,
+              "triggers": [
+                "extrude",
+                "extrude",
+                "extrude",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 39.233832120895386
+            },
+            {
+              "iou": 0.947618931293289,
+              "faces": 786,
+              "n_rounds": 9,
+              "n_extrudes": 3,
+              "valid": true,
+              "triggers": [
+                "extrude",
+                "extrude",
+                "extrude",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 40.09924101829529
+            }
+          ]
+        }
+      }
+    }
+  }
+}

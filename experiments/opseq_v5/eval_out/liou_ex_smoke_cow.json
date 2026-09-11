@@ -1,0 +1,83 @@
+{
+  "shapes": [
+    "cow"
+  ],
+  "budgets": [
+    800
+  ],
+  "variants": [
+    "LIOU_EX"
+  ],
+  "trials": 1,
+  "total_steps": 2400,
+  "K": 20,
+  "baselines_cow_800F": {
+    "_note": "from liou_h1_cow.json n=6",
+    "LIOU": {
+      "mean": 0.9459,
+      "std": 0.0041
+    },
+    "LIOU_RND": {
+      "mean": 0.9494,
+      "std": 0.0053
+    },
+    "cc3": {
+      "mean": 0.9662,
+      "std": 0.0007
+    }
+  },
+  "results": {
+    "cow": {
+      "800": {
+        "LIOU_EX": {
+          "iou": {
+            "n": 1,
+            "mean": 0.9517316594092696,
+            "std": 0.0,
+            "min": 0.9517316594092696,
+            "max": 0.9517316594092696,
+            "values": [
+              0.9517316594092696
+            ]
+          },
+          "iou_valid": {
+            "n": 1,
+            "mean": 0.9517316594092696,
+            "std": 0.0,
+            "min": 0.9517316594092696,
+            "max": 0.9517316594092696,
+            "values": [
+              0.9517316594092696
+            ]
+          },
+          "faces_mean": 770.0,
+          "rounds_mean": 9.0,
+          "time_mean": 42.33790302276611,
+          "n_valid": 1,
+          "n_invalid": 0,
+          "per_trial": [
+            {
+              "iou": 0.9517316594092696,
+              "faces": 770,
+              "n_rounds": 9,
+              "n_extrudes": 3,
+              "valid": true,
+              "triggers": [
+                "extrude",
+                "extrude",
+                "extrude",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 42.33790302276611
+            }
+          ]
+        }
+      }
+    }
+  }
+}

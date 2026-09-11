@@ -1,0 +1,58 @@
+##### 6v cycle 1: untangle
+[base] V=5670 F=11336 watertight=True | ho16=0.9729 hair=2214 | SI faces=7038 (62.1%) folds>120=16.7% >90=19.2%
+[flip] 4630 DLFL edge flips total, watertight=True (3s)
+[after-flip] V=5670 F=11336 watertight=True | ho16=0.9723 hair=2140 | SI faces=4409 (38.9%) folds>120=12.6% >90=16.8%
+[after-smooth5] V=5670 F=11336 watertight=True | ho16=0.9700 hair=2161 | SI faces=2559 (22.6%) folds>120=6.6% >90=12.2%
+[after-smooth+flip] V=5670 F=11336 watertight=True | ho16=0.9702 hair=2109 | SI faces=2123 (18.7%) folds>120=5.2% >90=9.8%
+##### 6v cycle 1: refit to soup
+[p2a] FINAL train6=0.9694 ho16=0.9727 hair=2254 maxblob=336 V=5670 F=11336 watertight=True
+[p2a] delta ho16: 0.9702 -> 0.9727 (+0.25pts) | best round=0 ho16=0.9727
+##### 6v cycle 2: untangle
+[base] V=5670 F=11336 watertight=True | ho16=0.9727 hair=2254 | SI faces=3286 (29.0%) folds>120=11.4% >90=15.1%
+[flip] 2124 DLFL edge flips total, watertight=True (3s)
+[after-flip] V=5670 F=11336 watertight=True | ho16=0.9722 hair=2243 | SI faces=2354 (20.8%) folds>120=7.3% >90=10.8%
+[after-smooth5] V=5670 F=11336 watertight=True | ho16=0.9713 hair=2151 | SI faces=1541 (13.6%) folds>120=4.2% >90=8.6%
+[after-smooth+flip] V=5670 F=11336 watertight=True | ho16=0.9712 hair=2145 | SI faces=1365 (12.0%) folds>120=3.7% >90=7.7%
+##### 6v cycle 2: refit to soup
+[p2a] FINAL train6=0.9683 ho16=0.9723 hair=2423 maxblob=343 V=5670 F=11336 watertight=True
+[p2a] delta ho16: 0.9712 -> 0.9723 (+0.11pts) | best round=0 ho16=0.9723
+##### 6v cycle 3: untangle
+[base] V=5670 F=11336 watertight=True | ho16=0.9723 hair=2423 | SI faces=2641 (23.3%) folds>120=9.0% >90=12.1%
+[flip] 1650 DLFL edge flips total, watertight=True (3s)
+[after-flip] V=5670 F=11336 watertight=True | ho16=0.9716 hair=2409 | SI faces=1895 (16.7%) folds>120=5.7% >90=8.6%
+[after-smooth5] V=5670 F=11336 watertight=True | ho16=0.9704 hair=2279 | SI faces=1395 (12.3%) folds>120=3.2% >90=7.3%
+[after-smooth+flip] V=5670 F=11336 watertight=True | ho16=0.9703 hair=2281 | SI faces=1235 (10.9%) folds>120=2.8% >90=6.4%
+##### 6v cycle 3: refit to soup
+[p2a] FINAL train6=0.9685 ho16=0.9721 hair=2363 maxblob=333 V=5670 F=11336 watertight=True
+[p2a] delta ho16: 0.9703 -> 0.9721 (+0.19pts) | best round=0 ho16=0.9721
+##### 6v final metrics
+[base] V=5670 F=11336 watertight=True | ho16=0.9721 hair=2363 | SI faces=2214 (19.5%) folds>120=7.2% >90=10.2%
+##### 64v cycle 1: untangle
+[base] V=3494 F=6984 watertight=True | ho16=0.9841 hair=296 | SI faces=5787 (82.9%) folds>120=19.2% >90=26.6%
+[flip] 3421 DLFL edge flips total, watertight=True (2s)
+[after-flip] V=3494 F=6984 watertight=True | ho16=0.9819 hair=326 | SI faces=4462 (63.9%) folds>120=17.2% >90=27.0%
+[after-smooth5] V=3494 F=6984 watertight=True | ho16=0.9740 hair=917 | SI faces=3303 (47.3%) folds>120=11.0% >90=22.5%
+[after-smooth+flip] V=3494 F=6984 watertight=True | ho16=0.9733 hair=883 | SI faces=2949 (42.2%) folds>120=9.7% >90=19.7%
+##### 64v cycle 1: refit hull-pull
+[p1f] FINAL train=0.9750 ho16=0.9854 hair=293 maxblob=22
+[p1f] delta ho16: 0.9733 -> 0.9854 (+1.21pts)
+##### 64v cycle 2: untangle
+[base] V=3494 F=6984 watertight=True | ho16=0.9854 hair=293 | SI faces=3888 (55.7%) folds>120=18.0% >90=29.5%
+[flip] 1884 DLFL edge flips total, watertight=True (2s)
+[after-flip] V=3494 F=6984 watertight=True | ho16=0.9847 hair=299 | SI faces=3180 (45.5%) folds>120=11.9% >90=21.9%
+[after-smooth5] V=3494 F=6984 watertight=True | ho16=0.9820 hair=383 | SI faces=2404 (34.4%) folds>120=7.9% >90=18.9%
+[after-smooth+flip] V=3494 F=6984 watertight=True | ho16=0.9818 hair=374 | SI faces=2221 (31.8%) folds>120=6.9% >90=17.0%
+##### 64v cycle 2: refit hull-pull
+[p1f] FINAL train=0.9770 ho16=0.9860 hair=221 maxblob=11
+[p1f] delta ho16: 0.9818 -> 0.9860 (+0.41pts)
+##### 64v cycle 3: untangle
+[base] V=3494 F=6984 watertight=True | ho16=0.9860 hair=221 | SI faces=3261 (46.7%) folds>120=15.6% >90=26.5%
+[flip] 1797 DLFL edge flips total, watertight=True (2s)
+[after-flip] V=3494 F=6984 watertight=True | ho16=0.9850 hair=288 | SI faces=2516 (36.0%) folds>120=9.6% >90=19.3%
+[after-smooth5] V=3494 F=6984 watertight=True | ho16=0.9821 hair=343 | SI faces=1925 (27.6%) folds>120=6.2% >90=16.8%
+[after-smooth+flip] V=3494 F=6984 watertight=True | ho16=0.9819 hair=341 | SI faces=1751 (25.1%) folds>120=5.7% >90=15.5%
+##### 64v cycle 3: refit hull-pull
+[p1f] FINAL train=0.9765 ho16=0.9858 hair=223 maxblob=16
+[p1f] delta ho16: 0.9819 -> 0.9858 (+0.38pts)
+##### 64v final metrics
+[base] V=3494 F=6984 watertight=True | ho16=0.9858 hair=223 | SI faces=2676 (38.3%) folds>120=14.6% >90=25.3%

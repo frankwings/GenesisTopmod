@@ -1,0 +1,76 @@
+{
+  "shapes": [
+    "fandisk"
+  ],
+  "budgets": [
+    800
+  ],
+  "variants": [
+    "PH",
+    "RND",
+    "HEUR"
+  ],
+  "trials": 4,
+  "total_steps": 800,
+  "K": 20,
+  "results": {
+    "fandisk": {
+      "800": {
+        "PH": {
+          "iou": {
+            "n": 4,
+            "mean": 0.0,
+            "std": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "faces_mean": 800.0,
+          "rounds_mean": 8.0,
+          "time_mean": 12.704257607460022
+        },
+        "RND": {
+          "iou": {
+            "n": 4,
+            "mean": 0.0,
+            "std": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "faces_mean": 800.0,
+          "rounds_mean": 8.0,
+          "time_mean": 11.890405893325806
+        },
+        "HEUR": {
+          "iou": {
+            "n": 4,
+            "mean": 0.0,
+            "std": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "values": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "faces_mean": 800.0,
+          "rounds_mean": 8.0,
+          "time_mean": 12.192174673080444
+        }
+      }
+    }
+  }
+}

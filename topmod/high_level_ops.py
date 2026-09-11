@@ -589,9 +589,19 @@ def collapse_edge(mesh: DLFLMesh, edge: Edge) -> Vertex:
     # next or prev was removed, skip to the next valid one.
     valid_ids = set(mesh.halfedges.keys())
     for he in list(mesh.halfedges.values()):
+        seen = set()
         while he.next is not None and he.next.id not in valid_ids:
+            if id(he.next) in seen:          # removed half-edges form a cycle
+                he.next = None               # chain is unrecoverable here;
+                break                        # caller must rewire via twins
+            seen.add(id(he.next))
             he.next = he.next.next
+        seen = set()
         while he.prev is not None and he.prev.id not in valid_ids:
+            if id(he.prev) in seen:
+                he.prev = None
+                break
+            seen.add(id(he.prev))
             he.prev = he.prev.prev
 
     return v0
@@ -913,3 +923,93 @@ def make_wireframe(mesh: DLFLMesh, thickness: float = 0.1) -> DLFLMesh:
                 add_handle(shelled, outer, inner)
 
     return shelled
+
+
+# ── collapse_edge_tri ────────────────────────────────────────────────────────
+
+def collapse_edge_tri(mesh: DLFLMesh, edge: Edge):
+    """
+    Correct half-edge collapse for CLOSED TRIANGLE meshes, with duplicate-edge
+    merging (the step the generic collapse_edge above leaves unfinished).
+
+    Guarded by the link condition: the two endpoints' common neighbours must
+    be exactly the two apex vertices {a, b} of the flanking triangles, and
+    a != b.  Returns the surviving vertex, or None if the guard rejects the
+    edge (caller should try another edge).
+
+    Topology: V-1, E-3, F-2  (Euler characteristic preserved).
+    """
+    he = edge.he0            # v0 -> v1, face T0
+    ht = edge.he1            # v1 -> v0, face T1
+    if he is None or ht is None or he.face is None or ht.face is None:
+        return None
+    n0, p0 = he.next, he.prev      # v1->a, a->v0
+    n1, p1 = ht.next, ht.prev      # v0->b, b->v1
+    if n0 is None or p0 is None or n1 is None or p1 is None:
+        return None
+    if he.face.degree() != 3 or ht.face.degree() != 3:
+        return None
+    v0, v1 = he.origin, ht.origin
+    a = n0.twin.origin if n0.twin else None    # destination of n0
+    b = n1.twin.origin if n1.twin else None
+    if a is None or b is None or a is b or a is v0 or b is v1:
+        return None
+
+    # link condition: common neighbours of v0 and v1 must be exactly {a, b}
+    def _nbrs(v):
+        out = v.outgoing_halfedges()
+        return set(id(h.twin.origin) for h in out if h.twin is not None)
+    common = _nbrs(v0) & _nbrs(v1)
+    if common != {id(a), id(b)}:
+        return None
+
+    # outer twins that survive
+    n0t, p0t = n0.twin, p0.twin    # (a->v1), (v0->a)
+    n1t, p1t = n1.twin, p1.twin    # (b->v0), (v1->b)
+    if None in (n0t, p0t, n1t, p1t):
+        return None
+
+    # midpoint; repoint v1's outgoing half-edges to v0
+    v0.x, v0.y, v0.z = (v0.x + v1.x) / 2, (v0.y + v1.y) / 2, (v0.z + v1.z) / 2
+    for h in list(mesh.halfedges.values()):
+        if h.origin is v1:
+            h.origin = v0
+
+    # merge duplicate edges: (v1,a) folds onto (v0,a); (b,v1) onto (b,v0)
+    e_keep0, e_del0 = p0.edge, n0.edge
+    e_keep1, e_del1 = n1.edge, p1.edge
+    p0t.twin, n0t.twin = n0t, p0t
+    n1t.twin, p1t.twin = p1t, n1t
+    n0t.edge = e_keep0
+    p1t.edge = e_keep1
+    e_keep0.he0, e_keep0.he1 = p0t, n0t
+    e_keep1.he0, e_keep1.he1 = n1t, p1t
+
+    # fix vertex anchors
+    v0.he = p0t if p0t.origin is v0 else n1t
+    a.he = n0t
+    b.he = p1t if p1t.origin is b else n1t
+    if v0.he.origin is not v0:
+        for h in mesh.halfedges.values():
+            if h.origin is v0:
+                v0.he = h
+                break
+    if b.he.origin is not b:
+        for h in mesh.halfedges.values():
+            if h.origin is b:
+                b.he = h
+                break
+
+    # remove dead elements
+    for f in (he.face, ht.face):
+        if f is not None and f.id in mesh.faces:
+            mesh._remove_face(f)
+    for h in (he, ht, n0, p0, n1, p1):
+        if h.id in mesh.halfedges:
+            mesh._remove_halfedge(h)
+    for e in (edge, e_del0, e_del1):
+        if e is not None and e.id in mesh.edges:
+            mesh._remove_edge(e)
+    if v1.id in mesh.vertices:
+        mesh._remove_vertex(v1)
+    return v0

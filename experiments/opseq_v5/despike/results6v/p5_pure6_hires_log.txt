@@ -1,0 +1,23 @@
+##### pure 6v hi-res: global DLFL subdiv x1 + 6v hull + in-loop cleanup + LAP x3 (from p4d_pure6 0.9457)
+[p4] global DLFL subdivision: split 10263 edges -> V=20528 F=41052
+[p4] 6v hull field: vox=4316606 pitch=0.0124
+[base] V=20528 F=41052 watertight=True | train=0.9912 ho16=0.9456 hair=16435 | SI=3856 (9.4%) folds=0.1%
+[step 100/1200] sil=0.0026 flips=8686 collapses=41 pushes=48832 V=20487 SI=7733 (18.9%) folds=0.3% (47s)
+[step 200/1200] sil=0.0025 flips=11789 collapses=55 pushes=95001 V=20473 SI=7841 (19.2%) folds=0.2% (94s)
+[step 300/1200] sil=0.0023 flips=13715 collapses=68 pushes=139055 V=20460 SI=7772 (19.0%) folds=0.1% (141s)
+[step 400/1200] sil=0.0024 flips=15152 collapses=78 pushes=183210 V=20450 SI=7880 (19.3%) folds=0.1% (188s)
+[step 500/1200] sil=0.0022 flips=16383 collapses=86 pushes=226920 V=20442 SI=7840 (19.2%) folds=0.1% (234s)
+[step 600/1200] sil=0.0021 flips=17558 collapses=91 pushes=269687 V=20437 SI=7587 (18.6%) folds=0.1% (282s)
+[step 700/1200] sil=0.0021 flips=18511 collapses=101 pushes=311844 V=20427 SI=7729 (18.9%) folds=0.1% (327s)
+[step 800/1200] sil=0.0020 flips=19295 collapses=109 pushes=354105 V=20419 SI=7625 (18.7%) folds=0.1% (373s)
+[step 900/1200] sil=0.0019 flips=19844 collapses=116 pushes=395444 V=20412 SI=7590 (18.6%) folds=0.0% (418s)
+[step 1000/1200] sil=0.0018 flips=20221 collapses=121 pushes=436316 V=20407 SI=7633 (18.7%) folds=0.0% (464s)
+[step 1100/1200] sil=0.0017 flips=20434 collapses=124 pushes=476867 V=20404 SI=7473 (18.3%) folds=0.0% (509s)
+[step 1200/1200] sil=0.0018 flips=20523 collapses=124 pushes=506440 V=20404 SI=7416 (18.2%) folds=0.0% (544s)
+[final] V=20404 F=40804 watertight=True | train=0.9970 ho16=0.9469 hair=16511 | SI=7411 (18.2%) folds=0.0%
+[p4] ho16 0.9456 -> 0.9469 (+0.12) | SI 9.5% -> 18.2% | total flips=20566
+[p4] saved cow_armadillo_p5_pure6.npz
+##### Taubin x5
+[base] V=20404 F=40804 watertight=True | ho16=0.9469 hair=16511 maxblob=1157 | SI=18.2% folds=0.0% back_dihedral_med=55.8deg
+[taubin x5] V=20404 F=40804 watertight=True | ho16=0.9555 hair=11802 maxblob=1004 | SI=11.1% folds=0.3% back_dihedral_med=27.1deg
+saved /tmp/liou_cow_viz/cow_armadillo_p5_pure6_taubin5.npz (+.obj)
