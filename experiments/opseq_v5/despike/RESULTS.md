@@ -90,3 +90,13 @@ Wall (single run): Nicolet 5–15 min, Palfinger 4–15 min, DMesh 10–20 min, 
 5. Neither normal-map supervision nor 512² supervision moves the numbers: the remaining error is at the
    sub-pixel level of the exam, i.e. we are at the ceiling of this benchmark. Next lever is real data
    (DTU via 2DGS/PGSR renders), not more synthetic accuracy.
+
+## 2b. Recomputed side-by-side (2026-09-11, `compare_panel.py`, figure `results_genus/compare_all_methods.png`)
+All numbers below were recomputed in ONE pass from the archived meshes with the same exam (ho16 / VolIoU / CD / V / genus).
+| shape | Ours (headline) | Ours v3 uniform chain | Palfinger 2022 | DMesh 2024 | Nicolet 2021 |
+|---|---|---|---|---|---|
+| armadillo | 0.9983 / 0.9949 / 0.00619 / 49.8k / g0 | 0.9983 / 0.9949 / 0.00620 / 49.5k / g0 | 0.9965 / 0.9938 / 0.00626 / 37.9k / g0 | 0.9894 / 0.9634 / 0.00776 / 2.7k / gsoup | 0.9593 / 0.8987 / 0.02050 / 8.6k / g0 |
+| kitten | 0.9994 / 0.9982 / 0.00665 / 19.4k / g1 | 0.9993 / 0.9979 / 0.00665 / 55.9k / g1 | 0.9991 / 0.9968 / 0.00682 / 67.2k / g0 | 0.9944 / 0.9895 / 0.00738 / 3.9k / g1 | 0.9768 / 0.9684 / 0.01098 / 8.7k / g0 |
+| rockerarm | 0.9985 / 0.9937 / 0.00584 / 25.2k / g1 | 0.9985 / 0.9869 / 0.00615 / 50.3k / g1 | 0.9673 / 0.9383 / 0.01332 / 56.5k / g0 | 0.9928 / 0.9803 / 0.00638 / 3.4k / gsoup | 0.9581 / 0.9250 / 0.01541 / 8.1k / g0 |
+| fertility | 0.9973 / 0.9809 / 0.00670 / 16.0k / g4 | 0.9973 / 0.9904 / 0.00661 / 47.6k / g3 | 0.9398 / 0.9598 / 0.01249 / 55.6k / g0 | 0.9886 / 0.9788 / 0.00708 / 3.1k / gsoup | 0.8963 / 0.8259 / 0.02720 / 8.4k / g0 |
+(ho16 / VolIoU / CD / V / genus; 'soup' = DMesh non-manifold output.) Ours is first on VolIoU on all four shapes; on fertility the v3 uniform chain (genus 3, one tunnel missed) scores higher than the correct genus-4 mesh — genus must be reported as its own metric.

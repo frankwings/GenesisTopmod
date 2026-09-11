@@ -1,0 +1,278 @@
+[
+ [
+  "armadillo",
+  "GT",
+  {
+   "V": 49990,
+   "F": 99976,
+   "genus": 0
+  }
+ ],
+ [
+  "armadillo",
+  "Ours golden v3",
+  {
+   "ho16": 0.9983,
+   "VolIoU": 0.9949,
+   "CD": 0.00619,
+   "V": 49795,
+   "F": 99586,
+   "genus": "0"
+  }
+ ],
+ [
+  "armadillo",
+  "Ours v3 uniform chain",
+  {
+   "ho16": 0.9983,
+   "VolIoU": 0.9949,
+   "CD": 0.0062,
+   "V": 49454,
+   "F": 98904,
+   "genus": "0"
+  }
+ ],
+ [
+  "armadillo",
+  "Palfinger 2022",
+  {
+   "ho16": 0.9965,
+   "VolIoU": 0.9938,
+   "CD": 0.00626,
+   "V": 37854,
+   "F": 75704,
+   "genus": "0"
+  }
+ ],
+ [
+  "armadillo",
+  "DMesh 2024",
+  {
+   "ho16": 0.9894,
+   "VolIoU": 0.9634,
+   "CD": 0.00776,
+   "V": 2738,
+   "F": 5478,
+   "genus": "soup"
+  }
+ ],
+ [
+  "armadillo",
+  "Nicolet 2021",
+  {
+   "ho16": 0.9593,
+   "VolIoU": 0.8987,
+   "CD": 0.0205,
+   "V": 8639,
+   "F": 17274,
+   "genus": "0"
+  }
+ ],
+ [
+  "kitten",
+  "GT",
+  {
+   "V": 14472,
+   "F": 28944,
+   "genus": 1
+  }
+ ],
+ [
+  "kitten",
+  "Ours v8b (headline)",
+  {
+   "ho16": 0.9994,
+   "VolIoU": 0.9982,
+   "CD": 0.00665,
+   "V": 19353,
+   "F": 38706,
+   "genus": "1"
+  }
+ ],
+ [
+  "kitten",
+  "Ours v3 uniform chain",
+  {
+   "ho16": 0.9993,
+   "VolIoU": 0.9979,
+   "CD": 0.00665,
+   "V": 55897,
+   "F": 111794,
+   "genus": "1"
+  }
+ ],
+ [
+  "kitten",
+  "Palfinger 2022",
+  {
+   "ho16": 0.9991,
+   "VolIoU": 0.9968,
+   "CD": 0.00682,
+   "V": 67225,
+   "F": 134446,
+   "genus": "0"
+  }
+ ],
+ [
+  "kitten",
+  "DMesh 2024",
+  {
+   "ho16": 0.9944,
+   "VolIoU": 0.9895,
+   "CD": 0.00738,
+   "V": 3878,
+   "F": 7756,
+   "genus": "1"
+  }
+ ],
+ [
+  "kitten",
+  "Nicolet 2021",
+  {
+   "ho16": 0.9768,
+   "VolIoU": 0.9684,
+   "CD": 0.01098,
+   "V": 8675,
+   "F": 17346,
+   "genus": "0"
+  }
+ ],
+ [
+  "rockerarm",
+  "GT",
+  {
+   "V": 10044,
+   "F": 20088,
+   "genus": 1
+  }
+ ],
+ [
+  "rockerarm",
+  "Ours v8b (headline)",
+  {
+   "ho16": 0.9985,
+   "VolIoU": 0.9937,
+   "CD": 0.00584,
+   "V": 25176,
+   "F": 50352,
+   "genus": "1"
+  }
+ ],
+ [
+  "rockerarm",
+  "Ours v3 uniform chain",
+  {
+   "ho16": 0.9985,
+   "VolIoU": 0.9869,
+   "CD": 0.00615,
+   "V": 50334,
+   "F": 100668,
+   "genus": "1"
+  }
+ ],
+ [
+  "rockerarm",
+  "Palfinger 2022",
+  {
+   "ho16": 0.9673,
+   "VolIoU": 0.9383,
+   "CD": 0.01332,
+   "V": 56518,
+   "F": 113032,
+   "genus": "0"
+  }
+ ],
+ [
+  "rockerarm",
+  "DMesh 2024",
+  {
+   "ho16": 0.9928,
+   "VolIoU": 0.9803,
+   "CD": 0.00638,
+   "V": 3379,
+   "F": 6759,
+   "genus": "soup"
+  }
+ ],
+ [
+  "rockerarm",
+  "Nicolet 2021",
+  {
+   "ho16": 0.9581,
+   "VolIoU": 0.925,
+   "CD": 0.01541,
+   "V": 8085,
+   "F": 16166,
+   "genus": "0"
+  }
+ ],
+ [
+  "fertility",
+  "GT",
+  {
+   "V": 4494,
+   "F": 9000,
+   "genus": 4
+  }
+ ],
+ [
+  "fertility",
+  "Ours v8b genus-4 (headline)",
+  {
+   "ho16": 0.9973,
+   "VolIoU": 0.9809,
+   "CD": 0.0067,
+   "V": 15969,
+   "F": 31950,
+   "genus": "4"
+  }
+ ],
+ [
+  "fertility",
+  "Ours v3 uniform chain",
+  {
+   "ho16": 0.9973,
+   "VolIoU": 0.9904,
+   "CD": 0.00661,
+   "V": 47591,
+   "F": 95190,
+   "genus": "3"
+  }
+ ],
+ [
+  "fertility",
+  "Palfinger 2022",
+  {
+   "ho16": 0.9398,
+   "VolIoU": 0.9598,
+   "CD": 0.01249,
+   "V": 55600,
+   "F": 111196,
+   "genus": "0"
+  }
+ ],
+ [
+  "fertility",
+  "DMesh 2024",
+  {
+   "ho16": 0.9886,
+   "VolIoU": 0.9788,
+   "CD": 0.00708,
+   "V": 3120,
+   "F": 6254,
+   "genus": "soup"
+  }
+ ],
+ [
+  "fertility",
+  "Nicolet 2021",
+  {
+   "ho16": 0.8963,
+   "VolIoU": 0.8259,
+   "CD": 0.0272,
+   "V": 8383,
+   "F": 16762,
+   "genus": "0"
+  }
+ ]
+]
