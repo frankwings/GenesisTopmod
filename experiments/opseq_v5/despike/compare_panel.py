@@ -17,10 +17,10 @@ SHAPES = [  # (shape, az, el, [(label, path), ...])
  ("fertility", 180, 20, [("Ours v8b genus-4 (headline)", f"{R}/fertility_g4hull256_auto.npz"), ("Ours v3 uniform chain", f"{R}/fertility_g3chain_auto.npz"),
                          ("Palfinger 2022", f"{R}/fertility_palfinger1200.npz"), ("DMesh 2024", f"{R}/fertility_dmesh_last.obj"), ("Nicolet 2021", f"{R}/fertility_nicolet1200.npz")]),
 ]
-RES = 420; PAD = 78
-FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 15)
-FONT_S = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 13)
-FONT_T = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+RES = int(os.environ.get("TILE", "1000")); SC = RES / 420; PAD = int(78 * SC)
+FONT = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", int(15 * SC))
+FONT_S = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", int(13 * SC))
+FONT_T = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", int(22 * SC))
 
 def genus_of(V, F):
     from phase1b_pipeline import check_watertight
@@ -65,16 +65,16 @@ for shape, az, el, entries in SHAPES:
         tiles.append((lab, img, l1, l2))
     rows.append((shape, tiles))
 
-ncol = 6; W = ncol * RES; H = len(rows) * (RES + PAD) + 40
+ncol = 6; W = ncol * RES; TOP = int(40 * SC); H = len(rows) * (RES + PAD) + TOP
 canvas = Image.new("L", (W, H), 255); d = ImageDraw.Draw(canvas)
-d.text((10, 8), "GenesisTopmod vs competitors — same 64 views @256², same held-out exam, all meshes as produced by each method (recomputed 2026-09-11)", fill=0, font=FONT_T)
+d.text((10, int(8 * SC)), "GenesisTopmod vs competitors — same 64 views @256², same held-out exam, all meshes as produced by each method (recomputed 2026-09-11)", fill=0, font=FONT_T)
 for r, (shape, tiles) in enumerate(rows):
-    y0 = 40 + r * (RES + PAD)
+    y0 = TOP + r * (RES + PAD)
     for c, (lab, img, l1, l2) in enumerate(tiles):
         x0 = c * RES
         if img is not None: canvas.paste(Image.fromarray(img), (x0, y0))
         else: d.rectangle([x0 + 5, y0 + 5, x0 + RES - 5, y0 + RES - 5], outline=128); d.text((x0 + 20, y0 + RES // 2), l1, fill=100, font=FONT_S)
-        d.text((x0 + 8, y0 + RES + 4), (f"{shape} · " if c == 0 else "") + lab, fill=0, font=FONT)
-        d.text((x0 + 8, y0 + RES + 26), l1, fill=0, font=FONT_S); d.text((x0 + 8, y0 + RES + 44), l2, fill=0, font=FONT_S)
+        d.text((x0 + 8, y0 + RES + int(4 * SC)), (f"{shape} · " if c == 0 else "") + lab, fill=0, font=FONT)
+        d.text((x0 + 8, y0 + RES + int(26 * SC)), l1, fill=0, font=FONT_S); d.text((x0 + 8, y0 + RES + int(44 * SC)), l2, fill=0, font=FONT_S)
 canvas.save(f"{R}/compare_all_methods.png"); json.dump(table, open(f"{R}/compare_all_methods.json", "w"), indent=1)
 print(f"saved {R}/compare_all_methods.png ({W}x{H})")
