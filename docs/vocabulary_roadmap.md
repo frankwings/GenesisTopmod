@@ -131,3 +131,4 @@ From `dlflaux` standalone modules (verified present 2026-08-06):
 | 2026-08-10 | Diffgeo: 35/46 differentiable via sparse trace + torch |
 | 2026-08-12 | Blender addon: 46/46 complete coverage |
 | 2026-08-13 | Docs: 47 gallery entries, insert_edge 4-vertex selection |
+| 2026-09-11 | Blender addon: insert_edge picks its two corners in the viewport — same-face, cross-face and double edges (lossless corner-array conversion) |
