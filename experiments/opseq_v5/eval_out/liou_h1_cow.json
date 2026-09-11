@@ -1,0 +1,303 @@
+{
+  "shapes": [
+    "cow"
+  ],
+  "budgets": [
+    800
+  ],
+  "variants": [
+    "LIOU",
+    "LIOU_RND"
+  ],
+  "trials": 6,
+  "total_steps": 2400,
+  "K": 20,
+  "results": {
+    "cow": {
+      "800": {
+        "LIOU": {
+          "iou": {
+            "n": 6,
+            "mean": 0.9458778232840737,
+            "std": 0.004148634357894182,
+            "min": 0.9426106112290809,
+            "max": 0.9527503235926361,
+            "values": [
+              0.9442656771548021,
+              0.943455182089405,
+              0.9426106112290809,
+              0.9527503235926361,
+              0.9429629194959604,
+              0.949222226142557
+            ]
+          },
+          "iou_valid": {
+            "n": 6,
+            "mean": 0.9458778232840737,
+            "std": 0.004148634357894182,
+            "min": 0.9426106112290809,
+            "max": 0.9527503235926361,
+            "values": [
+              0.9442656771548021,
+              0.943455182089405,
+              0.9426106112290809,
+              0.9527503235926361,
+              0.9429629194959604,
+              0.949222226142557
+            ]
+          },
+          "faces_mean": 800.0,
+          "rounds_mean": 8.0,
+          "time_mean": 46.378666718800865,
+          "n_valid": 6,
+          "n_invalid": 0,
+          "per_trial": [
+            {
+              "iou": 0.9442656771548021,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 60.05690908432007
+            },
+            {
+              "iou": 0.943455182089405,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 56.837772846221924
+            },
+            {
+              "iou": 0.9426106112290809,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 45.59029507637024
+            },
+            {
+              "iou": 0.9527503235926361,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 39.07440209388733
+            },
+            {
+              "iou": 0.9429629194959604,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 34.667492151260376
+            },
+            {
+              "iou": 0.949222226142557,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 42.04512906074524
+            }
+          ]
+        },
+        "LIOU_RND": {
+          "iou": {
+            "n": 6,
+            "mean": 0.9494490252791631,
+            "std": 0.0053134920048960995,
+            "min": 0.9410008637569701,
+            "max": 0.9540346233533948,
+            "values": [
+              0.9532217798381016,
+              0.9446983516977779,
+              0.9410008637569701,
+              0.9540346233533948,
+              0.9522222055423804,
+              0.9515163274863534
+            ]
+          },
+          "iou_valid": {
+            "n": 6,
+            "mean": 0.9494490252791631,
+            "std": 0.0053134920048960995,
+            "min": 0.9410008637569701,
+            "max": 0.9540346233533948,
+            "values": [
+              0.9532217798381016,
+              0.9446983516977779,
+              0.9410008637569701,
+              0.9540346233533948,
+              0.9522222055423804,
+              0.9515163274863534
+            ]
+          },
+          "faces_mean": 800.0,
+          "rounds_mean": 8.0,
+          "time_mean": 51.14759123325348,
+          "n_valid": 6,
+          "n_invalid": 0,
+          "per_trial": [
+            {
+              "iou": 0.9532217798381016,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 55.34822368621826
+            },
+            {
+              "iou": 0.9446983516977779,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 58.67177128791809
+            },
+            {
+              "iou": 0.9410008637569701,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 55.348418951034546
+            },
+            {
+              "iou": 0.9540346233533948,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 55.032567501068115
+            },
+            {
+              "iou": 0.9522222055423804,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 46.41799306869507
+            },
+            {
+              "iou": 0.9515163274863534,
+              "faces": 800,
+              "n_rounds": 8,
+              "valid": true,
+              "triggers": [
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall",
+                "stall"
+              ],
+              "time": 36.06657290458679
+            }
+          ]
+        }
+      }
+    }
+  }
+}

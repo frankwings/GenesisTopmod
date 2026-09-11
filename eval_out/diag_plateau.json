@@ -1,0 +1,19 @@
+{
+  "shape": "armadillo",
+  "total_steps": 2000,
+  "ph_disp_thresh": 5e-05,
+  "ph_disp_window": 50,
+  "first_below_thresh_step": 1439,
+  "disp_win_at_steps": {
+    "500": 0.0002249572808235601,
+    "1000": 0.00011367945193200752,
+    "1500": 4.292299389939605e-05,
+    "2000": 3.0208439640043823e-06
+  },
+  "natural_floor_last200": 5.684134985347372e-06,
+  "loss_floor_last200": 0.0272666322812438,
+  "loss_approx_converge_step": 900,
+  "total_time_s": 27.251083612442017,
+  "verdict": "disp drops below 5e-05 at step 1439",
+  "recommendation": "ROOT CAUSE: long convergence (step 1439). FIX: more steps or relative threshold."
+}
