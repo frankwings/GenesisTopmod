@@ -100,3 +100,21 @@ def build_vote_hull(ctx, mvps, gv_norm, gf, extra_pts, device,
     hf = HullField(lo, hi, hull, device)
     hf.hull = hull
     return hf
+
+
+def hull_genus(hull, radii=(1, 2, 3)):
+    """Genus of the space-carved hull (bool voxel grid, True = inside) after morphological
+    closing+opening of r voxels, largest component, cavities filled. Solid Euler number chi = 1 - g.
+    Returns (persistent genus = mode over radii, {r: g}). LESSONS 24: equals GT genus on all 5 shapes."""
+    import numpy as np
+    from scipy import ndimage as ndi
+    from skimage.measure import euler_number
+    occ = np.asarray(hull).astype(bool); S3 = ndi.generate_binary_structure(3, 1); out = {}
+    for r in radii:
+        v = ndi.binary_opening(ndi.binary_closing(occ, S3, iterations=r), S3, iterations=r)
+        lab, n = ndi.label(v)
+        if n == 0: out[r] = 0; continue
+        big = np.argmax(np.bincount(lab.ravel())[1:]) + 1
+        out[r] = int(1 - euler_number(ndi.binary_fill_holes(lab == big), connectivity=1))
+    vals = list(out.values()); g = max(set(vals), key=lambda x: (vals.count(x), -x))
+    return g, out

@@ -58,6 +58,12 @@ gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE); cow_v13.N_VIEWS =
 p1b._MVPS, p1b._GT = mvps, gt; p1b.SHAPE = SHAPE
 HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)
 pitch = HF.pitch
+from hull_field import hull_genus
+_GT_ENV = os.environ.get("GENUS_TARGET", "hull")   # hull = persistent genus of the space-carved hull (LESSONS 24) | off | integer
+if _GT_ENV == "off": G_TARGET = None
+elif _GT_ENV == "hull": G_TARGET, _gr = hull_genus(HF.hull); print(f"[p7] genus target from space-carved hull: g*={G_TARGET} (per radius {_gr})", flush=True)
+else: G_TARGET = int(_GT_ENV)
+RELAX = [(float(os.environ.get("MIN_PX", "30")), OUT_VOX), (15.0, 2.0), (8.0, 1.0)]   # (min_px, out_vox) ladder while genus < g*
 
 def genus(V, F):
     E = len(np.unique(np.sort(np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]), axis=1), axis=0))
@@ -343,9 +349,17 @@ import json
 prev_handles = json.load(open(HANDLES_JSON)) if HANDLES_JSON and os.path.exists(HANDLES_JSON) else []
 n_added = 0
 for k in range(MAX_HANDLES):
+    if G_TARGET is not None and genus(V, Fa) >= G_TARGET:
+        print(f"[p7] genus {genus(V, Fa)} == target g*={G_TARGET}: no more handles", flush=True); break
     if DETECT == "rays":
-        hit = find_tunnel_by_rays(V, Fa, prev_handles=prev_handles)
-        if hit is None: print("[p7] tunnel-evidence pairs: 0", flush=True); break
+        hit = None
+        for _lv, (_mp, _ov) in enumerate(RELAX if G_TARGET is not None else RELAX[:1]):
+            OUT_VOX = _ov
+            hit = find_tunnel_by_rays(V, Fa, min_px=int(_mp), prev_handles=prev_handles)
+            if hit is not None:
+                if _lv > 0: print(f"[p7] evidence found at relaxation level {_lv} (min_px {_mp}, out_vox {_ov}) because genus {genus(V, Fa)} < g*={G_TARGET}", flush=True)
+                break
+        if hit is None: print(f"[p7] tunnel-evidence pairs: 0" + (f" (genus {genus(V, Fa)} < g*={G_TARGET}: UNREACHED)" if G_TARGET is not None else ""), flush=True); break
         i, j, _ci, _cj, _blob = hit
         tri = V[Fa]; cen = tri.mean(1); d = hdist(cen); negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
         print(f"[p7] tunnel-evidence pairs: 1 (ray)", flush=True)
@@ -455,4 +469,4 @@ for k in range(MAX_HANDLES):
     if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
     report(f"after handle {n_added}", V, Fa); _snap(f"Stage 7 [DLFL add_handle #{n_added}] genus={genus(V, Fa)}", V, Fa, hold=45)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
-print(f"[p7] handles added: {n_added}; saved cow_{SHAPE}_{TAG}.npz", flush=True)
+print(f"[p7] handles added: {n_added}; saved cow_{SHAPE}_{TAG}.npz | genus {genus(V, Fa)}" + (f" / target {G_TARGET}" if G_TARGET is not None else ""), flush=True)
