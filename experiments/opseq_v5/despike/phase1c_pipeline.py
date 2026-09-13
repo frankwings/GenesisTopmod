@@ -140,7 +140,7 @@ def dlfl_subdivide_arrays(V, Fa, fids, expand_ring=True):
         assert len(fids) == len(Fa), "generic subdivision supports all-faces only"
         from generic_ops import subdivide_all_np
         return subdivide_all_np(V, Fa)
-    if os.environ.get("DLFL_BACKEND", "py") == "cpp":
+    if os.environ.get("DLFL_BACKEND", "cpp") == "cpp":
         from topmod import core_backend
         return core_backend.subdivide_faces(V, Fa, [int(f) for f in fids], expand_ring)
     tgt = set(int(f) for f in fids)

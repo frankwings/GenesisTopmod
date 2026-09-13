@@ -185,7 +185,7 @@ def _taubin_np(Vx, Fx, iters, lam=0.5, mu=-0.53):
 
 def _si_ring_mask(Vx, Fx):
     """faces that self-intersect, plus every face sharing a vertex with one (1-ring)."""
-    if os.environ.get("DLFL_BACKEND", "py") == "cpp":
+    if os.environ.get("DLFL_BACKEND", "cpp") == "cpp":
         from topmod import core_backend
         prs = np.asarray(core_backend.si_faces(np.asarray(Vx, float), np.asarray(Fx, np.int64)))
     else:
@@ -597,7 +597,7 @@ for step in range(STEPS):
                 # residual overlaps are non-adjacent near-parallel faces: nudge
                 # each intersecting pair apart along the mean normal (delta =
                 # SI_PUSH x mean edge); DR/target losses pull the shape back.
-                if os.environ.get("DLFL_BACKEND", "py") == "cpp":
+                if os.environ.get("DLFL_BACKEND", "cpp") == "cpp":
                     from topmod import core_backend as _cb
                     prs = _cb.si_faces(Vn, Fa)
                 else:
