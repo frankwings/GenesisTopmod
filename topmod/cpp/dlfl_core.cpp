@@ -1693,6 +1693,9 @@ static int si_build_bvh(
 }
 
 // ── Möller 1997 triangle–triangle intersection (no-divide variant) ────────────
+//
+// Includes coplanar handling (2D edge-crossing + containment) to match Open3D's
+// NoDivTriTriIsect which calls coplanar_tri_tri for same-plane overlaps.
 
 static inline double si_dot(const double* a, const double* b) {
     return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
@@ -1704,6 +1707,83 @@ static inline void si_cross(const double* a, const double* b, double* c) {
     c[0]=a[1]*b[2]-a[2]*b[1];
     c[1]=a[2]*b[0]-a[0]*b[2];
     c[2]=a[0]*b[1]-a[1]*b[0];
+}
+
+// ── Coplanar triangle-triangle test (2D projection, Möller 1997) ─────────────
+// Projects onto axis-aligned plane maximizing triangle area, then checks
+// edge-edge crossings (9 pairs) and point-in-triangle containment.
+
+static inline bool si_edge_edge_2d(
+    int i0, int i1,
+    const double* V0, const double* V1,
+    const double* U0, const double* U1)
+{
+    double Ax = V1[i0]-V0[i0], Ay = V1[i1]-V0[i1];
+    double Bx = U0[i0]-U1[i0], By = U0[i1]-U1[i1];
+    double Cx = V0[i0]-U0[i0], Cy = V0[i1]-U0[i1];
+    double f = Ay*Bx - Ax*By;
+    double d = By*Cx - Bx*Cy;
+    if ((f>0 && d>=0 && d<=f) || (f<0 && d<=0 && d>=f)) {
+        double e = Ax*Cy - Ay*Cx;
+        if (f > 0) { if (e>=0 && e<=f) return true; }
+        else       { if (e<=0 && e>=f) return true; }
+    }
+    return false;
+}
+
+static inline bool si_edge_against_tri_edges(
+    int i0, int i1,
+    const double* V0, const double* V1,
+    const double* U0, const double* U1, const double* U2)
+{
+    return si_edge_edge_2d(i0,i1, V0,V1, U0,U1) ||
+           si_edge_edge_2d(i0,i1, V0,V1, U1,U2) ||
+           si_edge_edge_2d(i0,i1, V0,V1, U2,U0);
+}
+
+static inline bool si_point_in_tri_2d(
+    int i0, int i1,
+    const double* V0,
+    const double* U0, const double* U1, const double* U2)
+{
+    double a,b,c,d0,d1,d2;
+    a = U1[i1]-U0[i1]; b = -(U1[i0]-U0[i0]); c = -a*U0[i0]-b*U0[i1];
+    d0 = a*V0[i0]+b*V0[i1]+c;
+
+    a = U2[i1]-U1[i1]; b = -(U2[i0]-U1[i0]); c = -a*U1[i0]-b*U1[i1];
+    d1 = a*V0[i0]+b*V0[i1]+c;
+
+    a = U0[i1]-U2[i1]; b = -(U0[i0]-U2[i0]); c = -a*U2[i0]-b*U2[i1];
+    d2 = a*V0[i0]+b*V0[i1]+c;
+
+    if (d0*d1 > 0.0 && d0*d2 > 0.0) return true;
+    return false;
+}
+
+static bool si_coplanar_tri_tri(
+    const double* N,
+    const double* V0, const double* V1, const double* V2,
+    const double* U0, const double* U1, const double* U2)
+{
+    // Project onto axis plane maximizing triangle area
+    double an=std::abs(N[0]), bn=std::abs(N[1]), cn=std::abs(N[2]);
+    int i0, i1;
+    if (an>bn) {
+        if (an>cn) { i0=1; i1=2; } else { i0=0; i1=1; }
+    } else {
+        if (cn>bn) { i0=0; i1=1; } else { i0=0; i1=2; }
+    }
+
+    // Test all edges of T1 against edges of T2 (3×3 = 9 edge-edge tests)
+    if (si_edge_against_tri_edges(i0,i1, V0,V1, U0,U1,U2)) return true;
+    if (si_edge_against_tri_edges(i0,i1, V1,V2, U0,U1,U2)) return true;
+    if (si_edge_against_tri_edges(i0,i1, V2,V0, U0,U1,U2)) return true;
+
+    // Test containment: T1 inside T2 or T2 inside T1
+    if (si_point_in_tri_2d(i0,i1, V0, U0,U1,U2)) return true;
+    if (si_point_in_tri_2d(i0,i1, U0, V0,V1,V2)) return true;
+
+    return false;
 }
 
 // Compute overlap interval for one triangle, given:
@@ -1773,8 +1853,13 @@ static bool tri_tri_intersect_moller97(
     // Intersection line D = N1 × N2
     double D[3];
     si_cross(N1,N2,D);
-    // Coplanar check: |D|²≈0 means parallel planes → no volumetric intersection
-    if (D[0]*D[0]+D[1]*D[1]+D[2]*D[2] < 1e-20) return false;
+    // Coplanar check: |D|²≈0 means parallel planes
+    if (D[0]*D[0]+D[1]*D[1]+D[2]*D[2] < 1e-20) {
+        // Parallel planes. If also coplanar (T2 on plane1), test 2D overlap.
+        if (du0==0.0 && du1==0.0 && du2==0.0)
+            return si_coplanar_tri_tri(N1, p0,p1,p2, q0,q1,q2);
+        return false;  // parallel but not coplanar
+    }
 
     // Project onto largest |D| component
     double ax=std::abs(D[0]), ay=std::abs(D[1]), az=std::abs(D[2]);
