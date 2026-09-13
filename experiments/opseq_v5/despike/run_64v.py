@@ -59,7 +59,8 @@ DILATE = int(os.environ.get("DILATE", "2"))
 cow_v13.TUBE_THR = float(os.environ.get("TUBE_THR", "0.4"))
 NV = 64
 TRAIN_RES = int(os.environ.get("TRAIN_RES", str(IMG_RES)))   # supervision resolution (GT + training renders); exam stays IMG_RES
-print(f"[run_64v] SHAPE={SHAPE} TAG={TAG} W_QUAL={W_QUAL} W_DIFF={W_DIFF}", flush=True)
+RENDER_BATCH = int(os.environ.get("RENDER_BATCH", "1"))       # 0 = per-view loop (legacy), 1 = batched nvdiffrast
+print(f"[run_64v] SHAPE={SHAPE} TAG={TAG} W_QUAL={W_QUAL} W_DIFF={W_DIFF} RENDER_BATCH={RENDER_BATCH}", flush=True)
 
 
 def star_cameras(max_radius, device=DEVICE):
@@ -115,6 +116,54 @@ def render_sdd(ctx, verts_t, faces_t, mvp, view):
     return sil, ndc_z, fg, diff
 
 
+def render_sdd_batch(ctx, verts_t, faces_t, mvps, views):
+    """Batched render of all N views in one nvdiffrast call.
+
+    mvps  : [N,4,4]  model-view-projection matrices (stacked)
+    views : [N,4,4]  view (world->camera) matrices (stacked)
+
+    Returns sil [N,H,W], ndc_z [N,H,W], fg [N,H,W] bool, diff [N,H,W].
+    Semantics match render_sdd per view (sil has the leading batch dim squeezed
+    from antialias [N,H,W,1] -> [N,H,W]).
+    """
+    H = W = TRAIN_RES
+    N     = mvps.shape[0]
+    V_num = verts_t.shape[0]
+
+    # ── Clip positions [N,V,4]: one MVP multiply for all views ────────────────
+    ones_V  = torch.ones(V_num, 1, dtype=verts_t.dtype, device=verts_t.device)
+    verts_h = torch.cat([verts_t, ones_V], dim=-1)          # [V,4]
+    pos     = (mvps @ verts_h.T).transpose(1, 2).contiguous()  # [N,V,4]
+
+    # ── Rasterize: one call for all N views ───────────────────────────────────
+    rast, _ = dr.rasterize(ctx, pos, faces_t, resolution=[H, W])  # [N,H,W,4]
+
+    # ── Silhouette ────────────────────────────────────────────────────────────
+    # nvdiffrast requires attr to be [N,V,C] when rast is batched
+    ones_attr = torch.ones(N, V_num, 3, dtype=torch.float32, device=verts_t.device)
+    color, _  = dr.interpolate(ones_attr, rast, faces_t)           # [N,H,W,3]
+    sil       = dr.antialias(color, rast, pos, faces_t)[..., :1]   # [N,H,W,1]
+
+    # ── Foreground mask ───────────────────────────────────────────────────────
+    fg = rast[:, :, :, 3] > 0                                      # [N,H,W]
+
+    # ── Depth (NDC z) ─────────────────────────────────────────────────────────
+    clip_zw  = pos[..., 2:4].contiguous()                          # [N,V,2]
+    zw, _    = dr.interpolate(clip_zw, rast, faces_t)             # [N,H,W,2]
+    ndc_z    = zw[..., 0] / zw[..., 1].clamp(min=1e-6)            # [N,H,W]
+
+    # ── Diffuse (camera-space headlight) ──────────────────────────────────────
+    # vertex normals computed once for all views
+    vn       = vertex_normals(verts_t, faces_t.long(), V_num)      # [V,3]
+    # vn_cam[n,v,i] = sum_j views[n,i,j] * vn[v,j]  (= vn @ R_n.T per view)
+    vn_cam   = torch.einsum('nij,vj->nvi', views[:, :3, :3], vn)  # [N,V,3]
+    shade    = vn_cam[..., 2].abs().contiguous()                   # [N,V]
+    diff_img, _ = dr.interpolate(shade.unsqueeze(-1).contiguous(), rast, faces_t)  # [N,H,W,1]
+    diff     = diff_img[..., 0] * fg.float()                       # [N,H,W]
+
+    return sil[..., 0], ndc_z, fg, diff
+
+
 def render_normals(ctx, verts_t, faces_t, mvp, view):
     """camera-space normal image (H,W,3), zero outside fg. Palfinger-style supervision."""
     H = W = TRAIN_RES
@@ -158,9 +207,16 @@ def make_gt(ctx, mvps, views, shape):
 def optimize_phase64(ctx, verts_np, tris_np, gt, gtd, gtdiff, mvps, views,
                      steps, label, settle=False, use_fold=False, use_tube=False):
     targets = torch.from_numpy((gt < 128).astype(np.float32)).unsqueeze(-1).to(DEVICE)
-    gtd_t = [torch.from_numpy(gtd[i]).float().to(DEVICE) for i in range(NV)]
-    gtfg_t = [torch.from_numpy(gt[i] < 128).to(DEVICE) for i in range(NV)]
-    gtdf_t = [torch.from_numpy(gtdiff[i]).float().to(DEVICE) for i in range(NV)]
+    gtd_t   = [torch.from_numpy(gtd[i]).float().to(DEVICE) for i in range(NV)]
+    gtfg_t  = [torch.from_numpy(gt[i] < 128).to(DEVICE)   for i in range(NV)]
+    gtdf_t  = [torch.from_numpy(gtdiff[i]).float().to(DEVICE) for i in range(NV)]
+    # Stacked GT tensors for batched loss (lists kept for face_residual / exam)
+    if RENDER_BATCH:
+        from batch_losses import sil_loss_batch, depth_loss_batch, diff_loss_batch
+        _gtd_stack  = torch.stack(gtd_t)                       # [NV,H,W]
+        _gtfg_stack = torch.stack(gtfg_t)                      # [NV,H,W]
+        _gtdf_stack = torch.stack(gtdf_t)                      # [NV,H,W]
+        _tgt_batch  = targets[..., 0]                          # [NV,H,W]
     verts_t = torch.tensor(verts_np, dtype=torch.float32, device=DEVICE).requires_grad_(True)
     faces_t = torch.tensor(tris_np, dtype=torch.int32, device=DEVICE)
     faces_l = faces_t.long()
@@ -187,13 +243,21 @@ def optimize_phase64(ctx, verts_np, tris_np, gt, gtd, gtdiff, mvps, views,
         if use_tube and step % TUBE_EVERY == 0:
             tmask = cow_v13.tube_mask(verts_t.detach(), excl, me)
         opt.zero_grad()
-        sl = dl = fl = torch.tensor(0.0, device=DEVICE)
-        for i in range(NV):
-            sil, ndc_z, fg, diff = render_sdd(ctx, verts_t, faces_t, mvps[i], views[i])
-            sl = sl + F.l1_loss(sil[0], targets[i])
-            dl = dl + depth_loss_masked(ndc_z, fg, gtd_t[i], gtfg_t[i])
-            fl = fl + F.l1_loss(diff, gtdf_t[i])
-        sl, dl, fl = sl / NV, dl / NV, fl / NV
+        if RENDER_BATCH:
+            # ── Batched 64-view render (single rasterize call) ────────────────
+            sil_b, ndc_b, fg_b, diff_b = render_sdd_batch(ctx, verts_t, faces_t, mvps, views)
+            sl = sil_loss_batch(sil_b, _tgt_batch)
+            dl = depth_loss_batch(ndc_b, fg_b, _gtd_stack, _gtfg_stack)
+            fl = diff_loss_batch(diff_b, _gtdf_stack)
+        else:
+            # ── Legacy per-view loop (RENDER_BATCH=0) ────────────────────────
+            sl = dl = fl = torch.tensor(0.0, device=DEVICE)
+            for i in range(NV):
+                sil, ndc_z, fg, diff = render_sdd(ctx, verts_t, faces_t, mvps[i], views[i])
+                sl = sl + F.l1_loss(sil[0], targets[i])
+                dl = dl + depth_loss_masked(ndc_z, fg, gtd_t[i], gtfg_t[i])
+                fl = fl + F.l1_loss(diff, gtdf_t[i])
+            sl, dl, fl = sl / NV, dl / NV, fl / NV
         loss = (sl + dw * dl + W_DIFF * fl
                 + w_lap * laplacian_loss(verts_t, faces_t)
                 + W_EDGE * edge_length_loss(verts_t, faces_t)

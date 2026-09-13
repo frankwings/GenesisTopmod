@@ -14,9 +14,15 @@ Targets: self-intersecting faces < 5% with no IoU loss.
 Run: MODE=6v TAG=p4_6 BASE_NPZ=... TARGET_OBJ=... python3 despike/phase4_inloop.py
 """
 import sys, os
-sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5")
-sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5/despike")
-sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod")
+# Worktree paths FIRST so the batch-enabled run_64v.py is found before main checkout
+_WT_BATCH = "/home/kingy/Projects/Genesis/GenesisTopmod-wt-batch"
+sys.path.insert(0, f"{_WT_BATCH}/experiments/opseq_v5/despike")
+sys.path.insert(0, f"{_WT_BATCH}/experiments/opseq_v5")
+sys.path.insert(0, _WT_BATCH)
+# Main checkout fallback for modules only there (cow_v13, eval_local_refine, etc.)
+sys.path.append("/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5/despike")
+sys.path.append("/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5")
+sys.path.append("/home/kingy/Projects/Genesis/GenesisTopmod")
 os.chdir("/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5")
 os.environ.setdefault("MODE", "6v")
 
@@ -78,6 +84,7 @@ ADAPT_SI_GATE = float(os.environ.get("ADAPT_SI_GATE", "0.05"))  # no splits whil
 ADAPT_LMIN_PX = float(os.environ.get("ADAPT_LMIN_PX", "2.0"))  # floor on target edge length in PIXELS of the training images: below ~2 px the loss cannot see an edge, refinement is pure cost
 ADAPT_MODE = os.environ.get("ADAPT_MODE", "curvature")       # "curvature" | "residual": what decides the target edge length
 ADAPT_CURV_W = float(os.environ.get("ADAPT_CURV_W", "0.0"))    # residual mode: blend in curvature drive, t = max(t_err, W * t_curv)
+RENDER_BATCH = int(os.environ.get("RENDER_BATCH", "1"))         # 1 = batched 64-view rasterize; 0 = per-view loop
 ADAPT_E_LO = float(os.environ.get("ADAPT_E_LO", "0.5"))        # residual quantiles (data-adaptive): below E_LO-quantile = fitted (long target)
 ADAPT_E_HI = float(os.environ.get("ADAPT_E_HI", "0.9"))        # above E_HI-quantile = badly fitted (short target)
 ADAPT_R_SPLIT = float(os.environ.get("ADAPT_R_SPLIT", "0.05"))   # residual mode (absolute): mean image error per covered pixel-view above this = unfit -> short target
@@ -243,6 +250,9 @@ if SUBDIV_TOP > 0:
     wt, _ = check_watertight(Fa); assert wt
     print(f"[p4] partial DLFL subdivision of {SUBDIV_TOP} largest faces: split {ne} edges -> V={len(V)} F={len(Fa)}", flush=True)
 if MODE == "64v":
+    # Re-insert worktree path: phase1b_pipeline (imported above) inserts main checkout
+    # despike at position 0, which would shadow the batch-enabled run_64v.py
+    sys.path.insert(0, f"{_WT_BATCH}/experiments/opseq_v5/despike")
     import run_64v
     from eval_extrude_v3 import IMG_RES
     from run_64v import render_sdd
@@ -303,6 +313,13 @@ p1b.SHAPE = SHAPE
 targets = torch.from_numpy((gt < 128).astype(np.float32)).unsqueeze(-1).to(DEVICE)
 gtd_t = [torch.from_numpy(np.asarray(gtd[i], np.float32)).to(DEVICE) for i in range(NV)]
 gtfg_t = [torch.from_numpy(gt[i] < 128).to(DEVICE) for i in range(NV)]
+# Stacked GT tensors for batched rendering (MODE==64v only)
+if MODE == "64v" and RENDER_BATCH:
+    from batch_losses import sil_loss_batch, depth_loss_batch, diff_loss_batch
+    _gtd_stack  = torch.stack(gtd_t)                                    # [NV,H,W]
+    _gtfg_stack = torch.stack(gtfg_t)                                   # [NV,H,W] bool
+    _gtdf_stack = torch.stack(gtdf_t)                                   # [NV,H,W]
+    _tgt_batch  = targets[..., 0]                                       # [NV,H,W]
 
 _BARY = torch.tensor([[1/3, 1/3, 1/3], [1/2, 1/2, 0.0], [0.0, 1/2, 1/2], [1/2, 0.0, 1/2],
                       [2/3, 1/6, 1/6], [1/6, 2/3, 1/6], [1/6, 1/6, 2/3]],
@@ -397,18 +414,33 @@ _E0 = np.concatenate([Fa[:, [0, 1]], Fa[:, [1, 2]], Fa[:, [2, 0]]]); me0 = float
 for step in range(STEPS):
     opt.zero_grad()
     me = mean_edge_of(verts_t.detach(), src, dst)
-    sl = dl = fl = nl = torch.tensor(0.0, device=DEVICE)
-    for i in range(NV):
-        if MODE == "64v":
-            sil, ndc_z, fg, diff = render_sdd(ctx, verts_t, faces_t, mvps[i], views[i])
-            fl = fl + F.l1_loss(diff, gtdf_t[i])
-            if W_NORMAL > 0:
+    nl = torch.tensor(0.0, device=DEVICE)
+    if MODE == "64v" and RENDER_BATCH:
+        # ── Batched 64-view render (single rasterize call) ────────────────
+        sil_b, ndc_b, fg_b, diff_b = run_64v.render_sdd_batch(ctx, verts_t, faces_t, mvps, views)
+        sl = sil_loss_batch(sil_b, _tgt_batch)
+        dl = depth_loss_batch(ndc_b, fg_b, _gtd_stack, _gtfg_stack)
+        fl = diff_loss_batch(diff_b, _gtdf_stack)
+        # W_NORMAL stays per-view (off in the golden chain — does not affect acceptance)
+        if W_NORMAL > 0:
+            nl = torch.tensor(0.0, device=DEVICE)
+            for i in range(NV):
                 nl = nl + F.l1_loss(run_64v.render_normals(ctx, verts_t, faces_t, mvps[i], views[i]), gtn_t[i])
-        else:
-            sil, ndc_z, fg = render_sil_and_depth(ctx, verts_t, faces_t, mvps[i])
-        sl = sl + F.l1_loss(sil[0], targets[i])
-        dl = dl + depth_loss_masked(ndc_z, fg, gtd_t[i], gtfg_t[i])
-    sl, dl, fl, nl = sl / NV, dl / NV, fl / NV, nl / NV
+            nl = nl / NV
+    else:
+        # ── Legacy per-view loop ──────────────────────────────────────────
+        sl = dl = fl = torch.tensor(0.0, device=DEVICE)
+        for i in range(NV):
+            if MODE == "64v":
+                sil, ndc_z, fg, diff = render_sdd(ctx, verts_t, faces_t, mvps[i], views[i])
+                fl = fl + F.l1_loss(diff, gtdf_t[i])
+                if W_NORMAL > 0:
+                    nl = nl + F.l1_loss(run_64v.render_normals(ctx, verts_t, faces_t, mvps[i], views[i]), gtn_t[i])
+            else:
+                sil, ndc_z, fg = render_sil_and_depth(ctx, verts_t, faces_t, mvps[i])
+            sl = sl + F.l1_loss(sil[0], targets[i])
+            dl = dl + depth_loss_masked(ndc_z, fg, gtd_t[i], gtfg_t[i])
+        sl, dl, fl, nl = sl / NV, dl / NV, fl / NV, nl / NV
     if W_VLAP > 0:
         # velocity-weighted Laplacian (Palfinger core/opt.py: grad += w * nu * (v - mean(neighbors))):
         # vertices that are still moving get smoothed, converged ones keep their detail.
