@@ -404,6 +404,41 @@ def find_bridge(V, F, min_vox=int(os.environ.get("BRIDGE_MIN_VOX", "60")), max_t
         return fi, fj, ci, cj, key
     return None
 
+def find_contact_join(V, F, prev_handles=(), r_vox=float(os.environ.get("CONTACT_R_VOX", "1.5")), cos_max=-0.7):
+    """LESSONS 25b: a handle that no image can see = two surface sheets pressed together but not joined
+    (fertility 4th tunnel wall). Find non-adjacent face pairs with opposed normals within r_vox voxels,
+    cluster them, and return the best pair of the largest cluster for a zero-length add_handle (= join)."""
+    from scipy.spatial import cKDTree
+    tri = V[F]; cen = tri.mean(1); nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]); nrm /= np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-12
+    vf = {}
+    for k, f in enumerate(F):
+        for x in f: vf.setdefault(int(x), set()).add(k)
+    ring = [set().union(*[vf[int(x)] for x in f]) for f in F]                       # faces sharing a vertex (1-ring)
+    ringv = lambda k: set(int(x) for q in ring[k] for x in F[q])                        # vertices of the 1-ring
+    disjoint = lambda a, b: not (ringv(a) & set(map(int, F[b]))) and not (ringv(b) & set(map(int, F[a])))
+    pairs = cKDTree(cen).query_pairs(r=r_vox * pitch, output_type="ndarray")
+    ok = [(int(i), int(j)) for i, j in pairs if j not in ring[i] and nrm[i] @ nrm[j] < cos_max
+          and abs((cen[j] - cen[i]) @ nrm[i]) > 0.3 * np.linalg.norm(cen[j] - cen[i])]
+    print(f"[p7] contact search: {len(pairs)} face pairs within {r_vox} vox, {len(ok)} opposed-normal non-adjacent contacts", flush=True)
+    if not ok: return None
+    P = np.array([(cen[i] + cen[j]) / 2 for i, j in ok]); parent = list(range(len(P)))
+    def find(x):
+        while parent[x] != x: parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    for a, b in cKDTree(P).query_pairs(r=4 * pitch, output_type="ndarray"): parent[find(int(a))] = find(int(b))
+    roots = np.array([find(i) for i in range(len(P))])
+    for r in sorted(set(roots.tolist()), key=lambda r: -(roots == r).sum()):
+        m = np.where(roots == r)[0]; mid = P[m].mean(0); key = ["contact", [round(float(x), 2) for x in mid]]
+        if any(h.get("blob") == key for h in prev_handles if isinstance(h, dict)): continue
+        best = sorted(m, key=lambda q: nrm[ok[q][0]] @ nrm[ok[q][1]])                   # most opposed first
+        for q in best:
+            i, j = ok[q]
+            if disjoint(i, j):
+                print(f"[p7] contact evidence: cluster of {len(m)} pairs at {np.round(mid, 3)}, join faces {i},{j} (dist {np.linalg.norm(cen[j]-cen[i])/pitch:.2f} vox, n.n {nrm[i]@nrm[j]:.2f})", flush=True)
+                return i, j, cen[i], cen[j], key
+        print(f"[p7]   contact cluster at {np.round(mid, 3)}: no pair with disjoint 1-rings -> skip", flush=True)
+    return None
+
 report("base", V, Fa); _snap(f"Stage 7 [genus discovery] base genus={genus(V, Fa)}", V, Fa)
 import json
 prev_handles = json.load(open(HANDLES_JSON)) if HANDLES_JSON and os.path.exists(HANDLES_JSON) else []
@@ -424,6 +459,9 @@ for k in range(MAX_HANDLES):
         if hit is None and G_TARGET is not None and genus(V, Fa) < G_TARGET and int(os.environ.get("BRIDGE", "0")):
             hit = find_bridge(V, Fa)
             if hit is not None: MODE_BRIDGE = True
+        if hit is None and G_TARGET is not None and genus(V, Fa) < G_TARGET and int(os.environ.get("CONTACT", "1")):
+            hit = find_contact_join(V, Fa, prev_handles=prev_handles)
+            if hit is not None: MODE_BRIDGE = True                                   # plain single-face add_handle (no membrane merge)
         if hit is None: print(f"[p7] tunnel-evidence pairs: 0" + (f" (genus {genus(V, Fa)} < g*={G_TARGET}: UNREACHED)" if G_TARGET is not None else ""), flush=True); break
         i, j, _ci, _cj, _blob = hit
         tri = V[Fa]; cen = tri.mean(1); d = hdist(cen); negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
