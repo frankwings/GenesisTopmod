@@ -593,9 +593,13 @@ for step in range(STEPS):
                 # residual overlaps are non-adjacent near-parallel faces: nudge
                 # each intersecting pair apart along the mean normal (delta =
                 # SI_PUSH x mean edge); DR/target losses pull the shape back.
-                om = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vn),
-                                               o3d.utility.Vector3iVector(Fa.astype(np.int32)))
-                prs = np.asarray(om.get_self_intersecting_triangles())
+                if os.environ.get("DLFL_BACKEND", "py") == "cpp":
+                    from topmod import core_backend as _cb
+                    prs = _cb.si_faces(Vn, Fa)
+                else:
+                    om = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vn),
+                                                   o3d.utility.Vector3iVector(Fa.astype(np.int32)))
+                    prs = np.asarray(om.get_self_intersecting_triangles())
                 if len(prs):
                     tri = Vn[Fa]; cen = tri.mean(1)
                     nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])

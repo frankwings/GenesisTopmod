@@ -191,6 +191,9 @@ def tangential_smooth(V, Fa, iters=1, lam=0.2):
 
 
 def si_faces(V, Fa):
+    if os.environ.get("DLFL_BACKEND", "py") == "cpp":
+        from topmod import core_backend
+        return core_backend.self_intersection_count(np.asarray(V, float), np.asarray(Fa, np.int64))
     import open3d as o3d
     om = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(np.asarray(V, float)),
                                    o3d.utility.Vector3iVector(np.asarray(Fa, np.int32)))
