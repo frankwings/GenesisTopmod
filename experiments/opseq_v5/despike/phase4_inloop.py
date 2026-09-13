@@ -185,8 +185,12 @@ def _taubin_np(Vx, Fx, iters, lam=0.5, mu=-0.53):
 
 def _si_ring_mask(Vx, Fx):
     """faces that self-intersect, plus every face sharing a vertex with one (1-ring)."""
-    om = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vx), o3d.utility.Vector3iVector(Fx.astype(np.int32)))
-    prs = np.asarray(om.get_self_intersecting_triangles())
+    if os.environ.get("DLFL_BACKEND", "py") == "cpp":
+        from topmod import core_backend
+        prs = np.asarray(core_backend.si_faces(np.asarray(Vx, float), np.asarray(Fx, np.int64)))
+    else:
+        om = o3d.geometry.TriangleMesh(o3d.utility.Vector3dVector(Vx), o3d.utility.Vector3iVector(Fx.astype(np.int32)))
+        prs = np.asarray(om.get_self_intersecting_triangles())
     bad = np.zeros(len(Fx), bool)
     if len(prs):
         bad[np.unique(prs)] = True
