@@ -344,11 +344,73 @@ def find_tunnel_by_rays(V, F, min_px=int(os.environ.get("MIN_PX", "30")), prev_h
             return fi, fj, ci, cj, key
     return None
 
+def find_bridge(V, F, min_vox=int(os.environ.get("BRIDGE_MIN_VOX", "60")), max_try=6):
+    """Dual of find_tunnel_by_rays (LESSONS 25): hull-SOLID voxels that the mesh leaves EMPTY, slab-shaped
+    (a wall between two tunnels the mesh merged into one opening). add_handle between the two mesh faces at the
+    ends of the slab's long axis inserts a bar through the opening; the DR loop inflates it into the wall.
+    Returns (fi, fj, ci, cj, key) or None."""
+    import open3d as o3d
+    from scipy import ndimage as ndi
+    S3 = ndi.generate_binary_structure(3, 1)
+    Hc = np.asarray(HF.hull).astype(bool)
+    Hc = ndi.binary_opening(ndi.binary_closing(Hc, S3, iterations=2), S3, iterations=2)
+    lab, n = ndi.label(Hc); Hc = ndi.binary_fill_holes(lab == (np.argmax(np.bincount(lab.ravel())[1:]) + 1))
+    N = Hc.shape[0]; lo, hi = np.asarray(HF.lo), np.asarray(HF.hi)
+    sc = o3d.t.geometry.RaycastingScene()
+    sc.add_triangles(o3d.t.geometry.TriangleMesh(o3d.core.Tensor(V.astype(np.float32)), o3d.core.Tensor(F.astype(np.int32))))
+    ax = [np.linspace(lo[i], hi[i], N, dtype=np.float32) for i in range(3)]; M = np.zeros((N, N, N), bool)
+    yy, zz = np.meshgrid(ax[1], ax[2], indexing="ij")
+    for xi in range(N):
+        P = np.stack([np.full_like(yy, ax[0][xi]), yy, zz], -1).reshape(-1, 3)
+        M[xi] = (sc.compute_occupancy(o3d.core.Tensor(P)).numpy() > 0.5).reshape(N, N)
+    gap = Hc & ~M                                                   # hull material the mesh does not cover
+    gl, gn = ndi.label(gap); sz = np.bincount(gl.ravel())[1:]; order = [int(c) for c in np.argsort(-sz) if sz[c] >= min_vox][:40]
+    world = lambda v: lo + np.asarray(v, float) / (N - 1) * (hi - lo)
+    def free_both_sides(cen_v, nrm, t):
+        """A WALL between two tunnels has hull-FREE space on both broad sides within a few voxels; hull slack
+        (a concavity the hull cannot carve) has free space on one side only."""
+        ok = []
+        for sgn in (+1.0, -1.0):
+            hit = False
+            for d in np.arange(t / 2 + 1, t / 2 + 12, 1.0):
+                q = np.round(cen_v + sgn * d * nrm).astype(int)
+                if (q < 0).any() or (q >= N).any(): hit = True; break
+                if M[q[0], q[1], q[2]]: break                       # ran into mesh material first -> not free on this side
+                if not Hc[q[0], q[1], q[2]]: hit = True; break     # outside the hull -> free space
+            ok.append(hit)
+        return all(ok)
+    walls = []
+    for c in order:
+        pts = np.argwhere(gl == c + 1).astype(float); cen_v = pts.mean(0); u, s, vt = np.linalg.svd(pts - cen_v, full_matrices=False)
+        ext = 2 * s / np.sqrt(len(pts))
+        if ext[2] > 12 or ext[0] < 6: continue                     # a wall is thin (<12 vox) and has some extent
+        if free_both_sides(cen_v, vt[2], ext[2]): walls.append((c, pts, cen_v, vt, ext))
+    print(f"[p7] bridge evidence: hull-solid/mesh-empty components >= {min_vox} vox: {len(order)}; thin + free on both sides (walls): {len(walls)} (sizes {[int(sz[w[0]]) for w in walls]})", flush=True)
+    for c, pts, cen_v, vt, ext in walls[:max_try]:
+        c0 = world(cen_v); a = vt[0] * np.sign(vt[0] @ (hi - lo))   # long axis of the slab, world frame (grid is axis-aligned)
+        a = a / (np.linalg.norm(a) + 1e-12); L = float(ext[0]) * float(HF.pitch)
+        key = ["bridge", int(c + 1), [round(float(x), 3) for x in c0]]
+        if any(h.get("blob") == key for h in prev_handles if isinstance(h, dict)): continue
+        hits = []
+        for sgn in (+1.0, -1.0):
+            ray = o3d.core.Tensor(np.concatenate([c0, sgn * a])[None].astype(np.float32)); h = sc.cast_rays(ray)
+            t = float(h["t_hit"].numpy()[0]); hits.append((t, int(h["primitive_ids"].numpy()[0])) if np.isfinite(t) else None)
+        if any(h is None for h in hits): print(f"[p7]   slab {c+1} ({int(sz[c])} vox, extent {np.round(ext,1)} vox): long-axis ray misses the mesh on one side -> skip", flush=True); continue
+        (ti, fi), (tj, fj) = hits
+        if ti + tj > 3.0 * L + 6 * HF.pitch: print(f"[p7]   slab {c+1}: end faces too far apart ({(ti+tj)/HF.pitch:.0f} vox vs slab {ext[0]:.0f}) -> skip", flush=True); continue
+        if fi == fj or (set(F[fi]) & set(F[fj])): continue
+        ci, cj = V[F[fi]].mean(0), V[F[fj]].mean(0)
+        print(f"[p7] bridge evidence: slab {c+1} {int(sz[c])} vox at {np.round(c0,3)}, extent {np.round(ext,1)} vox, end faces {fi},{fj} (gaps {ti/HF.pitch:.0f}/{tj/HF.pitch:.0f} vox)", flush=True)
+        return fi, fj, ci, cj, key
+    return None
+
 report("base", V, Fa); _snap(f"Stage 7 [genus discovery] base genus={genus(V, Fa)}", V, Fa)
 import json
 prev_handles = json.load(open(HANDLES_JSON)) if HANDLES_JSON and os.path.exists(HANDLES_JSON) else []
 n_added = 0
+MODE_BRIDGE = False
 for k in range(MAX_HANDLES):
+    MODE_BRIDGE = False
     if G_TARGET is not None and genus(V, Fa) >= G_TARGET:
         print(f"[p7] genus {genus(V, Fa)} == target g*={G_TARGET}: no more handles", flush=True); break
     if DETECT == "rays":
@@ -359,6 +421,9 @@ for k in range(MAX_HANDLES):
             if hit is not None:
                 if _lv > 0: print(f"[p7] evidence found at relaxation level {_lv} (min_px {_mp}, out_vox {_ov}) because genus {genus(V, Fa)} < g*={G_TARGET}", flush=True)
                 break
+        if hit is None and G_TARGET is not None and genus(V, Fa) < G_TARGET and int(os.environ.get("BRIDGE", "0")):
+            hit = find_bridge(V, Fa)
+            if hit is not None: MODE_BRIDGE = True
         if hit is None: print(f"[p7] tunnel-evidence pairs: 0" + (f" (genus {genus(V, Fa)} < g*={G_TARGET}: UNREACHED)" if G_TARGET is not None else ""), flush=True); break
         i, j, _ci, _cj, _blob = hit
         tri = V[Fa]; cen = tri.mean(1); d = hdist(cen); negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
@@ -404,7 +469,7 @@ for k in range(MAX_HANDLES):
         memb_faces = [f for f, r in comp_.items() if r in (comp_.get(i), comp_.get(j))]
         memb_ids = set(int(x) for f in memb_faces for x in Fa[f])
         ring_ids = set(int(x) for x in Fa[i]) | set(int(x) for x in Fa[j])
-    if OPEN == "merge":
+    if OPEN == "merge" and not MODE_BRIDGE:
         comp_, chi_ = membrane_patches(V, Fa)
         pi = [f for f, r in comp_.items() if r == comp_.get(i)]; pj = [f for f, r in comp_.items() if r == comp_.get(j)]
         if comp_.get(i) is None: pi = [i]
