@@ -285,7 +285,7 @@ def heldout_exam(ctx, v, t):
 
 def main():
     global _MVPS, _GT
-    torch.manual_seed(0); np.random.seed(0)
+    _SEED = int(os.environ.get("SEED", "0")); torch.manual_seed(_SEED); np.random.seed(_SEED)
     ctx = dr.RasterizeCudaContext()
     # bootstrap: need max_radius before cameras -> load GT once
     gv, _gf = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))

@@ -206,7 +206,7 @@ SNAPSHOT_MODE = os.environ.get("SNAPSHOT_MODE", "3")  # "3" = front/back/closeup
 LAP_MULT = float(os.environ.get("LAP_MULT", "1.0"))  # Phase 5: fairing strength (back smoothness)
 OUTD = "/tmp/liou_cow_viz"
 os.makedirs(OUTD, exist_ok=True)
-torch.manual_seed(0); np.random.seed(0)
+_SEED = int(os.environ.get("SEED", "0")); torch.manual_seed(_SEED); np.random.seed(_SEED)
 
 _SQRT3_4 = 4.0 * (3.0 ** 0.5)
 def _qual_loss(verts_t, faces_t):
