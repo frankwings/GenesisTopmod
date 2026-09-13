@@ -1,3 +1,4 @@
+#include <algorithm>
 /*
  * dlfl_core.cpp — C++ half-edge DLFL mesh kernel.
  *
@@ -31,10 +32,10 @@ Id Mesh::new_v(double x, double y, double z) {
     Id id;
     if (!free_v.empty()) {
         id = free_v.back(); free_v.pop_back();
-        verts[id] = Vertex{x, y, z, NULL_ID, true};
+        verts[id] = Vertex{x, y, z, NULL_ID, true, ++seq_counter};
     } else {
         id = (Id)verts.size();
-        verts.push_back(Vertex{x, y, z, NULL_ID, true});
+        verts.push_back(Vertex{x, y, z, NULL_ID, true, ++seq_counter});
     }
     return id;
 }
@@ -55,10 +56,10 @@ Id Mesh::new_f() {
     Id id;
     if (!free_f.empty()) {
         id = free_f.back(); free_f.pop_back();
-        faces[id] = Face{NULL_ID, true};
+        faces[id] = Face{NULL_ID, true, ++seq_counter};
     } else {
         id = (Id)faces.size();
-        faces.push_back(Face{NULL_ID, true});
+        faces.push_back(Face{NULL_ID, true, ++seq_counter});
     }
     return id;
 }
@@ -67,10 +68,10 @@ Id Mesh::new_e(Id ha, Id hb) {
     Id id;
     if (!free_e.empty()) {
         id = free_e.back(); free_e.pop_back();
-        edges[id] = Edge{ha, hb, true};
+        edges[id] = Edge{ha, hb, true, ++seq_counter};
     } else {
         id = (Id)edges.size();
-        edges.push_back(Edge{ha, hb, true});
+        edges.push_back(Edge{ha, hb, true, ++seq_counter});
     }
     hes[ha].twin = hb;
     hes[hb].twin = ha;
@@ -841,6 +842,7 @@ void Mesh::to_arrays(std::vector<double>& V_out,
     alive_vids.reserve(verts.size());
     for (size_t i = 1; i < verts.size(); i++)
         if (verts[i].alive) alive_vids.push_back((Id)i);
+    std::stable_sort(alive_vids.begin(), alive_vids.end(), [&](Id a, Id b){ return verts[a].seq < verts[b].seq; });
     // IDs are monotonically assigned → already sorted
 
     // old_id → new_index (0-based)
@@ -855,8 +857,10 @@ void Mesh::to_arrays(std::vector<double>& V_out,
     }
 
     // Export faces (fan-triangulate non-tri faces)
-    for (size_t fi = 1; fi < faces.size(); fi++) {
-        if (!faces[fi].alive) continue;
+    std::vector<Id> ord_f;
+    for (size_t i = 1; i < faces.size(); i++) if (faces[i].alive) ord_f.push_back((Id)i);
+    std::stable_sort(ord_f.begin(), ord_f.end(), [&](Id a, Id b){ return faces[a].seq < faces[b].seq; });
+    for (Id fi : ord_f) {
         auto fhes = face_halfedges((Id)fi);
         int fn = (int)fhes.size();
         if (fn < 3) continue;
@@ -881,6 +885,7 @@ void Mesh::to_poly_arrays(std::vector<double>& V_out,
     alive_vids.reserve(verts.size());
     for (size_t i = 1; i < verts.size(); i++)
         if (verts[i].alive) alive_vids.push_back((Id)i);
+    std::stable_sort(alive_vids.begin(), alive_vids.end(), [&](Id a, Id b){ return verts[a].seq < verts[b].seq; });
 
     std::vector<int64_t> remap(verts.size(), -1);
     V_out.reserve(alive_vids.size() * 3);
@@ -892,8 +897,10 @@ void Mesh::to_poly_arrays(std::vector<double>& V_out,
         V_out.push_back(verts[vid].z);
     }
 
-    for (size_t fi = 1; fi < faces.size(); fi++) {
-        if (!faces[fi].alive) continue;
+    std::vector<Id> ord_f;
+    for (size_t i = 1; i < faces.size(); i++) if (faces[i].alive) ord_f.push_back((Id)i);
+    std::stable_sort(ord_f.begin(), ord_f.end(), [&](Id a, Id b){ return faces[a].seq < faces[b].seq; });
+    for (Id fi : ord_f) {
         auto fhes = face_halfedges((Id)fi);
         if (fhes.empty()) continue;
         std::vector<int64_t> poly;
@@ -1097,6 +1104,7 @@ py::tuple batch_flip_sweep(py::array_t<double>  V_arr,
         eids.reserve(mesh.edges.size());
         for (size_t i = 1; i < mesh.edges.size(); i++)
             if (mesh.edges[i].alive) eids.push_back((Id)i);
+        std::stable_sort(eids.begin(), eids.end(), [&](Id a, Id b){ return mesh.edges[a].seq < mesh.edges[b].seq; });   // Python snapshot order = creation order
         int n_flip = 0;
         for (Id eid : eids) {
             if (!mesh.edges[eid].alive) continue;
@@ -1261,21 +1269,21 @@ py::tuple batch_subdivide_faces(py::array_t<double>  V_arr,
         }
     }
 
-    // Collect edges of target faces (deduplicated by edge ID)
+    // Collect edges of target faces: ascending face order, first-occurrence dedup (matches the Python
+    // reference: `for fi in tgt` over a set of small ints iterates ascending; midpoints are created in that order)
+    std::vector<int64_t> tgt_sorted(tgt.begin(), tgt.end());
+    std::sort(tgt_sorted.begin(), tgt_sorted.end());
     std::unordered_set<Id> edge_set;
-    for (int64_t fi : tgt) {
+    std::vector<Id> edges_to_split;
+    for (int64_t fi : tgt_sorted) {
         Id fid = (Id)(fi + 1);
         if (fid >= mesh.faces.size() || !mesh.faces[fid].alive) continue;
         for (Id h : mesh.face_halfedges(fid)) {
             Id eid = mesh.hes[h].edge;
-            if (eid) edge_set.insert(eid);
+            if (eid && edge_set.insert(eid).second) edges_to_split.push_back(eid);
         }
     }
-
-    int n_split = (int)edge_set.size();
-
-    // Subdivide each collected edge (snapshot: IDs won't change, just new HEs added)
-    std::vector<Id> edges_to_split(edge_set.begin(), edge_set.end());
+    int n_split = (int)edges_to_split.size();
     for (Id eid : edges_to_split) {
         if (eid >= mesh.edges.size() || !mesh.edges[eid].alive) continue;
         mesh.subdivide_edge(eid);

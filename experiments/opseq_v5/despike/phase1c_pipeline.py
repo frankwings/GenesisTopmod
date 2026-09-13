@@ -140,6 +140,9 @@ def dlfl_subdivide_arrays(V, Fa, fids, expand_ring=True):
         assert len(fids) == len(Fa), "generic subdivision supports all-faces only"
         from generic_ops import subdivide_all_np
         return subdivide_all_np(V, Fa)
+    if os.environ.get("DLFL_BACKEND", "py") == "cpp":
+        from topmod import core_backend
+        return core_backend.subdivide_faces(V, Fa, [int(f) for f in fids], expand_ring)
     tgt = set(int(f) for f in fids)
     vsets = [set(map(int, f)) for f in Fa]
     for fi in (list(tgt) if expand_ring else []):   # expand to edge-adjacent ring
@@ -156,7 +159,7 @@ def dlfl_subdivide_arrays(V, Fa, fids, expand_ring=True):
         os.unlink(path)
     faces = list(mesh.iter_faces())
     edges = {}
-    for fi in tgt:
+    for fi in sorted(tgt):                 # deterministic (ascending) order; the C++ kernel does the same
         for he in faces[fi].halfedges():
             edges[id(he.edge)] = he.edge
     for e in edges.values():

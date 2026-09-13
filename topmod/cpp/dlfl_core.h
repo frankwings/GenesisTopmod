@@ -23,10 +23,10 @@ namespace py = pybind11;
 using Id = uint32_t;
 constexpr Id NULL_ID = 0;
 
-struct Vertex  { double x, y, z; Id he;              bool alive; };
+struct Vertex { double x, y, z; Id he;              bool alive; uint64_t seq; };
 struct HalfEdge{ Id origin, face, next, prev, twin, edge; bool alive; };
-struct Face    { Id he;                               bool alive; };
-struct Edge    { Id he0, he1;                         bool alive; };
+struct Face { Id he;                               bool alive; uint64_t seq; };
+struct Edge { Id he0, he1;                         bool alive; uint64_t seq; };
 
 class Mesh {
 public:
@@ -36,6 +36,7 @@ public:
     std::vector<Edge>     edges;
 
     std::vector<Id> free_v, free_he, free_f, free_e;
+    uint64_t seq_counter = 0;   // creation order: export in creation order like Python dicts
 
     Mesh();
 

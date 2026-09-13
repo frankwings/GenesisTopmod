@@ -53,6 +53,9 @@ def flip_sweep(V, Fa, passes=4, fold_cos=0.0):
     if os.environ.get("GENERIC_OPS") == "1":
         from generic_ops import flip_sweep_np
         return flip_sweep_np(V, Fa, passes, fold_cos)
+    if os.environ.get("DLFL_BACKEND", "py") == "cpp":          # C++ kernel (topmod/cpp, identical semantics, ~100x)
+        from topmod import core_backend
+        return core_backend.flip_sweep(np.asarray(V, float), np.asarray(Fa, np.int64), passes, fold_cos)
     V = np.asarray(V, float); Fa = np.asarray(Fa, np.int64)
     with tempfile.NamedTemporaryFile("w", suffix=".obj", delete=False) as fh:
         for x, y, z in V: fh.write(f"v {x} {y} {z}\n")
@@ -115,6 +118,9 @@ def collapse_short_edges(V, Fa, ratio=0.3, max_n=400, thr_abs=None, vthr=None):
     if os.environ.get("GENERIC_OPS") == "1":
         from generic_ops import collapse_short_edges_np
         return collapse_short_edges_np(V, Fa, ratio, max_n, thr_abs)
+    if os.environ.get("DLFL_BACKEND", "py") == "cpp":
+        from topmod import core_backend
+        return core_backend.collapse_short_edges(np.asarray(V, float), np.asarray(Fa, np.int64), ratio, max_n, thr_abs, vthr)
     from topmod.high_level_ops import collapse_edge_tri
     V = np.asarray(V, float); Fa = np.asarray(Fa, np.int64)
     E = np.concatenate([Fa[:, [0, 1]], Fa[:, [1, 2]], Fa[:, [2, 0]]])
