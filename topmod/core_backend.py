@@ -84,3 +84,20 @@ def euler_genus(V, F):
     V = np.asarray(V, dtype=np.float64)
     F = np.asarray(F, dtype=np.int64)
     return int(_tc.euler_genus(V, F))
+
+
+def si_faces(V, F):
+    """Return int64[K,2] pairs (i<j) of geometrically-intersecting triangles,
+    excluding vertex-sharing neighbours.  Matches Open3D semantics."""
+    V = np.asarray(V, dtype=np.float64)
+    F = np.asarray(F, dtype=np.int64)
+    return np.asarray(_tc.self_intersecting_pairs(V, F), dtype=np.int64)
+
+
+def self_intersection_count(V, F):
+    """Return number of unique face indices involved in any self-intersection.
+    Matches the count returned by dlfl_untangle.si_faces (the Python variant)."""
+    pairs = si_faces(V, F)
+    if len(pairs) == 0:
+        return 0
+    return int(len(np.unique(pairs)))

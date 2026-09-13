@@ -1610,6 +1610,339 @@ py::list batch_validate(py::array_t<double>  V_arr,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Self-intersection detection: BVH broad phase + Möller 1997 narrow phase
+// Returns int64[K,2] pairs (i<j) of geometrically-intersecting triangles,
+// excluding pairs that share at least one vertex (topological neighbours).
+// Semantics match Open3D get_self_intersecting_triangles().
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Axis-Aligned Bounding Box ────────────────────────────────────────────────
+
+struct AABB {
+    double mn[3], mx[3];
+    AABB() { mn[0]=mn[1]=mn[2]=1e300; mx[0]=mx[1]=mx[2]=-1e300; }
+    void include(const double* p) {
+        for (int i=0;i<3;i++) {
+            if (p[i]<mn[i]) mn[i]=p[i];
+            if (p[i]>mx[i]) mx[i]=p[i];
+        }
+    }
+    bool overlaps(const AABB& o) const {
+        return mn[0]<=o.mx[0] && mx[0]>=o.mn[0] &&
+               mn[1]<=o.mx[1] && mx[1]>=o.mn[1] &&
+               mn[2]<=o.mx[2] && mx[2]>=o.mn[2];
+    }
+    double sa() const {  // half surface area (relative comparison only)
+        double dx=mx[0]-mn[0], dy=mx[1]-mn[1], dz=mx[2]-mn[2];
+        return dx*dy + dy*dz + dz*dx;
+    }
+    double cen(int ax) const { return 0.5*(mn[ax]+mx[ax]); }
+};
+
+// ── BVH node ─────────────────────────────────────────────────────────────────
+
+struct SIBVHNode {
+    AABB box;
+    int  left, right;    // -1 for leaf
+    int  fbegin, fend;   // slice into face_order[]
+};
+
+// ── BVH build (recursive median split on longest axis) ───────────────────────
+
+static int si_build_bvh(
+    std::vector<SIBVHNode>& nodes,
+    std::vector<int>& fo,
+    const AABB* aabbs,
+    int begin, int end,
+    int leaf_size = 8)
+{
+    int idx = (int)nodes.size();
+    nodes.push_back({});
+
+    // Union AABB over face range
+    AABB box;
+    for (int i=begin;i<end;i++) {
+        const AABB& a = aabbs[fo[i]];
+        for (int j=0;j<3;j++) {
+            box.mn[j] = std::min(box.mn[j], a.mn[j]);
+            box.mx[j] = std::max(box.mx[j], a.mx[j]);
+        }
+    }
+    nodes[idx].box    = box;
+    nodes[idx].fbegin = begin;
+    nodes[idx].fend   = end;
+
+    if (end - begin <= leaf_size) {
+        nodes[idx].left = nodes[idx].right = -1;
+        return idx;
+    }
+
+    // Split on longest axis at midpoint
+    double dx=box.mx[0]-box.mn[0], dy=box.mx[1]-box.mn[1], dz=box.mx[2]-box.mn[2];
+    int axis = (dx>=dy&&dx>=dz) ? 0 : (dy>=dz ? 1 : 2);
+    int mid  = (begin+end)/2;
+    std::nth_element(fo.begin()+begin, fo.begin()+mid, fo.begin()+end,
+                     [&](int a, int b){ return aabbs[a].cen(axis) < aabbs[b].cen(axis); });
+
+    // Build children (vector may reallocate; access nodes[idx] by index, not pointer)
+    int L = si_build_bvh(nodes, fo, aabbs, begin, mid, leaf_size);
+    int R = si_build_bvh(nodes, fo, aabbs, mid,   end, leaf_size);
+    nodes[idx].left  = L;
+    nodes[idx].right = R;
+    return idx;
+}
+
+// ── Möller 1997 triangle–triangle intersection (no-divide variant) ────────────
+
+static inline double si_dot(const double* a, const double* b) {
+    return a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+}
+static inline void si_sub(const double* a, const double* b, double* c) {
+    c[0]=a[0]-b[0]; c[1]=a[1]-b[1]; c[2]=a[2]-b[2];
+}
+static inline void si_cross(const double* a, const double* b, double* c) {
+    c[0]=a[1]*b[2]-a[2]*b[1];
+    c[1]=a[2]*b[0]-a[0]*b[2];
+    c[2]=a[0]*b[1]-a[1]*b[0];
+}
+
+// Compute overlap interval for one triangle, given:
+//   vv0..vv2 = projections of its vertices onto intersection line D
+//   d0..d2   = signed distances from the other plane (snapped to 0 for |d|<EPS)
+// Returns false for coplanar (all di≈0) → treat as no intersection.
+static bool si_isect_interval(
+    double vv0, double vv1, double vv2,
+    double d0,  double d1,  double d2,
+    double d0d1, double d0d2,
+    double& i0,  double& i1)
+{
+    if (d0d1 > 0.0) {
+        // d0,d1 same sign → d2 on opposite side (or zero)
+        i0 = vv2+(vv0-vv2)*d2/(d2-d0);
+        i1 = vv2+(vv1-vv2)*d2/(d2-d1);
+    } else if (d0d2 > 0.0) {
+        i0 = vv1+(vv0-vv1)*d1/(d1-d0);
+        i1 = vv1+(vv2-vv1)*d1/(d1-d2);
+    } else if (d1*d2 > 0.0 || std::abs(d0) > 1e-15) {
+        i0 = vv0+(vv1-vv0)*d0/(d0-d1);
+        i1 = vv0+(vv2-vv0)*d0/(d0-d2);
+    } else if (std::abs(d1) > 1e-15) {
+        i0 = vv1+(vv0-vv1)*d1/(d1-d0);
+        i1 = vv1+(vv2-vv1)*d1/(d1-d2);
+    } else if (std::abs(d2) > 1e-15) {
+        i0 = vv2+(vv0-vv2)*d2/(d2-d0);
+        i1 = vv2+(vv1-vv2)*d2/(d2-d1);
+    } else {
+        return false;  // coplanar → skip
+    }
+    return true;
+}
+
+static bool tri_tri_intersect_moller97(
+    const double* p0, const double* p1, const double* p2,
+    const double* q0, const double* q1, const double* q2)
+{
+    constexpr double EPS = 1e-10;
+
+    // Plane 1: N1·x + d1 = 0
+    double e1[3], e2[3], N1[3];
+    si_sub(p1,p0,e1); si_sub(p2,p0,e2); si_cross(e1,e2,N1);
+    double d1 = -si_dot(N1,p0);
+
+    // Signed distances of T2 verts from plane 1
+    double du0=si_dot(N1,q0)+d1, du1=si_dot(N1,q1)+d1, du2=si_dot(N1,q2)+d1;
+    if (std::abs(du0)<EPS) du0=0.0;
+    if (std::abs(du1)<EPS) du1=0.0;
+    if (std::abs(du2)<EPS) du2=0.0;
+    double du0du1=du0*du1, du0du2=du0*du2;
+    if (du0du1>0.0 && du0du2>0.0) return false;  // T2 strictly one side
+
+    // Plane 2: N2·x + d2 = 0
+    double f1[3], f2[3], N2[3];
+    si_sub(q1,q0,f1); si_sub(q2,q0,f2); si_cross(f1,f2,N2);
+    double d2 = -si_dot(N2,q0);
+
+    // Signed distances of T1 verts from plane 2
+    double dv0=si_dot(N2,p0)+d2, dv1=si_dot(N2,p1)+d2, dv2=si_dot(N2,p2)+d2;
+    if (std::abs(dv0)<EPS) dv0=0.0;
+    if (std::abs(dv1)<EPS) dv1=0.0;
+    if (std::abs(dv2)<EPS) dv2=0.0;
+    double dv0dv1=dv0*dv1, dv0dv2=dv0*dv2;
+    if (dv0dv1>0.0 && dv0dv2>0.0) return false;
+
+    // Intersection line D = N1 × N2
+    double D[3];
+    si_cross(N1,N2,D);
+    // Coplanar check: |D|²≈0 means parallel planes → no volumetric intersection
+    if (D[0]*D[0]+D[1]*D[1]+D[2]*D[2] < 1e-20) return false;
+
+    // Project onto largest |D| component
+    double ax=std::abs(D[0]), ay=std::abs(D[1]), az=std::abs(D[2]);
+    double pp0,pp1,pp2, pq0,pq1,pq2;
+    if (ax>=ay&&ax>=az) {
+        pp0=p0[0];pp1=p1[0];pp2=p2[0];
+        pq0=q0[0];pq1=q1[0];pq2=q2[0];
+    } else if (ay>=az) {
+        pp0=p0[1];pp1=p1[1];pp2=p2[1];
+        pq0=q0[1];pq1=q1[1];pq2=q2[1];
+    } else {
+        pp0=p0[2];pp1=p1[2];pp2=p2[2];
+        pq0=q0[2];pq1=q1[2];pq2=q2[2];
+    }
+
+    // Compute overlap intervals
+    double is10,is11, is20,is21;
+    if (!si_isect_interval(pp0,pp1,pp2, dv0,dv1,dv2, dv0dv1,dv0dv2, is10,is11)) return false;
+    if (!si_isect_interval(pq0,pq1,pq2, du0,du1,du2, du0du1,du0du2, is20,is21)) return false;
+    if (is10>is11) std::swap(is10,is11);
+    if (is20>is21) std::swap(is20,is21);
+
+    return is10 <= is21 && is20 <= is11;
+}
+
+// ── BVH traversal ─────────────────────────────────────────────────────────────
+
+// Forward declaration
+static void si_cross_query(
+    const std::vector<SIBVHNode>& nodes,
+    const std::vector<int>& fo,
+    int nA, int nB,
+    std::vector<std::pair<int,int>>& out);
+
+static void si_self_query(
+    const std::vector<SIBVHNode>& nodes,
+    const std::vector<int>& fo,
+    int nd_id,
+    std::vector<std::pair<int,int>>& out)
+{
+    const SIBVHNode& nd = nodes[nd_id];
+    if (nd.left == -1) {
+        // Leaf: enumerate all internal pairs (i<j in face index space)
+        for (int i=nd.fbegin;i<nd.fend;i++) {
+            for (int j=i+1;j<nd.fend;j++) {
+                int fi=fo[i], fj=fo[j];
+                out.push_back({std::min(fi,fj), std::max(fi,fj)});
+            }
+        }
+        return;
+    }
+    si_self_query(nodes, fo, nd.left,  out);
+    si_self_query(nodes, fo, nd.right, out);
+    si_cross_query(nodes, fo, nd.left, nd.right, out);
+}
+
+static void si_cross_query(
+    const std::vector<SIBVHNode>& nodes,
+    const std::vector<int>& fo,
+    int nA, int nB,
+    std::vector<std::pair<int,int>>& out)
+{
+    const SIBVHNode& A = nodes[nA];
+    const SIBVHNode& B = nodes[nB];
+    if (!A.box.overlaps(B.box)) return;
+
+    if (A.left==-1 && B.left==-1) {
+        // Both leaves: all A×B cross-pairs
+        for (int i=A.fbegin;i<A.fend;i++) {
+            int fi=fo[i];
+            for (int j=B.fbegin;j<B.fend;j++) {
+                int fj=fo[j];
+                out.push_back({std::min(fi,fj), std::max(fi,fj)});
+            }
+        }
+        return;
+    }
+    if (A.left==-1) {
+        si_cross_query(nodes,fo, nA,B.left,  out);
+        si_cross_query(nodes,fo, nA,B.right, out);
+    } else if (B.left==-1) {
+        si_cross_query(nodes,fo, A.left, nB, out);
+        si_cross_query(nodes,fo, A.right,nB, out);
+    } else {
+        // Expand the node with larger AABB surface area
+        if (A.box.sa() >= B.box.sa()) {
+            si_cross_query(nodes,fo, A.left, nB, out);
+            si_cross_query(nodes,fo, A.right,nB, out);
+        } else {
+            si_cross_query(nodes,fo, nA,B.left,  out);
+            si_cross_query(nodes,fo, nA,B.right, out);
+        }
+    }
+}
+
+// ── Public batch function ─────────────────────────────────────────────────────
+
+py::array_t<int64_t> batch_si_pairs(
+    py::array_t<double>  V_arr,
+    py::array_t<int64_t> F_arr)
+{
+    auto F_ = F_arr.unchecked<2>();
+    int64_t nf = F_.shape(0);
+
+    if (nf == 0) {
+        std::vector<py::ssize_t> sh = {0, 2};
+        return py::array_t<int64_t>(sh);
+    }
+
+    const double*  V = V_arr.data();
+    const int64_t* F = F_arr.data();
+
+    // Per-triangle AABBs
+    std::vector<AABB> aabbs(nf);
+    for (int64_t i=0;i<nf;i++) {
+        int64_t a=F[i*3+0], b=F[i*3+1], c=F[i*3+2];
+        aabbs[i].include(V+a*3);
+        aabbs[i].include(V+b*3);
+        aabbs[i].include(V+c*3);
+    }
+
+    // BVH build
+    std::vector<int> fo(nf);
+    std::iota(fo.begin(), fo.end(), 0);
+    std::vector<SIBVHNode> nodes;
+    nodes.reserve(nf);   // safe upper bound: 2*(nf/8) << nf
+    si_build_bvh(nodes, fo, aabbs.data(), 0, (int)nf, 8);
+
+    // BVH self-traversal → candidate pairs
+    std::vector<std::pair<int,int>> cands;
+    cands.reserve(std::max((int64_t)64, nf));
+    si_self_query(nodes, fo, 0, cands);
+
+    // Sort + dedup (BVH is exact; dedup is a safety net for edge cases)
+    std::sort(cands.begin(), cands.end());
+    cands.erase(std::unique(cands.begin(), cands.end()), cands.end());
+
+    // Narrow phase
+    std::vector<std::pair<int,int>> result;
+    result.reserve(cands.size() / 4 + 1);
+
+    for (auto& [ci, cj] : cands) {
+        // Skip vertex-sharing pairs (topological neighbours)
+        int64_t a0=F[ci*3+0], a1=F[ci*3+1], a2=F[ci*3+2];
+        int64_t b0=F[cj*3+0], b1=F[cj*3+1], b2=F[cj*3+2];
+        if (a0==b0||a0==b1||a0==b2||
+            a1==b0||a1==b1||a1==b2||
+            a2==b0||a2==b1||a2==b2) continue;
+
+        // Möller 1997 exact test
+        if (tri_tri_intersect_moller97(
+                V+a0*3, V+a1*3, V+a2*3,
+                V+b0*3, V+b1*3, V+b2*3))
+            result.push_back({ci, cj});
+    }
+
+    // Return int64[K,2]
+    int64_t K = (int64_t)result.size();
+    py::array_t<int64_t> out({K, (int64_t)2});
+    auto out_ = out.mutable_unchecked<2>();
+    for (int64_t k=0;k<K;k++) {
+        out_(k,0) = result[k].first;
+        out_(k,1) = result[k].second;
+    }
+    return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // pybind11 module
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1653,4 +1986,10 @@ PYBIND11_MODULE(topmod_core, m) {
     m.def("validate", &batch_validate,
           py::arg("V"), py::arg("F"),
           "Validate half-edge mesh. Returns list of error strings.");
+
+    m.def("self_intersecting_pairs", &batch_si_pairs,
+          py::arg("V"), py::arg("F"),
+          "Return int64[K,2] pairs (i<j) of geometrically-intersecting triangles "
+          "(excluding vertex-sharing neighbours). Broad phase: AABB-BVH. "
+          "Narrow phase: Moller 1997. Matches Open3D get_self_intersecting_triangles().");
 }
