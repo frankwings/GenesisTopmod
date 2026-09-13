@@ -14,15 +14,9 @@ Targets: self-intersecting faces < 5% with no IoU loss.
 Run: MODE=6v TAG=p4_6 BASE_NPZ=... TARGET_OBJ=... python3 despike/phase4_inloop.py
 """
 import sys, os
-# Worktree paths FIRST so the batch-enabled run_64v.py is found before main checkout
-_WT_BATCH = "/home/kingy/Projects/Genesis/GenesisTopmod-wt-batch"
-sys.path.insert(0, f"{_WT_BATCH}/experiments/opseq_v5/despike")
-sys.path.insert(0, f"{_WT_BATCH}/experiments/opseq_v5")
-sys.path.insert(0, _WT_BATCH)
-# Main checkout fallback for modules only there (cow_v13, eval_local_refine, etc.)
-sys.path.append("/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5/despike")
-sys.path.append("/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5")
-sys.path.append("/home/kingy/Projects/Genesis/GenesisTopmod")
+sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5")
+sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5/despike")
+sys.path.insert(0, "/home/kingy/Projects/Genesis/GenesisTopmod")
 os.chdir("/home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5")
 os.environ.setdefault("MODE", "6v")
 
@@ -250,9 +244,6 @@ if SUBDIV_TOP > 0:
     wt, _ = check_watertight(Fa); assert wt
     print(f"[p4] partial DLFL subdivision of {SUBDIV_TOP} largest faces: split {ne} edges -> V={len(V)} F={len(Fa)}", flush=True)
 if MODE == "64v":
-    # Re-insert worktree path: phase1b_pipeline (imported above) inserts main checkout
-    # despike at position 0, which would shadow the batch-enabled run_64v.py
-    sys.path.insert(0, f"{_WT_BATCH}/experiments/opseq_v5/despike")
     import run_64v
     from eval_extrude_v3 import IMG_RES
     from run_64v import render_sdd
