@@ -37,6 +37,13 @@ from .tokenizer import (
     token_stats, sequence_length,
 )
 
+# ── C++ backend availability flag ─────────────────────────────────────────────
+try:
+    from . import core_backend as _cpp_backend  # noqa: F401
+    _DLFL_CPP_AVAILABLE = True
+except ImportError:
+    _DLFL_CPP_AVAILABLE = False
+
 __all__ = [
     # Data structures
     "DLFLMesh", "Vertex", "HalfEdge", "Face", "Edge",
