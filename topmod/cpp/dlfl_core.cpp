@@ -1115,9 +1115,8 @@ py::tuple batch_flip_sweep(py::array_t<double>  V_arr,
     std::vector<int64_t> F_out;
     mesh.to_arrays(V_out, F_out);
 
-    return py::make_tuple(make_VF_tuple(V_out,F_out).cast<py::tuple>()[0],
-                          make_VF_tuple(V_out,F_out).cast<py::tuple>()[1],
-                          total_flips);
+    auto vf = make_VF_tuple(V_out, F_out);
+    return py::make_tuple(vf[0], vf[1], total_flips);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1214,9 +1213,8 @@ py::tuple batch_collapse(py::array_t<double>  V_arr,
     std::vector<int64_t> F_out;
     mesh.to_arrays(V_out, F_out);
 
-    return py::make_tuple(make_VF_tuple(V_out,F_out).cast<py::tuple>()[0],
-                          make_VF_tuple(V_out,F_out).cast<py::tuple>()[1],
-                          n_collapsed);
+    auto vf = make_VF_tuple(V_out, F_out);
+    return py::make_tuple(vf[0], vf[1], n_collapsed);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1240,26 +1238,25 @@ py::tuple batch_subdivide_faces(py::array_t<double>  V_arr,
     for (auto item : fids_list) tgt.insert(item.cast<int64_t>());
 
     if (expand_ring) {
-        // For each target face, add faces sharing 2 vertices with any target face
-        // Build per-face vertex sets (using face IDs fi+1 maps to input row fi)
-        // Face ID i → face_halfedges → set of vertex IDs
-        std::vector<std::unordered_set<Id>> fvsets(nf);
+        // Expand via edge-twin adjacency (O(target_faces * face_degree))
+        // For each half-edge on each target face, its twin's face is an edge-neighbor
+        // Build face-ID → input-row map
+        std::unordered_map<Id, int64_t> fid_to_row;
+        fid_to_row.reserve(nf);
         for (int64_t fi = 0; fi < nf; fi++) {
-            Id fid = (Id)(fi + 1);  // 1-based
-            if (fi >= (int64_t)mesh.faces.size() || !mesh.faces[fid].alive) continue;
-            for (Id h : mesh.face_halfedges(fid))
-                fvsets[fi].insert(mesh.hes[h].origin);
+            Id fid = (Id)(fi + 1);
+            fid_to_row[fid] = fi;
         }
         std::vector<int64_t> tgt_vec(tgt.begin(), tgt.end());
         for (int64_t fi : tgt_vec) {
-            if (fi < 0 || fi >= nf) continue;
-            for (int64_t fj = 0; fj < nf; fj++) {
-                if (fj == fi || tgt.count(fj)) continue;
-                // Count shared vertices
-                int shared = 0;
-                for (Id v : fvsets[fi])
-                    if (fvsets[fj].count(v)) shared++;
-                if (shared >= 2) tgt.insert(fj);
+            Id fid = (Id)(fi + 1);
+            if (fid >= mesh.faces.size() || !mesh.faces[fid].alive) continue;
+            for (Id h : mesh.face_halfedges(fid)) {
+                Id tw = mesh.hes[h].twin;
+                if (!tw || tw >= mesh.hes.size() || !mesh.hes[tw].alive) continue;
+                Id adj_fid = mesh.hes[tw].face;
+                auto it = fid_to_row.find(adj_fid);
+                if (it != fid_to_row.end()) tgt.insert(it->second);
             }
         }
     }
@@ -1476,6 +1473,21 @@ py::tuple batch_add_handle(py::array_t<double>  V_arr,
     if (fid2 >= mesh.faces.size() || !mesh.faces[fid2].alive) return py::make_tuple(V_arr, F_arr);
 
     do_add_handle(mesh, fid1, fid2);
+
+    // Stellate the side quads (spec: "single op incl. stellating the side quads")
+    // After add_handle the mesh has some quad faces — stellate them
+    {
+        std::vector<Id> quad_faces;
+        for (size_t i = 1; i < mesh.faces.size(); i++) {
+            if (!mesh.faces[i].alive) continue;
+            if (mesh.face_halfedges((Id)i).size() == 4)
+                quad_faces.push_back((Id)i);
+        }
+        for (Id qf : quad_faces) {
+            if (qf < mesh.faces.size() && mesh.faces[qf].alive)
+                mesh.stellate(qf);
+        }
+    }
 
     std::vector<double>  V_out;
     std::vector<int64_t> F_out;
