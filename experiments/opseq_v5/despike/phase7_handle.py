@@ -666,6 +666,7 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
                         _top = _top * np.sign(_top @ _top[0])[:, None]      # fold antipodal directions
                         _best = _top.mean(0); _bn = np.linalg.norm(_best)
                         axis_vox = _best / _bn if _bn > 1e-6 else evec[:, 0]
+                        free_len = float(_lens.max())               # tunnel length through the hull air (vox)
                         is_disk = bool(ev[1] > 0 and ev[0] < ev[1])
 
                         cen_w = vox2world(cen_vox)
@@ -685,6 +686,7 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
                             "peak_w": peak_w.tolist(),
                             "axis_w": axis_w.tolist(), "is_disk": is_disk,
                             "size": int(piece.sum()), "throat_r": float(throat_r),
+                            "free_len": float(free_len) if 'free_len' in dir() else 0.0,
                         })
                         print(f"[p7] hull R={R:2d} PLUG size={int(piece.sum()):6d} "
                               f"cen_vox={np.round(cen_vox,1)} is_disk={is_disk} "
@@ -747,6 +749,9 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
             continue
 
         cen_vox_ref = world2vox(cen_w); peak_vox_ref = world2vox(peak_w); patch_faces_near = {}
+        # hit-distance cap: the membrane can be as thick as the tunnel is long (coarse mesh fills a
+        # slab hole end to end), so bound by the free path through the hull air, not a fixed 50 vox
+        _cap = max(50.0, 0.75 * float(p.get("free_len", 0.0)) + 10.0)
         # ── Strategy A: rays from the plug centre along +-tunnel axis (free-path axis) ─────────────────────────────────────
         fi_fj = None
         if True:
@@ -767,15 +772,23 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
                     hits_pair.append(fi_hit)
 
                 fi_h, fj_h = hits_pair
-                if fi_h < 0 or fj_h < 0 or fi_h == fj_h: continue
-                if set(F[fi_h]) & set(F[fj_h]): continue
+                _dbg = os.environ.get("HULL_DEBUG")
+                if fi_h < 0 or fj_h < 0 or fi_h == fj_h:
+                    if _dbg: print(f"[p7]   rayA reject: hits {fi_h},{fj_h}", flush=True)
+                    continue
+                if set(F[fi_h]) & set(F[fj_h]):
+                    if _dbg: print(f"[p7]   rayA reject: adjacent {fi_h},{fj_h}", flush=True)
+                    continue
                 ki = comp_mp.get(fi_h); kj = comp_mp.get(fj_h)
-                if ki is None or kj is None: continue
-                if chi_mp.get(ki) != 1 or chi_mp.get(kj) != 1: continue
+                if ki is None or kj is None or chi_mp.get(ki) != 1 or chi_mp.get(kj) != 1:
+                    if _dbg: print(f"[p7]   rayA reject: membrane {fi_h}->{ki}/{chi_mp.get(ki)} {fj_h}->{kj}/{chi_mp.get(kj)}", flush=True)
+                    continue
                 ci_w = V[F[fi_h]].mean(0); cj_w = V[F[fj_h]].mean(0)
-                if np.linalg.norm(world2vox(ci_w) - cen_vox_ref) > 50: continue
-                if np.linalg.norm(world2vox(cj_w) - cen_vox_ref) > 50: continue
+                if np.linalg.norm(world2vox(ci_w) - cen_vox_ref) > _cap or np.linalg.norm(world2vox(cj_w) - cen_vox_ref) > _cap:
+                    if _dbg: print(f"[p7]   rayA reject: far d={np.linalg.norm(world2vox(ci_w) - cen_vox_ref):.1f},{np.linalg.norm(world2vox(cj_w) - cen_vox_ref):.1f} ci={np.round(ci_w,2)} cj={np.round(cj_w,2)} cen_ref={np.round(cen_vox_ref,1)} vox(ci)={np.round(world2vox(ci_w),1)}", flush=True)
+                    continue
                 fi_fj = (fi_h, fj_h, ci_w, cj_w)
+                if _dbg: print(f"[p7]   rayA accept {fi_h},{fj_h}", flush=True)
 
         if fi_fj is None:
             # ── Strategy B (fallback): proximity-based pair from membrane patches ────────────
