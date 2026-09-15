@@ -54,7 +54,7 @@ ho16 silhouette IoU, same rows: Nicolet 0.9593 / 0.9768 / 0.8963 / 0.9581; Palfi
 0.9398 / 0.9674; DMesh 0.9894 / 0.9944 / 0.9886 / 0.9928; ours 0.9972 / 0.9994 / 0.9974 / 0.9985.
 Chamfer (kitten / fertility / rocker-arm): Nicolet 0.0110 / 0.0270 / 0.0156; Palfinger 0.0068 / – / –;
 DMesh 0.0074 / 0.0071 / 0.0064; ours 0.0067 / 0.0071 / 0.0058.
-Wall (single run, same GPU): Nicolet 5–15 min, Palfinger 4–15 min, DMesh 10–20 min, ours **5.4 min** (armadillo, full chain incl. genus discovery; C++ DLFL kernel + batched 64-view nvdiffrast, 2026-09-14; was 105 min pure Python).
+Wall (single run, same GPU): Nicolet 5–15 min, Palfinger 4–15 min, DMesh 10–20 min, ours **4.3–5.6 min** (all five shapes, full chain incl. genus discovery; armadillo 5.4, kitten 4.5, fertility 5.6, rocker-arm 4.3, threeholes 5.0; C++ DLFL kernel + batched 64-view nvdiffrast, 2026-09-14; was 105 min pure Python).
 
 ## 3. Ablations (ours)
 - **Refinement criterion** (5 criteria, equal loop/guards; LESSONS 15a/15b): fertility VolIoU curvature
