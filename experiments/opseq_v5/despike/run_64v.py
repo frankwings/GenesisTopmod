@@ -347,6 +347,42 @@ def heldout_exam(ctx, v, t):
     return inter / max(un, 1), hair, maxblob
 
 
+HULL_INIT = int(os.environ.get("HULL_INIT", "0"))          # 1: project the init icosphere onto the 64-view voting hull before Stage 1 DR
+HULL_INIT_ITERS = int(os.environ.get("HULL_INIT_ITERS", "12"))
+HULL_INIT_SMOOTH = float(os.environ.get("HULL_INIT_SMOOTH", "0.5"))   # uniform-Laplacian blend per iteration (keeps triangles from folding on concave hulls)
+S1_STEPS = int(os.environ.get("S1_STEPS", "800"))            # DR steps per Stage-1 level (cc2, cc3)
+
+
+def hull_init_project(ctx, mvps, gv, gf, v, t):
+    """Soft projection of the init mesh onto the voting hull surface: iterate
+    (move each vertex by a fraction of its signed hull distance along the field gradient,
+    then blend with the uniform Laplacian). Uses only the 64 training silhouettes."""
+    from hull_field import build_vote_hull
+    gvn = normalize_to_range(gv)
+    HF = build_vote_hull(ctx, mvps, gvn, gf, np.asarray(v), DEVICE, nres=256, hires=512, vote=2)
+    tt = np.asarray(t, np.int64); n = len(v)
+    nb = [[] for _ in range(n)]
+    for a, b, c in tt: nb[a] += [b, c]; nb[b] += [a, c]; nb[c] += [a, b]
+    nb = [np.unique(x) for x in nb]
+    pts = torch.tensor(np.asarray(v), dtype=torch.float32, device=DEVICE)
+    for it in range(HULL_INIT_ITERS):
+        p = pts.clone().requires_grad_(True)
+        sd = HF.dist(p) - HF.dist_in(p)                       # signed distance to hull surface (+ outside)
+        g, = torch.autograd.grad(sd.sum(), p)
+        gn = g / g.norm(dim=1, keepdim=True).clamp_min(1e-9)
+        with torch.no_grad():
+            step = (0.6 * sd).clamp(-3 * HF.pitch, 3 * HF.pitch)      # bounded step: never jump across a limb in one go
+            pts = pts - step[:, None] * gn
+            if HULL_INIT_SMOOTH > 0:
+                P = pts.cpu().numpy().astype(np.float64)
+                L = np.stack([P[ix].mean(0) for ix in nb])
+                pts = torch.tensor((1 - HULL_INIT_SMOOTH) * P + HULL_INIT_SMOOTH * L, dtype=torch.float32, device=DEVICE)
+        with torch.no_grad():
+            r = (HF.dist(pts) - HF.dist_in(pts)).abs()
+        print(f"[run_64v] hull_init it{it}: |sd| mean={r.mean().item()/HF.pitch:.2f} max={r.max().item()/HF.pitch:.2f} vox", flush=True)
+    return pts.cpu().numpy().astype(np.float64)
+
+
 def main():
     global _MVPS, _GT
     _SEED = int(os.environ.get("SEED", "0")); torch.manual_seed(_SEED); np.random.seed(_SEED)
@@ -366,6 +402,9 @@ def main():
         import cc_subdiv; v, polys, t = cc_subdiv.icosphere_cc2()
         print(f"[run_64v] C2F_SUBDIV=cc: TopMod icosphere cc2 V={len(v)} quads={len(polys)} tris={len(t)}", flush=True)
     viz_snap.snap(ctx, mvps, v, t, "Stage 1 [init icosphere]", hold=30)
+    if HULL_INIT:
+        v = hull_init_project(ctx, mvps, gv, _gf, v, t)
+        viz_snap.snap(ctx, mvps, v, t, "Stage 1 [hull-projected init]", hold=30)
 
     def iou_fn(vv, ff):
         vt = torch.tensor(np.asarray(vv), dtype=torch.float32, device=DEVICE)
@@ -383,10 +422,10 @@ def main():
         print(f"[run_64v] RESUME_FROM {os.environ['RESUME_FROM']}: V={len(v)} F={len(t)}", flush=True)
     else:
         _set_faces(t)
-        v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800, "cc2",
+        v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, S1_STEPS, "cc2",
                                 use_fold=True, use_tube=True)
         v, t, polys = _c2f(v, t, polys); _set_faces(t)
-        v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, 800, "cc3",
+        v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, S1_STEPS, "cc3",
                                 settle=True, use_tube=True)
     if os.environ.get("STOP_AFTER") == "cc3":
         # early-hole experiment: hand the cc3 mesh (1.9k faces) to the handle stage before any further subdivision
