@@ -40,7 +40,7 @@ MIN_SEP = float(os.environ.get("MIN_SEP", "1.5"))
 PROJ_RADIUS = float(os.environ.get("PROJ_RADIUS", "0.6"))  # also radially project the membrane around the tube (within this radius of the axis) so the mouth eats it; 0 = tube only    # faces closer than this (mean-edge units) are fold/sliver remnants, not a slab   # tunnel must continue hull-free this far beyond BOTH faces (bay vs through-hole)
 DRY = int(os.environ.get("DRY", "0"))
 PRE_SUBDIV = int(os.environ.get("PRE_SUBDIV", "0"))   # 1 = always pre-subdivide entry/exit faces before add_handle (auto when their 1-rings overlap)
-DETECT = os.environ.get("DETECT", "rays")
+DETECT = os.environ.get("DETECT", "hull")
 ABSORB = int(os.environ.get("ABSORB", "0"))
 OPEN = os.environ.get("OPEN", "merge")   # merge = collapse membrane interior verts to the rim, delete interior edges -> rim polygon, add_handle(rim1, rim2)   # after add_handle, eat the blocking membrane into the mouth by DLFL collapses (mouth ring grows to the membrane rim)
 HANDLES_JSON = os.environ.get("HANDLES_JSON", "")     # persisted list of handle midpoints across rounds (one handle per tunnel)
@@ -49,6 +49,9 @@ OUT_VOX = float(os.environ.get("OUT_VOX", "4.0"))     # both faces must be > thi
 FACE_COS = float(os.environ.get("FACE_COS", "-0.5"))  # n_i . n_j below this (facing each other)
 MAX_SEP = float(os.environ.get("MAX_SEP", "100.0"))   # max centroid separation (mean-edge units); thick slabs need long tubes (3holes: 12 edges)
 OUTD = "/tmp/liou_cow_viz"
+HULL_LOC_RES = int(os.environ.get("HULL_LOC_RES", "128"))
+HULL_FACE_DIST_VOX = float(os.environ.get("HULL_FACE_DIST_VOX", "6"))
+HULL_PLUGS_CACHE = os.environ.get("HULL_PLUGS_CACHE", f"{OUTD}/hull_plugs_{SHAPE}_{HULL_LOC_RES}.json")
 
 z = np.load(BASE_NPZ); V, Fa = z["verts"].astype(np.float64), z["tris"].astype(np.int64)
 ctx = dr.RasterizeCudaContext()
@@ -161,13 +164,14 @@ def radial_project(V, a0, u, L, tube_verts):
 
 
 
-def membrane_patches(V, F):
+def membrane_patches(V, F, out_vox_override=None):
     """Connected components (edge adjacency) of faces lying outside the voting hull, with the
     Euler characteristic of each patch. A membrane that blocks a tunnel is a topological DISK
     (chi = 1). Once a handle pierces it, the patch becomes an annulus (chi = 0): tunnel already open."""
     from collections import defaultdict
+    ov = out_vox_override if out_vox_override is not None else OUT_VOX
     tri = V[F]; cen = tri.mean(1); d = hdist(cen)
-    out = np.where(d > OUT_VOX * pitch)[0]
+    out = np.where(d > ov * pitch)[0]
     if len(out) == 0: return {}, {}
     em = defaultdict(list)
     for fi in out:
@@ -439,16 +443,389 @@ def find_contact_join(V, F, prev_handles=(), r_vox=float(os.environ.get("CONTACT
         print(f"[p7]   contact cluster at {np.round(mid, 3)}: no pair with disjoint 1-rings -> skip", flush=True)
     return None
 
+
+def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
+    """Locate tunnel face pairs from space-carved hull closing-radius analysis.
+
+    Closing ladder R=4,6,...,40 on a downsampled (HULL_LOC_RES^3) clean hull.  Each newly
+    filled 26-connected component that lowers the cavity-corrected hull genus by exactly -1 is
+    one tunnel throat ("plug").  Merged plugs (dg<=-2) are split via greedy-merge watershed.
+    Throat isolation via EDT sub-blob for axis/centroid.  Face pairs found with Open3D rays
+    along +-axis; accepted when both hit, non-adjacent, membrane patches are disks, face
+    centroids within HULL_FACE_DIST_VOX voxels of the plug.
+
+    Returns list of (fi, fj, ci, cj, key) ordered by closing radius (thinnest throat first).
+    key = ["hull", [cx,cy,cz]] with plug centroid in world units (3 dp).  Empty list if none.
+    Plug centroids cached to HULL_PLUGS_CACHE JSON so subsequent rounds skip the ladder.
+    """
+    from skimage import measure, morphology, segmentation, feature
+    from scipy import ndimage
+    import open3d as o3d, time as _time, json as _json
+
+    t_start = _time.time()
+
+    def _genus_solid(vol):
+        return 1 - measure.euler_number(ndimage.binary_fill_holes(vol), connectivity=1)
+
+    lo_w = np.asarray(HF_in.lo, float); hi_w = np.asarray(HF_in.hi, float)
+    res = HULL_LOC_RES
+    def vox2world(v): return lo_w + np.asarray(v, float) / (res - 1) * (hi_w - lo_w)
+    def world2vox(w): return (np.asarray(w, float) - lo_w) / (hi_w - lo_w) * (res - 1)
+
+    # ── Load or compute plug centroids ─────────────────────────────────────────
+    plugs_raw = None
+    if HULL_PLUGS_CACHE and os.path.exists(HULL_PLUGS_CACHE):
+        try:
+            plugs_raw = _json.load(open(HULL_PLUGS_CACHE))
+            print(f"[p7] hull: loaded {len(plugs_raw)} plug(s) from cache {HULL_PLUGS_CACHE}", flush=True)
+        except Exception as _e:
+            print(f"[p7] hull: cache load failed ({_e}), recomputing", flush=True)
+            plugs_raw = None
+
+    if plugs_raw is None:
+        hull_full = np.asarray(HF_in.hull).astype(bool)
+        N_full = hull_full.shape[0]
+
+        # Clean hull: closing+opening r=2 (6-connected S3, iterations=2) exactly as hull_genus
+        S3_c = ndimage.generate_binary_structure(3, 1)
+        hc = ndimage.binary_opening(ndimage.binary_closing(hull_full, S3_c, iterations=2), S3_c, iterations=2)
+        lab_hc, n_hc = ndimage.label(hc)
+        if n_hc > 1: hc = lab_hc == (np.bincount(lab_hc.ravel())[1:].argmax() + 1)
+        hc = ndimage.binary_fill_holes(hc)
+        print(f"[p7] hull: cleaned 256^3 hull in {_time.time()-t_start:.0f}s", flush=True)
+
+        # Downsample to res^3
+        if res < N_full and N_full % res == 0:
+            f_ds = N_full // res
+            hs = hc.reshape(res, f_ds, res, f_ds, res, f_ds).max(axis=(1, 3, 5))
+        elif res == N_full:
+            hs = hc.copy()
+        else:
+            from scipy.ndimage import zoom as _zoom
+            hs = _zoom(hc.astype(float), res / N_full, order=0).astype(bool)
+
+        g0 = _genus_solid(hs)
+        g_mesh = genus(V, F)
+        n_needed = (g_target - g_mesh) if g_target is not None else g0
+        print(f"[p7] hull: {res}^3 genus_solid={g0}, mesh_genus={g_mesh}, need={n_needed}", flush=True)
+
+        plugs_raw = []
+        if n_needed > 0 and g0 > 0:
+            pitch_xyz = (hi_w - lo_w) / (res - 1)
+            edt_bg = ndimage.distance_transform_edt(~hs).astype(np.float32)
+            S26 = np.ones((3, 3, 3), dtype=bool)
+            claimed = np.zeros_like(hs, dtype=bool)
+
+            for R in range(4, 41, 2):
+                cur = hs | claimed
+                gcur = _genus_solid(cur)
+                if gcur == 0: break
+                if len(plugs_raw) >= n_needed: break
+
+                dil = edt_bg <= R
+                edt_dil = ndimage.distance_transform_edt(dil).astype(np.float32)
+                D = dil & (edt_dil > R) & ~hs & ~claimed   # new region from morphological closing
+
+                lab_d, n_lab = ndimage.label(D, structure=S26)
+                if n_lab == 0:
+                    print(f"[p7] hull R={R}: no new region gcur={gcur} ({_time.time()-t_start:.0f}s)", flush=True)
+                    continue
+                sizes = np.bincount(lab_d.ravel())[1:]
+
+                for c_idx in np.argsort(-sizes):
+                    if sizes[c_idx] < 50: break
+                    if len(plugs_raw) >= n_needed: break
+                    comp = lab_d == (c_idx + 1)
+                    dg = _genus_solid(cur | comp) - gcur
+
+                    if dg == 0:
+                        continue
+                    elif dg == -1:
+                        pieces_list = [comp]
+                    elif dg <= -2:
+                        # Greedy-merge watershed for merged plugs
+                        edt_c = ndimage.distance_transform_edt(comp).astype(np.float32)
+                        pk = feature.peak_local_max(edt_c, min_distance=6,
+                                                    labels=comp.astype(int), exclude_border=False)
+                        if len(pk) == 0:
+                            pieces_list = [comp]
+                        else:
+                            mk = np.zeros(comp.shape, int)
+                            mk[tuple(pk.T)] = np.arange(1, len(pk) + 1)
+                            ws_labels = segmentation.watershed(-edt_c, mk, mask=comp)
+
+                            remaining = set(range(1, len(pk) + 1))
+                            pieces_list = []
+                            S6 = ndimage.generate_binary_structure(3, 1)
+
+                            _g_base = _genus_solid(hs | claimed)
+                            while remaining:
+                                best_start = max(remaining,
+                                    key=lambda pi: float(edt_c[ws_labels == pi].max()) if (ws_labels == pi).any() else 0)
+                                union = ws_labels == best_start
+                                remaining.discard(best_start)
+
+                                for _iter in range(len(remaining) + 2):
+                                    dg_u = _genus_solid(hs | claimed | union) - _g_base
+                                    if dg_u == -1:
+                                        pieces_list.append(union.copy()); break
+                                    elif dg_u < -1:
+                                        break  # over-merged: this seed bridges too many tunnels
+                                    elif remaining:
+                                        # dg_u == 0: not yet bridging a tunnel, merge more adjacent
+                                        udil = ndimage.binary_dilation(union, S6, iterations=1)
+                                        adj = [pi for pi in remaining
+                                               if (ws_labels == pi)[udil].any()]
+                                        if not adj: break
+                                        best_adj = max(adj,
+                                            key=lambda pi: float(edt_c[ws_labels == pi].max()) if (ws_labels == pi).any() else 0)
+                                        union = union | (ws_labels == best_adj)
+                                        remaining.discard(best_adj)
+                                    else:
+                                        break
+
+                            print(f"[p7] hull R={R} merged dg={dg}: "
+                                  f"watershed+greedy -> {len(pieces_list)} plugs "
+                                  f"({len(pk)} watershed pieces)", flush=True)
+                    else:
+                        continue
+
+                    for piece in pieces_list:
+                        if len(plugs_raw) >= n_needed: break
+                        dgp = (_genus_solid(hs | claimed | piece)
+                               - _genus_solid(hs | claimed))
+                        if dgp != -1: continue
+
+                        # Throat isolation: sub-blob = plug voxels within 1.5x
+                        # throat_r of the EDT maximum (spec)
+                        edt_p = ndimage.distance_transform_edt(piece).astype(np.float32)
+                        throat_r = float(edt_p.max())
+                        if throat_r < 1.5: continue
+
+                        # EDT peak = center of the throat
+                        peak_idx = np.unravel_index(edt_p.argmax(), edt_p.shape)
+                        peak_vox = np.array(peak_idx, dtype=float)
+
+                        # Sub-blob: voxels within 1.5 * throat_r spatial distance of peak
+                        pts_all = np.array(np.nonzero(piece)).T.astype(float)
+                        dists_to_peak = np.linalg.norm(pts_all - peak_vox[None, :], axis=1)
+                        sub_mask = dists_to_peak <= 1.5 * throat_r
+                        pts = pts_all[sub_mask] if sub_mask.sum() >= 10 else pts_all
+
+                        cen_vox = pts.mean(0)
+                        if len(pts) > 3:
+                            ev, evec = np.linalg.eigh(np.cov(pts.T))
+                        else:
+                            ev, evec = np.ones(3), np.eye(3)
+                        axis_vox = evec[:, 0]  # smallest variance = tunnel axis
+                        is_disk = bool(ev[1] > 0 and ev[0] < ev[1])
+
+                        cen_w = vox2world(cen_vox)
+                        peak_w = vox2world(peak_vox)
+                        axis_w = axis_vox * pitch_xyz
+                        aw_n = float(np.linalg.norm(axis_w))
+                        axis_w = axis_w / (aw_n + 1e-12)
+
+                        claimed |= piece
+                        key = ["hull", [round(float(x), 3) for x in cen_w]]
+                        plugs_raw.append({
+                            "R": int(R), "key": key,
+                            "cen_vox": cen_vox.tolist(), "cen_w": cen_w.tolist(),
+                            "peak_w": peak_w.tolist(),
+                            "axis_w": axis_w.tolist(), "is_disk": is_disk,
+                            "size": int(piece.sum()), "throat_r": float(throat_r),
+                        })
+                        print(f"[p7] hull R={R:2d} PLUG size={int(piece.sum()):6d} "
+                              f"cen_vox={np.round(cen_vox,1)} is_disk={is_disk} "
+                              f"throat_r={throat_r:.1f} axis={np.round(axis_w,2)}", flush=True)
+
+                print(f"[p7] hull R={R}: genus_remain={_genus_solid(hs|claimed)} "
+                      f"plugs={len(plugs_raw)}/{n_needed} ({_time.time()-t_start:.0f}s)", flush=True)
+
+        print(f"[p7] hull plugs: {len(plugs_raw)} found (R ladder) "
+              f"target={n_needed} in {_time.time()-t_start:.0f}s", flush=True)
+
+        if HULL_PLUGS_CACHE:
+            try:
+                os.makedirs(os.path.dirname(HULL_PLUGS_CACHE) or ".", exist_ok=True)
+                _json.dump(plugs_raw, open(HULL_PLUGS_CACHE, "w"))
+                print(f"[p7] hull: cached to {HULL_PLUGS_CACHE}", flush=True)
+            except Exception as _e:
+                print(f"[p7] hull: cache write failed ({_e})", flush=True)
+
+    # ── Ray-cast face pairs for each unclaimed plug ─────────────────────────────
+    sc = o3d.t.geometry.RaycastingScene()
+    sc.add_triangles(o3d.t.geometry.TriangleMesh(
+        o3d.core.Tensor(V.astype(np.float32)),
+        o3d.core.Tensor(F.astype(np.int32))))
+    # Use a low OUT_VOX threshold for hull mode: coarse meshes have membrane faces
+    # barely outside the hull (< 1 voxel), while the default OUT_VOX=4 is tuned for
+    # the rays detector on refined meshes.  0.5 voxels catches them reliably.
+    comp_mp, chi_mp = membrane_patches(V, F, out_vox_override=0.5)
+
+    E_all = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]])
+    me_hull = np.linalg.norm(V[E_all[:, 0]] - V[E_all[:, 1]], axis=1).mean()
+
+    def _is_dedup(cen_w_chk, key_chk=None):
+        for h in prev_handles:
+            if not isinstance(h, dict): continue
+            if key_chk is not None and h.get("blob") == key_chk:
+                return True
+            mid = h.get("mid")
+            if mid is not None and np.linalg.norm(np.asarray(mid) - np.asarray(cen_w_chk)) < R_DEDUP * me_hull:
+                return True
+        return False
+
+    result_list = []
+    n_dedup = n_no_face = 0
+
+    tri_cen = V[F].mean(1)   # [F, 3]  face centroids
+
+    for p in plugs_raw:
+        cen_w = np.asarray(p["cen_w"])
+        axis_w = np.asarray(p["axis_w"])
+        key = p["key"]
+        R = p["R"]
+        is_disk = p.get("is_disk", True)
+        throat_r = p.get("throat_r", 2.0)
+        peak_w = np.asarray(p.get("peak_w", p["cen_w"]))
+
+        if _is_dedup(cen_w, key):
+            n_dedup += 1
+            print(f"[p7] hull plug R={R} at {np.round(cen_w,3)}: dedup skip", flush=True)
+            continue
+
+        # ── Strategy 1: proximity-based pair from membrane patches ────────────
+        # Find membrane disk faces near the plug, grouped by patch (connected
+        # component). Pick the closest face from each of the two nearest patches.
+        # Grouping by patch instead of axis side handles boundary plugs where
+        # both membrane sheets project onto the same axis side.
+        cen_vox_ref = world2vox(cen_w)
+        peak_vox_ref = world2vox(peak_w)
+        from collections import defaultdict as _ddict
+        patch_faces_near = _ddict(list)   # root -> [(fi, dist)]
+        for fi, root in comp_mp.items():
+            if chi_mp.get(root) != 1: continue   # only disk patches
+            fc = tri_cen[fi]
+            fc_vox = world2vox(fc)
+            d_cen = float(np.linalg.norm(fc_vox - cen_vox_ref))
+            d_peak = float(np.linalg.norm(fc_vox - peak_vox_ref))
+            d_min = min(d_cen, d_peak)
+            if d_min > 50: continue  # sanity limit
+            patch_faces_near[root].append((fi, d_min))
+
+        # Sort patches by distance of their closest face to the plug
+        patch_order = sorted(patch_faces_near.keys(),
+            key=lambda r: min(d for _, d in patch_faces_near[r]))
+
+        fi_fj = None
+        # Try pairs from distinct patches (closest two patches first)
+        for pi_idx in range(len(patch_order)):
+            if fi_fj is not None: break
+            for pj_idx in range(pi_idx + 1, len(patch_order)):
+                if fi_fj is not None: break
+                ri = patch_order[pi_idx]; rj = patch_order[pj_idx]
+                for fi_c, _ in sorted(patch_faces_near[ri], key=lambda x: x[1]):
+                    if fi_fj is not None: break
+                    for fj_c, _ in sorted(patch_faces_near[rj], key=lambda x: x[1]):
+                        if fi_c == fj_c: continue
+                        if set(F[fi_c]) & set(F[fj_c]): continue
+                        fi_fj = (fi_c, fj_c, tri_cen[fi_c].copy(), tri_cen[fj_c].copy())
+                        break
+
+        # ── Strategy 2: ray-cast fallback ─────────────────────────────────────
+        if fi_fj is None:
+            sample_pts = [peak_w, cen_w]
+            for origin in [peak_w, cen_w]:
+                for t_frac in np.linspace(-1.0, 1.0, 12):
+                    sample_pts.append(origin + t_frac * float(throat_r) * float(HF_in.pitch) * axis_w)
+
+            for pt in sample_pts:
+                if fi_fj is not None: break
+                hits_pair = []
+                for sgn in (+1, -1):
+                    dvec = (sgn * axis_w).astype(np.float32)
+                    ray = o3d.core.Tensor(np.concatenate([pt.astype(np.float32), dvec])[None])
+                    h_res = sc.cast_rays(ray)
+                    t_hit = float(h_res["t_hit"].numpy()[0])
+                    fi_hit = int(h_res["primitive_ids"].numpy()[0]) if np.isfinite(t_hit) else -1
+                    hits_pair.append(fi_hit)
+
+                fi_h, fj_h = hits_pair
+                if fi_h < 0 or fj_h < 0 or fi_h == fj_h: continue
+                if set(F[fi_h]) & set(F[fj_h]): continue
+                ki = comp_mp.get(fi_h); kj = comp_mp.get(fj_h)
+                if ki is None or kj is None: continue
+                if chi_mp.get(ki) != 1 or chi_mp.get(kj) != 1: continue
+                ci_w = V[F[fi_h]].mean(0); cj_w = V[F[fj_h]].mean(0)
+                if np.linalg.norm(world2vox(ci_w) - cen_vox_ref) > 50: continue
+                if np.linalg.norm(world2vox(cj_w) - cen_vox_ref) > 50: continue
+                fi_fj = (fi_h, fj_h, ci_w, cj_w)
+
+        if fi_fj is None:
+            n_no_face += 1
+            print(f"[p7] hull plug R={R} at {np.round(cen_w,3)}: no valid face pair "
+                  f"({len(patch_faces_near)} patches near), rays fallback", flush=True)
+            continue
+
+        fi_r, fj_r, ci_r, cj_r = fi_fj
+        print(f"[p7] hull plug R={R}: accepted faces {fi_r},{fj_r} sep={np.linalg.norm(cj_r-ci_r):.3f}", flush=True)
+        result_list.append((fi_r, fj_r, ci_r, cj_r, key))
+
+    g_mesh_cur = genus(V, F)
+    print(f"[p7] hull plugs: {len(plugs_raw)} found (R=..), {len(result_list)} accepted "
+          f"(skip: {n_dedup} dedup, {n_no_face} !face), "
+          f"genus {g_mesh_cur} -> {g_mesh_cur + len(result_list)}", flush=True)
+    return result_list
+
+
 report("base", V, Fa); _snap(f"Stage 7 [genus discovery] base genus={genus(V, Fa)}", V, Fa)
 import json
 prev_handles = json.load(open(HANDLES_JSON)) if HANDLES_JSON and os.path.exists(HANDLES_JSON) else []
 n_added = 0
 MODE_BRIDGE = False
-for k in range(MAX_HANDLES):
+# When DETECT=hull, override MAX_HANDLES so phase7_multi.sh's MAX_HANDLES=1
+# doesn't prevent adding multiple hull handles in one invocation (spec: "add ALL
+# returned handles in that round").  find_tunnel_by_hull is called fresh each
+# iteration because add_handle modifies V/Fa and invalidates face indices.
+_hull_max = MAX_HANDLES if DETECT != "hull" else max(MAX_HANDLES, G_TARGET if G_TARGET else MAX_HANDLES)
+for k in range(_hull_max):
     MODE_BRIDGE = False
     if G_TARGET is not None and genus(V, Fa) >= G_TARGET:
         print(f"[p7] genus {genus(V, Fa)} == target g*={G_TARGET}: no more handles", flush=True); break
-    if DETECT == "rays":
+    if DETECT == "hull":
+        _hull_cands = find_tunnel_by_hull(V, Fa, HF, prev_handles, G_TARGET)
+        if _hull_cands:
+            hit = _hull_cands[0]
+            i, j, _ci, _cj, _blob = hit
+            tri = V[Fa]; cen = tri.mean(1); d = hdist(cen)
+            negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
+            print(f"[p7] tunnel-evidence pairs: 1 (hull)", flush=True)
+        elif G_TARGET is not None and genus(V, Fa) < G_TARGET:
+            # Hull candidates exhausted or no valid face pair: fall back to rays
+            print(f"[p7] hull: 0 valid candidates, genus {genus(V, Fa)} < g*={G_TARGET}: rays fallback", flush=True)
+            hit = None
+            for _lv, (_mp, _ov) in enumerate(RELAX):
+                OUT_VOX = _ov
+                hit = find_tunnel_by_rays(V, Fa, min_px=int(_mp), prev_handles=prev_handles)
+                if hit is not None:
+                    if _lv > 0: print(f"[p7] rays fallback at relaxation level {_lv} (min_px {_mp}, out_vox {_ov})", flush=True)
+                    break
+            if hit is None and int(os.environ.get("BRIDGE", "0")):
+                hit = find_bridge(V, Fa)
+                if hit is not None: MODE_BRIDGE = True
+            if hit is None and int(os.environ.get("CONTACT", "1")):
+                hit = find_contact_join(V, Fa, prev_handles=prev_handles)
+                if hit is not None: MODE_BRIDGE = True
+            if hit is None:
+                print(f"[p7] tunnel-evidence pairs: 0 (genus {genus(V, Fa)} < g*={G_TARGET}: UNREACHED)", flush=True); break
+            i, j, _ci, _cj, _blob = hit
+            tri = V[Fa]; cen = tri.mean(1); d = hdist(cen)
+            negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
+            print(f"[p7] tunnel-evidence pairs: 1 (ray fallback)", flush=True)
+        else:
+            print(f"[p7] tunnel-evidence pairs: 0", flush=True); break
+    elif DETECT == "rays":
         hit = None
         for _lv, (_mp, _ov) in enumerate(RELAX if G_TARGET is not None else RELAX[:1]):
             OUT_VOX = _ov
@@ -568,7 +945,7 @@ for k in range(MAX_HANDLES):
         if PROJECT:
             V, mv = radial_project(V, a0, u, L_, tube_verts); print(f"[p7] radial projection: moved {mv} verts", flush=True)
     n_added += 1
-    prev_handles.append({"mid": ((cen[i] + cen[j]) / 2).tolist(), "blob": _blob if DETECT == "rays" else None})
+    prev_handles.append({"mid": ((cen[i] + cen[j]) / 2).tolist(), "blob": _blob if DETECT in ("rays", "hull") else None})
     if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
     report(f"after handle {n_added}", V, Fa); _snap(f"Stage 7 [DLFL add_handle #{n_added}] genus={genus(V, Fa)}", V, Fa, hold=45)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
