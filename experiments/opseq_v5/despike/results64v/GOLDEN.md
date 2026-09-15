@@ -1,3 +1,24 @@
+# GOLDEN v5 (2026-09-14) — all five shapes, all-TopMod chain, genus discovered, C++ kernel + batched render
+**Chain**: `despike/golden_v3_chain.sh` (defaults now `DLFL_BACKEND=cpp`, `RENDER_BATCH=1`, `C2F_SUBDIV=cc`), run with `TAGP=v5`.
+Stages: sphere -> TopMod CC2/CC3 + DR | DLFL clean 400 | genus discovery (rays + space-carved-hull target g*) |
+CC4 + despike | Palfinger-param loop 1200 | late genus pass (contact join) | LAP x3 loop 1200 | AUTO Taubin | exam.
+Every topology change is a TopMod DLFL operator (C++ kernel, bit-identical to the Python reference).
+**Meshes**: `results_genus/<shape>_v5_auto.npz` (Taubin) / `<shape>_v5_raw.npz`; handles in `handles_<shape>_v5.json`.
+
+| shape | genus (GT) | ho16 | VolIoU | CD | V | wall |
+|---|---|---|---|---|---|---|
+| armadillo | 0 (0) | 0.9983 | 0.9949 | 0.00620 | 49.5k | 5.4 min |
+| kitten | 1 (1) | 0.9993 | 0.9979 | 0.00665 | 49.9k | 4.5 min |
+| fertility | 4 (4) | 0.9971 | 0.9908 | 0.00644 | 45.9k | 5.6 min |
+| rocker-arm | 1 (1) | 0.9985 | 0.9869 | 0.00615 | 54.3k | 4.3 min |
+| threeholes | 3 (3) | 0.9980 | 0.9915 | 0.00706 | 53.8k | 5.0 min |
+
+All watertight, SI 0 (fertility 0.2 %), hair 0. Fertility genus stable over 3 independent runs (4/4/4).
+Competitors (same GPU): Palfinger 3.6 min armadillo (genus fixed), Nicolet 4.7-15.4 (genus 0 always), DMesh 12-20 (soup).
+History: v4 (2026-09-13) = same algorithm on the Python backend (120 min/shape), kept as the equivalence reference.
+Git tag: `golden-v5`. Details: LESSONS §23-29.
+
+---
 # GOLDEN v3 (2026-09-08) — armadillo, same 64-view setup, Palfinger optimizer params on the DLFL loop
 **Mesh**: `cow_armadillo_golden_v3.npz` (Taubin) / `cow_armadillo_golden_v3_raw.npz` (no Taubin) — V=49,795 F=99,586, watertight, genus 0, **SI 0 %**
 **Exam**: ho16 **0.9983** (raw 0.9978), **VolIoU 0.9948** (raw 0.9943), CD 0.00620 — beats Palfinger 2022 original code (0.9965 / 0.9938 / 0.00678, 37.9k V) on all three; DMesh 0.9894 / 0.9634; Nicolet 0.9593 / 0.8985.
