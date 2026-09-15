@@ -515,6 +515,8 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
             edt_bg = ndimage.distance_transform_edt(~hs).astype(np.float32)
             S26 = np.ones((3, 3, 3), dtype=bool)
             claimed = np.zeros_like(hs, dtype=bool)
+            prev_close = hs.copy()            # closing at the previous radius (increment base)
+            if os.environ.get("HULL_VIZ_DIR"): np.save(os.path.join(os.environ["HULL_VIZ_DIR"], "hull_ds.npy"), hs)
 
             for R in range(4, 41, 2):
                 cur = hs | claimed
@@ -524,7 +526,10 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
 
                 dil = edt_bg <= R
                 edt_dil = ndimage.distance_transform_edt(dil).astype(np.float32)
-                D = dil & (edt_dil > R) & ~hs & ~claimed   # new region from morphological closing
+                close_R = dil & (edt_dil > R)
+                incr = close_R & ~prev_close        # voxels added at THIS radius only (fillets from lower R excluded)
+                prev_close = close_R
+                D = close_R & ~hs & ~claimed   # cumulative region from morphological closing (acceptance test)
 
                 lab_d, n_lab = ndimage.label(D, structure=S26)
                 if n_lab == 0:
@@ -606,11 +611,24 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
                         peak_idx = np.unravel_index(edt_p.argmax(), edt_p.shape)
                         peak_vox = np.array(peak_idx, dtype=float)
 
-                        # Sub-blob: voxels within 1.5 * throat_r spatial distance of peak
-                        pts_all = np.array(np.nonzero(piece)).T.astype(float)
-                        dists_to_peak = np.linalg.norm(pts_all - peak_vox[None, :], axis=1)
-                        sub_mask = dists_to_peak <= 1.5 * throat_r
-                        pts = pts_all[sub_mask] if sub_mask.sum() >= 10 else pts_all
+                        # Throat core = the part of this plug that was added at THIS closing radius
+                        # (the last sheet that sealed the tunnel): a thin disk across the throat.
+                        # Fillets filled at lower radii belong to the plug for the genus bookkeeping
+                        # but must not bias the centre/axis. Largest 26-component of the increment.
+                        core = piece & incr
+                        if core.sum() >= 10:
+                            lab_k, nk = ndimage.label(core, structure=S26)
+                            if nk > 1: core = lab_k == (np.bincount(lab_k.ravel())[1:].argmax() + 1)
+                        if core.sum() >= 10:
+                            pts = np.array(np.nonzero(core)).T.astype(float)
+                            peak_vox = pts.mean(0)              # disk centroid = tunnel centre
+                            core_mask = core
+                        else:                                   # fallback: EDT-peak sub-blob (old rule)
+                            pts_all = np.array(np.nonzero(piece)).T.astype(float)
+                            dists_to_peak = np.linalg.norm(pts_all - peak_vox[None, :], axis=1)
+                            sub_mask = dists_to_peak <= 1.5 * throat_r
+                            pts = pts_all[sub_mask] if sub_mask.sum() >= 10 else pts_all
+                            core_mask = piece
 
                         cen_vox = pts.mean(0)
                         if len(pts) > 3:
@@ -627,6 +645,9 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
                         axis_w = axis_w / (aw_n + 1e-12)
 
                         claimed |= piece
+                        if os.environ.get("HULL_VIZ_DIR"):
+                            np.save(os.path.join(os.environ["HULL_VIZ_DIR"], f"plug{len(plugs_raw)}_vox.npy"), np.argwhere(core_mask))
+                            np.save(os.path.join(os.environ["HULL_VIZ_DIR"], f"plug{len(plugs_raw)}_full.npy"), np.argwhere(piece))
                         key = ["hull", [round(float(x), 3) for x in cen_w]]
                         plugs_raw.append({
                             "R": int(R), "key": key,
