@@ -1,3 +1,28 @@
+# GOLDEN v6 (2026-09-15) — all five shapes, handles LOCATED by the space-carved hull (no rays), same chain otherwise
+**Chain**: `despike/golden_v3_chain.sh` run with `TAGP=v6c`; identical to v5 except Stage 3 / 5b tunnel location now uses
+`despike/hull_locate.py` (`DETECT=hull`, default) instead of ray casting. Ray detector kept only as a fallback — never triggered on the five shapes.
+`hull_locate.py` (Boss's formulation): closing-radius ladder R=4..40 on the cleaned 128^3 voting hull; a genus drop at radius R
+yields a sealing sheet (= essential increment component: removing it re-opens the tunnel); accepted plugs are FROZEN into the
+closing source so later radii cannot re-claim them (structural mutual exclusion, fixes the threeholes double-plug); tunnel axis
+from sheet shape (cylinder long axis / disk normal / skeleton centreline for S-shaped tunnels); the face pair comes from an
+occupancy walk along the axis/centreline (out->in and in->out crossings -> nearest triangles) with the crossings required to lie
+in hull air. Every handle is then added with the TopMod DLFL `add_handle` operator as before.
+**Meshes**: `results_genus/<shape>_v6c_auto.npz` (Taubin) / `<shape>_v6c_raw.npz`; handles in `handles_<shape>_v6c.json` (source `hull` for all 9 handles).
+
+| shape | genus (GT) | handles by hull | ho16 | VolIoU | CD | V | wall |
+|---|---|---|---|---|---|---|---|
+| armadillo | 0 (0) | 0 / 0 | 0.9982 | 0.9949 | 0.00617 | 49.4k | 12.2 min* |
+| kitten | 1 (1) | 1 / 1 | 0.9993 | 0.9977 | 0.00666 | 58.6k | 12.6 min* |
+| fertility | 4 (4) | 4 / 4 | 0.9973 | 0.9908 | 0.00647 | 46.6k | 16.9 min* |
+| rocker-arm | 1 (1) | 1 / 1 | 0.9984 | 0.9870 | 0.00615 | 49.5k | 4.5 min |
+| threeholes | 3 (3) | 3 / 3 | 0.9981 | 0.9915 | 0.00707 | 49.5k | 4.5 min |
+
+\* wall measured while another 20-23 GB job shared the GPU; uncontended chain time is the v5 figure (4.3-5.6 min) — the hull locator itself is < 60 s / shape.
+Scores equal v5 within 0.001 on every metric; genus 9/9 plugs = g* on all shapes, zero ray fallbacks, zero Stage-5b contact joins
+(v5 fertility needed one). All watertight, SI 0 (fertility 0.1 %), hair 0. Unit test `test_hull_locate.py` 5/5 (< 60 s per shape).
+Visualisation: `results_genus/hull_plugs_viz.png`. Git tag: `golden-v6`. Details: LESSONS §30-31, `HULL_LOCATE_SPEC.md`.
+
+---
 # GOLDEN v5 (2026-09-14) — all five shapes, all-TopMod chain, genus discovered, C++ kernel + batched render
 **Chain**: `despike/golden_v3_chain.sh` (defaults now `DLFL_BACKEND=cpp`, `RENDER_BATCH=1`, `C2F_SUBDIV=cc`), run with `TAGP=v5`.
 Stages: sphere -> TopMod CC2/CC3 + DR | DLFL clean 400 | genus discovery (rays + space-carved-hull target g*) |
