@@ -528,6 +528,7 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
                 edt_dil = ndimage.distance_transform_edt(dil).astype(np.float32)
                 close_R = dil & (edt_dil > R)
                 incr = close_R & ~prev_close        # voxels added at THIS radius only (fillets from lower R excluded)
+                base_R = prev_close | claimed         # everything sealed before this radius
                 prev_close = close_R
                 D = close_R & ~hs & ~claimed   # cumulative region from morphological closing (acceptance test)
 
@@ -617,8 +618,19 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
                         # but must not bias the centre/axis. Largest 26-component of the increment.
                         core = piece & incr
                         if core.sum() >= 10:
+                            # ESSENTIAL component: the increment component whose removal re-opens the
+                            # tunnel (genus(base | piece - c) > genus(base | piece)). The largest one is
+                            # NOT necessarily it (threeholes: the plug sealing the left hole had its
+                            # largest increment piece sitting in the middle hole).
                             lab_k, nk = ndimage.label(core, structure=S26)
-                            if nk > 1: core = lab_k == (np.bincount(lab_k.ravel())[1:].argmax() + 1)
+                            g_full = _genus_solid(base_R | piece)
+                            chosen = None
+                            for kk in np.argsort(-np.bincount(lab_k.ravel())[1:]):
+                                ck = lab_k == (kk + 1)
+                                if ck.sum() < 10: break
+                                if _genus_solid(base_R | (piece & ~ck)) > g_full:   # removing it un-seals
+                                    chosen = ck; break
+                            core = chosen if chosen is not None else (lab_k == (np.bincount(lab_k.ravel())[1:].argmax() + 1))
                         if core.sum() >= 10:
                             pts = np.array(np.nonzero(core)).T.astype(float)
                             peak_vox = pts.mean(0)              # disk centroid = tunnel centre
@@ -635,7 +647,25 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
                             ev, evec = np.linalg.eigh(np.cov(pts.T))
                         else:
                             ev, evec = np.ones(3), np.eye(3)
-                        axis_vox = evec[:, 0]  # smallest variance = tunnel axis
+                        # Tunnel axis = direction of the longest FREE PATH through the hull air from the
+                        # plug centre (the tunnel is air in the clean hull). PCA of the plug is ambiguous:
+                        # thin membrane -> shortest axis, thick slab -> longest axis. Free path is not.
+                        _c0 = pts.mean(0); _dirs = []; _lens = []
+                        _k = np.arange(200); _z = 1 - 2 * (_k + 0.5) / 200; _r = np.sqrt(1 - _z * _z); _ph = _k * 2.399963
+                        for _d in np.stack([_r * np.cos(_ph), _r * np.sin(_ph), _z], 1):
+                            _L = 0
+                            for _s in (1.0, -1.0):
+                                _p = _c0.copy()
+                                for _step in range(res):
+                                    _p = _p + _s * _d; _q = np.round(_p).astype(int)
+                                    if _q.min() < 0 or _q.max() >= res or hs[tuple(_q)]: break
+                                    _L += 1
+                            _dirs.append(_d); _lens.append(_L)
+                        _lens = np.asarray(_lens); _dirs = np.asarray(_dirs)
+                        _top = _dirs[_lens >= 0.9 * _lens.max()]
+                        _top = _top * np.sign(_top @ _top[0])[:, None]      # fold antipodal directions
+                        _best = _top.mean(0); _bn = np.linalg.norm(_best)
+                        axis_vox = _best / _bn if _bn > 1e-6 else evec[:, 0]
                         is_disk = bool(ev[1] > 0 and ev[0] < ev[1])
 
                         cen_w = vox2world(cen_vox)
@@ -716,46 +746,10 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
             print(f"[p7] hull plug R={R} at {np.round(cen_w,3)}: dedup skip", flush=True)
             continue
 
-        # ── Strategy 1: proximity-based pair from membrane patches ────────────
-        # Find membrane disk faces near the plug, grouped by patch (connected
-        # component). Pick the closest face from each of the two nearest patches.
-        # Grouping by patch instead of axis side handles boundary plugs where
-        # both membrane sheets project onto the same axis side.
-        cen_vox_ref = world2vox(cen_w)
-        peak_vox_ref = world2vox(peak_w)
-        from collections import defaultdict as _ddict
-        patch_faces_near = _ddict(list)   # root -> [(fi, dist)]
-        for fi, root in comp_mp.items():
-            if chi_mp.get(root) != 1: continue   # only disk patches
-            fc = tri_cen[fi]
-            fc_vox = world2vox(fc)
-            d_cen = float(np.linalg.norm(fc_vox - cen_vox_ref))
-            d_peak = float(np.linalg.norm(fc_vox - peak_vox_ref))
-            d_min = min(d_cen, d_peak)
-            if d_min > 50: continue  # sanity limit
-            patch_faces_near[root].append((fi, d_min))
-
-        # Sort patches by distance of their closest face to the plug
-        patch_order = sorted(patch_faces_near.keys(),
-            key=lambda r: min(d for _, d in patch_faces_near[r]))
-
+        cen_vox_ref = world2vox(cen_w); peak_vox_ref = world2vox(peak_w); patch_faces_near = {}
+        # ── Strategy A: rays from the plug centre along +-tunnel axis (free-path axis) ─────────────────────────────────────
         fi_fj = None
-        # Try pairs from distinct patches (closest two patches first)
-        for pi_idx in range(len(patch_order)):
-            if fi_fj is not None: break
-            for pj_idx in range(pi_idx + 1, len(patch_order)):
-                if fi_fj is not None: break
-                ri = patch_order[pi_idx]; rj = patch_order[pj_idx]
-                for fi_c, _ in sorted(patch_faces_near[ri], key=lambda x: x[1]):
-                    if fi_fj is not None: break
-                    for fj_c, _ in sorted(patch_faces_near[rj], key=lambda x: x[1]):
-                        if fi_c == fj_c: continue
-                        if set(F[fi_c]) & set(F[fj_c]): continue
-                        fi_fj = (fi_c, fj_c, tri_cen[fi_c].copy(), tri_cen[fj_c].copy())
-                        break
-
-        # ── Strategy 2: ray-cast fallback ─────────────────────────────────────
-        if fi_fj is None:
+        if True:
             sample_pts = [peak_w, cen_w]
             for origin in [peak_w, cen_w]:
                 for t_frac in np.linspace(-1.0, 1.0, 12):
@@ -782,6 +776,44 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
                 if np.linalg.norm(world2vox(ci_w) - cen_vox_ref) > 50: continue
                 if np.linalg.norm(world2vox(cj_w) - cen_vox_ref) > 50: continue
                 fi_fj = (fi_h, fj_h, ci_w, cj_w)
+
+        if fi_fj is None:
+            # ── Strategy B (fallback): proximity-based pair from membrane patches ────────────
+            # Find membrane disk faces near the plug, grouped by patch (connected
+            # component). Pick the closest face from each of the two nearest patches.
+            # Grouping by patch instead of axis side handles boundary plugs where
+            # both membrane sheets project onto the same axis side.
+            cen_vox_ref = world2vox(cen_w)
+            peak_vox_ref = world2vox(peak_w)
+            from collections import defaultdict as _ddict
+            patch_faces_near = _ddict(list)   # root -> [(fi, dist)]
+            for fi, root in comp_mp.items():
+                if chi_mp.get(root) != 1: continue   # only disk patches
+                fc = tri_cen[fi]
+                fc_vox = world2vox(fc)
+                d_cen = float(np.linalg.norm(fc_vox - cen_vox_ref))
+                d_peak = float(np.linalg.norm(fc_vox - peak_vox_ref))
+                d_min = min(d_cen, d_peak)
+                if d_min > 50: continue  # sanity limit
+                patch_faces_near[root].append((fi, d_min))
+
+            # Sort patches by distance of their closest face to the plug
+            patch_order = sorted(patch_faces_near.keys(),
+                key=lambda r: min(d for _, d in patch_faces_near[r]))
+
+            # Try pairs from distinct patches (closest two patches first)
+            for pi_idx in range(len(patch_order)):
+                if fi_fj is not None: break
+                for pj_idx in range(pi_idx + 1, len(patch_order)):
+                    if fi_fj is not None: break
+                    ri = patch_order[pi_idx]; rj = patch_order[pj_idx]
+                    for fi_c, _ in sorted(patch_faces_near[ri], key=lambda x: x[1]):
+                        if fi_fj is not None: break
+                        for fj_c, _ in sorted(patch_faces_near[rj], key=lambda x: x[1]):
+                            if fi_c == fj_c: continue
+                            if set(F[fi_c]) & set(F[fj_c]): continue
+                            fi_fj = (fi_c, fj_c, tri_cen[fi_c].copy(), tri_cen[fj_c].copy())
+                            break
 
         if fi_fj is None:
             n_no_face += 1
