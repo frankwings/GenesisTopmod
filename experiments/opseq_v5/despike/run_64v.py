@@ -353,13 +353,14 @@ HULL_INIT_SMOOTH = float(os.environ.get("HULL_INIT_SMOOTH", "0.5"))   # uniform-
 S1_STEPS = int(os.environ.get("S1_STEPS", "800"))            # DR steps per Stage-1 level (cc2, cc3)
 
 
-def hull_init_project(ctx, mvps, gv, gf, v, t):
+def hull_init_project(ctx, mvps, gv, gf, v, t, HF=None):
     """Soft projection of the init mesh onto the voting hull surface: iterate
     (move each vertex by a fraction of its signed hull distance along the field gradient,
     then blend with the uniform Laplacian). Uses only the 64 training silhouettes."""
-    from hull_field import build_vote_hull
-    gvn = normalize_to_range(gv)
-    HF = build_vote_hull(ctx, mvps, gvn, gf, np.asarray(v), DEVICE, nres=256, hires=512, vote=2)
+    if HF is None:
+        from hull_field import build_vote_hull
+        gvn = normalize_to_range(gv)
+        HF = build_vote_hull(ctx, mvps, gvn, gf, np.asarray(v), DEVICE, nres=256, hires=512, vote=2)
     tt = np.asarray(t, np.int64); n = len(v)
     nb = [[] for _ in range(n)]
     for a, b, c in tt: nb[a] += [b, c]; nb[b] += [a, c]; nb[c] += [a, b]
@@ -384,26 +385,46 @@ def hull_init_project(ctx, mvps, gv, gf, v, t):
 
 
 def main():
-    global _MVPS, _GT
+    global _MVPS, _GT, W_DIFF, W_DEPTH
     _SEED = int(os.environ.get("SEED", "0")); torch.manual_seed(_SEED); np.random.seed(_SEED)
     ctx = dr.RasterizeCudaContext()
-    # bootstrap: need max_radius before cameras -> load GT once
-    gv, _gf = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
-    max_r = float(np.linalg.norm(normalize_to_range(gv), axis=1).max())
-    mvps, views = star_cameras(max_r)
-    gt, gtd, gtdiff, _ = make_gt(ctx, mvps, views, SHAPE)
-    _MVPS, _GT = mvps, gt
+    _real_scene = None
+    REAL_DATA = os.environ.get("REAL_DATA", "")
+    if REAL_DATA:
+        from real_scene import load_real_scene
+        _real_scene = load_real_scene(REAL_DATA, DEVICE)
+        mvps, views = _real_scene.mvps, _real_scene.views
+        gt, gtd, gtdiff, max_r = _real_scene.gt, _real_scene.gtd, _real_scene.gtdiff, _real_scene.max_r
+        _MVPS, _GT = mvps, gt
+        W_DIFF = 0.0; W_DEPTH = 0.0
+        import phase1b_pipeline as _p1b; _p1b.heldout_exam = _real_scene.heldout_exam
+        print(f"[run_64v] REAL_DATA={REAL_DATA}: forced W_DEPTH=0 W_DIFF=0", flush=True)
+    else:
+        # bootstrap: need max_radius before cameras -> load GT once
+        gv, _gf = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
+        max_r = float(np.linalg.norm(normalize_to_range(gv), axis=1).max())
+        mvps, views = star_cameras(max_r)
+        gt, gtd, gtdiff, _ = make_gt(ctx, mvps, views, SHAPE)
+        _MVPS, _GT = mvps, gt
     print(f"[run_64v] max_r={max_r:.3f} R={2*max_r:.3f} gt shapes "
           f"{gt.shape} {gtd.shape} {gtdiff.shape}", flush=True)
 
-    scene = setup_scene(SHAPE, DEVICE)  # only for init icosphere
-    v, t = scene["init_verts"], scene["init_tris"]; polys = None
-    if C2F_SUBDIV == "cc":
+    if REAL_DATA:
         import cc_subdiv; v, polys, t = cc_subdiv.icosphere_cc2()
-        print(f"[run_64v] C2F_SUBDIV=cc: TopMod icosphere cc2 V={len(v)} quads={len(polys)} tris={len(t)}", flush=True)
+        print(f"[run_64v] REAL_DATA CC icosphere: V={len(v)} quads={len(polys)} tris={len(t)}", flush=True)
+    else:
+        scene = setup_scene(SHAPE, DEVICE)  # only for init icosphere
+        v, t = scene["init_verts"], scene["init_tris"]; polys = None
+        if C2F_SUBDIV == "cc":
+            import cc_subdiv; v, polys, t = cc_subdiv.icosphere_cc2()
+            print(f"[run_64v] C2F_SUBDIV=cc: TopMod icosphere cc2 V={len(v)} quads={len(polys)} tris={len(t)}", flush=True)
     viz_snap.snap(ctx, mvps, v, t, "Stage 1 [init icosphere]", hold=30)
     if HULL_INIT:
-        v = hull_init_project(ctx, mvps, gv, _gf, v, t)
+        if _real_scene:
+            _HF = _real_scene.hull(ctx, extra_pts=np.asarray(v))
+            v = hull_init_project(ctx, mvps, None, None, v, t, HF=_HF)
+        else:
+            v = hull_init_project(ctx, mvps, gv, _gf, v, t)
         viz_snap.snap(ctx, mvps, v, t, "Stage 1 [hull-projected init]", hold=30)
 
     def iou_fn(vv, ff):
@@ -427,11 +448,12 @@ def main():
         v, t, polys = _c2f(v, t, polys); _set_faces(t)
         v, _ = optimize_phase64(ctx, v, t, gt, gtd, gtdiff, mvps, views, S1_STEPS, "cc3",
                                 settle=True, use_tube=True)
+    _heldout_exam = _real_scene.heldout_exam if _real_scene else heldout_exam
     if os.environ.get("STOP_AFTER") == "cc3":
         # early-hole experiment: hand the cc3 mesh (1.9k faces) to the handle stage before any further subdivision
         t = np.asarray(t, np.int32)
         np.savez(f"{OUT}/cow_{TAG}.npz", verts=np.asarray(v, np.float64), tris=t)
-        ho, hair, mb = heldout_exam(ctx, v, t)
+        ho, hair, mb = _heldout_exam(ctx, v, t)
         print(f"[run_64v] STOP_AFTER=cc3: saved cow_{TAG}.npz V={len(v)} F={len(t)} ho16={ho:.4f} hair={hair}", flush=True)
         return
     v, t, polys = _c2f(v, t, polys); _set_faces(t)
@@ -455,7 +477,7 @@ def main():
         for x, y, z in v: fh.write(f"v {x} {y} {z}\n")
         for a, b, c in t: fh.write(f"f {a+1} {b+1} {c+1}\n")
     np.savez(f"{OUT}/cow_{TAG}.npz", verts=v, tris=t)
-    ho, hair, mb = heldout_exam(ctx, v, t)
+    ho, hair, mb = _heldout_exam(ctx, v, t)
     print(f"\n=== {TAG.upper()} RESULT ===")
     print(f"train64 IoU={iou_final:.4f} (post-train {iou_train:.4f})")
     print(f"heldout16: IoU={ho:.4f} hair_px={hair} maxblob={mb}")

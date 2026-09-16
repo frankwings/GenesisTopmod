@@ -41,10 +41,19 @@ OUTD = "/tmp/liou_cow_viz"
 if MODE == "64v":
     import run_64v
     ctx = dr.RasterizeCudaContext()
-    gv, gf = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
-    gvn = normalize_to_range(gv)
-    mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
-    gt, gtd, _, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
+    REAL_DATA = os.environ.get("REAL_DATA", "")
+    if REAL_DATA:
+        from real_scene import load_real_scene
+        _real_scene = load_real_scene(REAL_DATA, DEVICE)
+        mvps, views = _real_scene.mvps, _real_scene.views
+        gt, gtd = _real_scene.gt, _real_scene.gtd
+        p1b.heldout_exam = _real_scene.heldout_exam
+        heldout_exam = _real_scene.heldout_exam   # rebind the name imported at module top
+    else:
+        gv, gf = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
+        gvn = normalize_to_range(gv)
+        mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
+        gt, gtd, _, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
     cow_v13.N_VIEWS = 64
 else:
     scene = setup_scene(SHAPE, DEVICE)

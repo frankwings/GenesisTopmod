@@ -48,6 +48,33 @@ class HullField:
         return self._sample(self.vol_in, pts_t)
 
 
+def carve_hull(fgs, mvps, lo, hi, nres, hires, vote, device):
+    """Space-carving voxel loop shared by synthetic and real paths.
+
+    fgs   : list of N bool tensors [hires, hires] – True = foreground (inside object).
+    mvps  : list/tensor of N [4,4] MVP matrices that project world → clip for the hires image.
+    lo/hi : bbox of the voxel grid (length-3 arrays, world units).
+    Returns hull bool array [nres, nres, nres] (True = inside object)."""
+    axes = [torch.linspace(float(lo[a]), float(hi[a]), nres, device=device)
+            for a in range(3)]
+    gx, gy, gz = torch.meshgrid(*axes, indexing="ij")
+    P = torch.stack([gx, gy, gz], -1).view(-1, 3)
+    Ph = torch.cat([P, torch.ones(P.shape[0], 1, device=device)], 1)
+    votes = torch.zeros(P.shape[0], dtype=torch.uint8, device=device)
+    mvps_list = mvps if isinstance(mvps, (list, tuple)) else [mvps[i] for i in range(len(mvps))]
+    for i, mvp_i in enumerate(mvps_list):
+        mvp_t = mvp_i if isinstance(mvp_i, torch.Tensor) else torch.tensor(mvp_i, dtype=torch.float32, device=device)
+        clip = (mvp_t.to(device) @ Ph.T).T
+        w = clip[:, 3].clamp(min=1e-8)
+        x_ndc, y_ndc = clip[:, 0] / w, clip[:, 1] / w
+        ui = ((x_ndc + 1) * 0.5 * hires).long().clamp(0, hires - 1)
+        vi = ((y_ndc + 1) * 0.5 * hires).long().clamp(0, hires - 1)
+        inb = (x_ndc.abs() <= 1) & (y_ndc.abs() <= 1)
+        fg_i = fgs[i].to(device) if not fgs[i].is_cuda else fgs[i]
+        votes += (inb & ~fg_i[vi, ui]).to(torch.uint8)
+    return (votes < vote).view(nres, nres, nres).cpu().numpy()
+
+
 def build_vote_hull(ctx, mvps, gv_norm, gf, extra_pts, device,
                     nres=256, hires=512, vote=2, dilate=True, ss_thr=None):
     """dilate: 1px dilation of inside (safe but fat, hull/GT~1.13).
@@ -82,21 +109,7 @@ def build_vote_hull(ctx, mvps, gv_norm, gf, extra_pts, device,
             else:
                 fg = fg > 0
             fgs.append(fg)
-        axes = [torch.linspace(float(lo[a]), float(hi[a]), nres, device=device)
-                for a in range(3)]
-        gx, gy, gz = torch.meshgrid(*axes, indexing="ij")
-        P = torch.stack([gx, gy, gz], -1).view(-1, 3)
-        Ph = torch.cat([P, torch.ones(P.shape[0], 1, device=device)], 1)
-        votes = torch.zeros(P.shape[0], dtype=torch.uint8, device=device)
-        for i in range(len(mvps)):
-            clip = (mvps[i] @ Ph.T).T
-            w = clip[:, 3].clamp(min=1e-8)
-            x, y = clip[:, 0] / w, clip[:, 1] / w
-            u = ((x + 1) * 0.5 * hires).long().clamp(0, hires - 1)
-            v = ((y + 1) * 0.5 * hires).long().clamp(0, hires - 1)
-            inb = (x.abs() <= 1) & (y.abs() <= 1)
-            votes += (inb & ~fgs[i][v, u]).to(torch.uint8)
-        hull = (votes < vote).view(nres, nres, nres).cpu().numpy()
+        hull = carve_hull(fgs, mvps, lo, hi, nres, hires, vote, device)
     hf = HullField(lo, hi, hull, device)
     hf.hull = hull
     return hf

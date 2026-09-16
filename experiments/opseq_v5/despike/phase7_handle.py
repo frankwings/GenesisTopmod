@@ -55,11 +55,22 @@ HULL_PLUGS_CACHE = os.environ.get("HULL_PLUGS_CACHE", f"{OUTD}/hull_plugs_{SHAPE
 
 z = np.load(BASE_NPZ); V, Fa = z["verts"].astype(np.float64), z["tris"].astype(np.int64)
 ctx = dr.RasterizeCudaContext()
-gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj")); gvn = normalize_to_range(gv)
-mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
-gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE); cow_v13.N_VIEWS = 64
+REAL_DATA = os.environ.get("REAL_DATA", "")
+if REAL_DATA:
+    from real_scene import load_real_scene
+    _real_scene = load_real_scene(REAL_DATA, DEVICE)
+    mvps, views = _real_scene.mvps, _real_scene.views
+    gt = _real_scene.gt
+    HF = _real_scene.hull(ctx, extra_pts=V)
+    p1b.heldout_exam = _real_scene.heldout_exam
+    heldout_exam = _real_scene.heldout_exam   # rebind the name imported at module top
+else:
+    gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj")); gvn = normalize_to_range(gv)
+    mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
+    gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
+    HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)
+cow_v13.N_VIEWS = 64
 p1b._MVPS, p1b._GT = mvps, gt; p1b.SHAPE = SHAPE
-HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)
 pitch = HF.pitch
 from hull_field import hull_genus
 _GT_ENV = os.environ.get("GENUS_TARGET", "hull")   # hull = persistent genus of the space-carved hull (LESSONS 24) | off | integer

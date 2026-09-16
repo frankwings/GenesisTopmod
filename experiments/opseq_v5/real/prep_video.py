@@ -45,9 +45,17 @@ if not a.skip_colmap:
         if os.path.exists(p): os.remove(p)
     shutil.rmtree(sp, ignore_errors=True); os.makedirs(sp)
     ro = pycolmap.ImageReaderOptions(); ro.camera_model = "SIMPLE_RADIAL"
-    pycolmap.extract_features(db, f"{a.out}/images", camera_mode=pycolmap.CameraMode.SINGLE, reader_options=ro)
+    eo = pycolmap.FeatureExtractionOptions()
+    try:
+        eo.sift.max_num_features = 16384
+        if os.environ.get('SIFT_ROBUST'): eo.sift.estimate_affine_shape = True; eo.sift.domain_size_pooling = True; print('[colmap] affine-shape + DSP SIFT on')
+    except Exception as e: print(f"[colmap] max_num_features not set ({e})")
+    pycolmap.extract_features(db, f"{a.out}/images", camera_mode=getattr(pycolmap.CameraMode, os.environ.get('CAM_MODE', 'SINGLE')), reader_options=ro, extraction_options=eo)
     print(f"[colmap] features ({time.time()-t0:.0f}s)", flush=True)
-    pycolmap.match_exhaustive(db); print(f"[colmap] exhaustive matching ({time.time()-t0:.0f}s)", flush=True)
+    so = pycolmap.SequentialPairingOptions(); so.overlap = 25
+    pycolmap.match_sequential(db, pairing_options=so); print(f"[colmap] sequential matching overlap 25 ({time.time()-t0:.0f}s)", flush=True)
+    mo = pycolmap.FeatureMatchingOptions(); mo.guided_matching = bool(os.environ.get('SIFT_ROBUST'))
+    pycolmap.match_exhaustive(db, matching_options=mo); print(f"[colmap] exhaustive matching ({time.time()-t0:.0f}s)", flush=True)
     maps = pycolmap.incremental_mapping(db, f"{a.out}/images", sp)
     best = max(maps.items(), key=lambda kv: kv[1].num_reg_images()) if maps else None
     if best is None: print("[colmap] FAILED: no model"); sys.exit(1)

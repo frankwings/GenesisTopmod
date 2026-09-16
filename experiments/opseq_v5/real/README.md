@@ -1,0 +1,79 @@
+# Real-data setup for the topo-carving chain (Plan A) — runbook
+
+Status 2026-09-16: pipeline runs end-to-end on a phone video of a static object with NO ground-truth mesh.
+First object: dinosaur toy (`benchmarks/dinasour/1000007062.mp4`, genus 0). Losses = silhouette only (no photometric yet).
+
+## 0. Capture requirements
+- Static object (no moving parts), matte preferred. For the topology claim: an object with a through-hole (mug handle).
+- Full 360 deg orbit at 2 elevations (~20 and ~45 deg) + a few seconds top-down, slow, 30-40 s, 1080p is enough.
+- Textured background is GOOD (desk clutter gives SfM features); blank tables/mousepads are where COLMAP fails.
+- Constant lighting. Object should stay fully inside the frame (crops assume this).
+
+## 1. Frames + masks + poses  (`real/prep_video.py`, ~2 min for 150 frames, CPU/GPU)
+```bash
+cd experiments/opseq_v5/real
+SIFT_ROBUST=1 python3 prep_video.py /path/to/video.mp4 <dataset_dir> --n 150
+#  -> <dataset_dir>/images/f_XXX.jpg   sharpest frame per window (Laplacian variance), cv2 auto-rotates portrait video
+#  -> <dataset_dir>/masks/f_XXX.png    rembg isnet-general-use, largest component (255 = object)
+#  -> <dataset_dir>/sparse/0           pycolmap: SIFT (16k features, affine-shape + DSP when SIFT_ROBUST=1),
+#                                      sequential(overlap 25) + exhaustive matching (guided), incremental mapping,
+#                                      one SIMPLE_RADIAL camera (CAM_MODE=SINGLE; PER_IMAGE was tested: no gain)
+#  -> <dataset_dir>/prep.json          names, picks, colmap {registered, points, reproj, camera}
+```
+Expect >= 90 % of frames registered, reprojection ~1 px. Frames over textureless background may drop out.
+
+## 2. SAM2 masks  (`real/sam2_masks.py`, 10 s / 155 frames on GPU)
+```bash
+python3 sam2_masks.py <dataset_dir>        # -> <dataset_dir>/masks_sam2/  (the chain reads THIS directory)
+```
+Prompt = rembg bbox + 5 positive points (centroid + 4 k-means centres), multimask, pick the candidate with the best IoU
+vs rembg, clip to the dilated rembg mask (kills background leaks), largest component, holes filled.
+Dinosaur: IoU vs rembg median 0.98; hull consistency identical (0.869 vs 0.861) -> segmentation is not the bottleneck.
+
+## 3. Pose/mask sanity check  (`real/hull_consistency.py`, 30 s)
+```bash
+python3 hull_consistency.py <dataset_dir>                 # all views
+python3 hull_consistency.py <dataset_dir> --views 60-90   # a sub-arc
+```
+Carves a visual hull (all-but-`slack` voting) and reports the fraction of every mask covered by the projected hull.
+Rigid object + exact poses -> ~1.0. Dinosaur: median 0.87 on all 145 views, 0.99 on any narrow arc; unchanged by
+rembg/SAM2, relaxed/robust SIFT, single/per-image intrinsics -> residual per-frame pose error of a few px
+(rolling shutter / EIS of the phone video are the remaining suspects). Deficit shows as a ~7 % shrink of the head (lever arm).
+
+## 4. Run the chain  (`despike/golden_chain.sh`, ~7-9 min per object on a shared GPU)
+```bash
+cd experiments/opseq_v5/despike
+export REAL_DATA=real/<dataset_dir>   # relative to experiments/opseq_v5
+export HULL_INIT=1 S1_STEPS=400        # project the init sphere onto the hull; Stage-1 400+400 steps
+export HULL_VOTE=8 HULL_DEAD=3         # permissive hull for noisy poses (see 5.)
+TAGP=<tag> SHAPES="<name>" bash golden_chain.sh
+```
+What `REAL_DATA` changes (all in `despike/real_scene.py`, synthetic path untouched when unset):
+- 145 registered frames -> 16 held-out (every ~9th) + 64 training views.
+- World normalisation: centre X = LSQ intersection of the mask-centroid rays; scale s = median over views of
+  camera-distance x (mask bbox half-size / f) / 0.8  -> object radius 0.8 like the synthetic shapes.
+- Per-view square crop, side = 1.25 x 95th-percentile mask bbox max-dim (robust to leak frames), object-centred,
+  resized to 256; intrinsics adjusted; OpenGL MVP per view; x-flip chosen empirically by rasterising the mask-carved
+  hull and maximising IoU vs the masks (dinosaur: 0.872 median = the pose-consistency ceiling).
+- gt = cropped masks (0 = fg, 255 = bg, nvdiffrast row order); depth / diffuse targets zero, W_DEPTH = W_DIFF = 0.
+- Hull = `hull_field.carve_hull` on the 512 px mask crops (same carving loop as synthetic), vote = HULL_VOTE.
+- Held-out exam = silhouette IoU on the 16 held-out masks (`exam_real.py`); no CD/VolIoU (no GT).
+Outputs: `despike/results_genus/<name>_<tag>_{raw,auto}.npz`, handles json, `[exam_real]` line in the log.
+Render: `python3 real/render_mesh.py despike/results_genus/<name>_<tag>_auto.npz <out_prefix> --turn 72 --up "<gravity up>"`
+
+## 5. Results so far (dinosaur, silhouette-only)
+| run | hull vote / dead | V | train sil IoU | held-out ho16 | hair | notes |
+|---|---|---|---|---|---|---|
+| Stage 1 cc3 only | - | 962 | 0.970 | 0.963 | 2k | no hull loss in Stage 1 |
+| real1 | 2 / 1 vox | 57.8k | 0.874 | 0.858 | 52 | mesh pulled INTO the eroded hull (= hull IoU 0.872); head 7 % small, arms -> noodles |
+| real2 | 8 / 3 vox | 51.4k | 0.955 | 0.963 | 1814 | head volume back; genus 0, watertight, SI 0 |
+Lesson: on synthetic data the hull is a superset of the object so the hull-field loss is harmless; with real pose noise the
+all-but-2 hull is eroded and the loss actively shrinks the mesh. HULL_VOTE ~ 12 % of the views fixes it.
+Renders: `real/dino3/mesh_real{1,2}_grid.png`, `_turn.mp4`. Overlays: `real/dino3/fit_overlay.png`, `hull_overlay.jpg`.
+
+## 6. Known gaps / next
+1. Photometric term (per-vertex colour, Nicolet-style) — silhouettes cannot resolve the mouth, eyes, belly stripes.
+2. Pose refinement from silhouettes/photometrics (joint camera optimisation) — the 0.87 consistency ceiling.
+3. Thin-structure guard from hull thickness (arms collapse to noodles under inconsistent silhouettes).
+4. Multi-component objects (hull with >1 connected component) — not handled.
+5. A holed object for the topology claim (mug) — capture pending.

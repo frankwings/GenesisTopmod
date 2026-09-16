@@ -249,16 +249,32 @@ if MODE == "64v":
     from run_64v import render_sdd
     from hull_field import build_vote_hull
     ctx = dr.RasterizeCudaContext()
-    gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
-    gvn = normalize_to_range(gv)
-    mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
-    PX_SIZE = 2.0 * float(np.linalg.norm(gvn, axis=1).max()) / run_64v.TRAIN_RES   # image half-height = max_radius (fov 2*atan(0.5), R = 2*max_radius)
-    gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
-    cow_v13.N_VIEWS = 64
-    HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)
-    DEAD = 1.0 * HF.pitch
+    REAL_DATA = os.environ.get("REAL_DATA", "")
+    if REAL_DATA:
+        from real_scene import load_real_scene
+        _real_scene = load_real_scene(REAL_DATA, DEVICE)
+        mvps, views = _real_scene.mvps, _real_scene.views
+        gt, gtd, gtdiff = _real_scene.gt, _real_scene.gtd, _real_scene.gtdiff
+        max_r = _real_scene.max_r
+        cow_v13.N_VIEWS = 64
+        HF = _real_scene.hull(ctx, extra_pts=V)
+        PX_SIZE = 2.0 * max_r / run_64v.TRAIN_RES
+        W_DIFF = 0.0; W_DEPTH = 0.0
+        gtn_t = None
+        p1b.heldout_exam = _real_scene.heldout_exam
+        heldout_exam = _real_scene.heldout_exam   # rebind the name imported at module top
+        print(f"[p4] REAL_DATA={REAL_DATA}: forced W_DEPTH=0 W_DIFF=0", flush=True)
+    else:
+        gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
+        gvn = normalize_to_range(gv)
+        mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
+        PX_SIZE = 2.0 * float(np.linalg.norm(gvn, axis=1).max()) / run_64v.TRAIN_RES   # image half-height = max_radius (fov 2*atan(0.5), R = 2*max_radius)
+        gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
+        cow_v13.N_VIEWS = 64
+        HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)
+        gtn_t = run_64v.make_gt_normals(ctx, mvps, views, SHAPE) if float(os.environ.get("W_NORMAL", "0")) > 0 else None
+    DEAD = float(os.environ.get("HULL_DEAD", "1.0")) * HF.pitch
     gtdf_t = [torch.from_numpy(gtdiff[i]).float().to(DEVICE) for i in range(64)]
-    gtn_t = run_64v.make_gt_normals(ctx, mvps, views, SHAPE) if float(os.environ.get("W_NORMAL", "0")) > 0 else None
     def field_dist(pts): return F.relu(HF.dist(pts) - DEAD)
 else:
     scene = setup_scene(SHAPE, DEVICE)
@@ -273,7 +289,7 @@ if MODE == "6v" and not TARGET_OBJ:
     gvn = normalize_to_range(gv)
     HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=1024,
                          vote=1, ss_thr=0.25)
-    DEAD = 1.0 * HF.pitch
+    DEAD = float(os.environ.get("HULL_DEAD", "1.0")) * HF.pitch
     print(f"[p4] 6v hull field: vox={HF.hull.sum()} pitch={HF.pitch:.4f}", flush=True)
     def field_dist(pts): return F.relu(HF.dist(pts) - DEAD)
 elif MODE == "6v":
