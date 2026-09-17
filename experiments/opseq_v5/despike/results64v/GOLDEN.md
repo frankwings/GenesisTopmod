@@ -1,3 +1,31 @@
+# GOLDEN v6.1 (2026-09-17) — five shapes, tunnels located on the MESH (Boss's formulation) + propose-and-verify
+**Chain**: `despike/golden_chain.sh` (renamed from golden_v3_chain.sh), run with `TAGP=v6n`. Same stages as v5/v6; Stage 3 / 5b now:
+1. **Topology oracle** g* = persistent genus of the space-carved hull (unchanged, LESSONS 24).
+2. **Membrane detection on the DR mesh** (`membrane_locate.py`, `DETECT=membrane`): the hull never intersects the object, so a
+   mesh FACE whose interior samples lie > 2 voxels outside the hull spans air = a membrane / a mouth of an unopened chamber.
+   Faces -> edge-connected patches (split by normal sign when both skins are pressed together). Patches are kept only if
+   they sit on a voxel block of "mesh material in hull air" whose removal raises the mesh genus (k >= 1); two patches on the
+   same block are paired iff the segment between their faces runs through hull air AND mesh interior -> `add_handle(fi, fj)`.
+   No closing radius, no throat-vs-mouth ambiguity (closing seals at the narrowest cross-section, which is not the mouth of a
+   multi-exit chamber - fertility's upper cavity has 3 exits + 1 opening, needing 3 handles).
+3. **Verify** (`phase7_multi.sh`): one handle per round -> 400 DR steps -> accept iff held-out IoU +0.002 or hair -10 %; else
+   revert and blacklist the pair. Stage 5b runs the same loop on the refined mesh (safety net).
+4. Membranes are exempt from the hull-field loss in Stages 2/3/5 (`MEMB_EXEMPT=2`) so they stay visible until opened.
+**Meshes**: `results_genus/<shape>_v6n_auto.npz` (fertility: `_v6n1/2/3`), handles in `handles_<shape>_v6n*.json`.
+
+| shape | genus (GT) | handles (verified / rejected) | VolIoU | CD | V | wall (uncontended) |
+|---|---|---|---|---|---|---|
+| armadillo | 0 (0) | 0 / 0 | 0.9949 | 0.00620 | 50.1k | 4.4 min |
+| kitten | 1 (1) | 1 / 0 | 0.9980 | 0.00664 | 57.3k | 4.4 min |
+| fertility x3 | 4 (4) x3 | 5/1, 4/0, 4/0 | 0.9909 / 0.9909 / 0.9900 | 0.00640-0.00656 | 48-51k | 5.5-6.2 min |
+| rocker-arm | 1 (1) | 1 / 0 | 0.9871 | 0.00613 | 50.1k | 4.4 min |
+| threeholes | 3 (3) | 3 / 0 | 0.9914 | 0.00707 | 48.8k | 5.0 min |
+
+Fertility was the open problem: v6 (closing-ladder plugs) succeeded 1 run in 4 (handles landed inside the chamber, genus 4 but
+tunnels unopened, VolIoU 0.84); v6.1 3/3 with every accepted handle DR-verified. Supersedes tag `golden-v6`. Tag: `golden-v6.1`.
+Details: LESSONS §33.
+
+---
 # GOLDEN v6 (2026-09-15) — all five shapes, handles LOCATED by the space-carved hull (no rays), same chain otherwise
 **Chain**: `despike/golden_v3_chain.sh` run with `TAGP=v6c`; identical to v5 except Stage 3 / 5b tunnel location now uses
 `despike/hull_locate.py` (`DETECT=hull`, default) instead of ray casting. Ray detector kept only as a fallback — never triggered on the five shapes.

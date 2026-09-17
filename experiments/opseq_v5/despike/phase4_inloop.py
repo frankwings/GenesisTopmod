@@ -50,6 +50,11 @@ FLIP_EVERY = int(os.environ.get("FLIP_EVERY", "25"))
 SMOOTH_ITERS = int(os.environ.get("SMOOTH_ITERS", "1"))
 SMOOTH_LAM = float(os.environ.get("SMOOTH_LAM", "0.2"))
 W_T = float(os.environ.get("W_T", "20.0"))
+MEMB_EXEMPT = float(os.environ.get("MEMB_EXEMPT", "0"))   # >0: faces whose interior is more than this many voxels outside the hull are MEMBRANES spanning a tunnel -> no hull-field pull (keep them visible for topology discovery)
+THIN_GUARD = int(os.environ.get("THIN_GUARD", "0"))          # 1: thin-structure guard from hull thickness (real data): no hull-field loss and no collapses where the hull is thin
+THIN_PX_LO = float(os.environ.get("THIN_PX_LO", "3.0"))     # hull thickness (px) at/below which a vertex is fully "thin" (guard weight 0)
+THIN_PX_HI = float(os.environ.get("THIN_PX_HI", "6.0"))     # thickness at/above which the guard is off (weight 1)
+THIN_WALK = int(os.environ.get("THIN_WALK", "24"))           # inward-normal walk samples (0.5 voxel each) for the first-ridge thickness
 W_QUAL = float(os.environ.get("W_QUAL", "0.01"))
 W_DIFF = float(os.environ.get("W_DIFF", "1.0"))
 W_NORMAL = float(os.environ.get("W_NORMAL", "0.0"))
@@ -332,13 +337,48 @@ _BARY = torch.tensor([[1/3, 1/3, 1/3], [1/2, 1/2, 0.0], [0.0, 1/2, 1/2], [1/2, 0
                       [2/3, 1/6, 1/6], [1/6, 2/3, 1/6], [1/6, 1/6, 2/3]],
                      dtype=torch.float32, device=DEVICE)
 
+_thin_cache = {"n": -1, "w": None, "thin": None}
+def hull_thickness(verts_t, faces_l):
+    """Per-vertex local thickness (world units) from the hull's inside-EDT: walk inward along -normal in 0.5-voxel
+    steps, track the running max of dist_in, stop at the first ridge (dist drops below 0.7 x running max = we left this
+    part); thickness = 2 x that max. Thin arms/fins give their own radius, not the body's."""
+    from run_64v import vertex_normals as _vn
+    with torch.no_grad():
+        n = _vn(verts_t, faces_l, verts_t.shape[0]); step = 0.5 * HF.pitch
+        ks = torch.arange(1, THIN_WALK + 1, device=verts_t.device, dtype=verts_t.dtype) * step
+        off = HF.dist(verts_t)                                              # vertices outside the hull: start the walk at the hull surface
+        P = (verts_t[:, None, :] - n[:, None, :] * (off[:, None] + ks[None, :])[:, :, None]).reshape(-1, 3)
+        d = HF.dist_in(P).view(verts_t.shape[0], THIN_WALK)
+        rm = torch.cummax(d, dim=1).values
+        left = (d < 0.7 * rm) & (rm > 0)                                   # first ridge crossed
+        first = torch.where(left.any(1), left.float().argmax(1), torch.full_like(left[:, 0], THIN_WALK - 1, dtype=torch.long))
+        return 2.0 * rm.gather(1, first[:, None])[:, 0]
+
+def thin_weights(verts_t, faces_l):
+    """w in [0,1] per vertex (0 = thin, hull not trusted), cached until the vertex count changes."""
+    if _thin_cache["n"] == verts_t.shape[0] and _thin_cache["w"] is not None: return _thin_cache["w"], _thin_cache["thin"]
+    T = hull_thickness(verts_t, faces_l); px = globals().get("PX_SIZE", HF.pitch)
+    w = ((T - THIN_PX_LO * px) / max((THIN_PX_HI - THIN_PX_LO) * px, 1e-9)).clamp(0, 1)
+    _thin_cache.update(n=verts_t.shape[0], w=w, thin=(w < 0.5))
+    print(f"[thin] V={verts_t.shape[0]} thickness px min/med={float(T.min())/px:.1f}/{float(T.median())/px:.1f} | thin (w<0.5): {int((w<0.5).sum())} ({100*float((w<0.5).float().mean()):.1f}%)", flush=True)
+    return w, _thin_cache["thin"]
+
 def field_loss(verts_t, faces_l):
     tri = verts_t[faces_l]
     pts = torch.einsum("sk,fkc->fsc", _BARY, tri).reshape(-1, 3)
-    pen = field_dist(pts).view(-1, _BARY.shape[0]).mean(1)
+    fd = field_dist(pts).view(-1, _BARY.shape[0]); pen = fd.mean(1)
     area = 0.5 * torch.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0], dim=-1).norm(dim=-1)
     w = area.detach() / (area.detach().sum() + 1e-12)
-    return (pen * w).sum() + field_dist(verts_t).mean()
+    vpen = field_dist(verts_t)
+    if MEMB_EXEMPT > 0:
+        memb = fd.detach().median(1).values > MEMB_EXEMPT * HF.pitch - DEAD   # interior samples beyond the membrane margin (field_dist already subtracts DEAD)
+        pen = pen * (~memb).float()
+        vm = torch.zeros(verts_t.shape[0], dtype=torch.bool, device=verts_t.device); vm[faces_l[memb].reshape(-1)] = True
+        vpen = vpen * (~vm).float()
+    if THIN_GUARD:
+        tw, _ = thin_weights(verts_t.detach(), faces_l)
+        pen = pen * tw[faces_l].mean(1); vpen = vpen * tw
+    return (pen * w).sum() + vpen.mean()
 
 def _snapshot(step, Vn, Fa):
     from PIL import Image, ImageDraw, ImageFont
@@ -621,7 +661,12 @@ for step in range(STEPS):
                     # to the face cap regardless of L. Tangle safety comes from the SI-ring exclusion + gate, not the cap.
                     _t0 = time.time()
                     _cthr = getattr(_target, "last_cthr", None)
-                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, int(ADAPT_COLLAPSE_FRAC * len(Fa)), vthr=(_cthr if (_cthr is not None and len(_cthr) == len(Vn)) else ADAPT_CRATIO * Lt))
+                    _vthr = np.asarray(_cthr if (_cthr is not None and len(_cthr) == len(Vn)) else ADAPT_CRATIO * Lt, float) * np.ones(len(Vn))
+                    if THIN_GUARD:
+                        _thin_cache["n"] = -1     # topology changed: recompute on the current mesh
+                        _, _thin = thin_weights(torch.tensor(Vn, dtype=torch.float32, device=DEVICE), torch.tensor(Fa, dtype=torch.long, device=DEVICE))
+                        _vthr[_thin.cpu().numpy()] = 0.0        # never collapse an edge touching a thin-part vertex
+                    Vn, Fa, nc = collapse_short_edges(Vn, Fa, COLLAPSE_RATIO, int(ADAPT_COLLAPSE_FRAC * len(Fa)), vthr=_vthr)
                     print(f"[adapt] step {step+1}: +{ns} split edges, -{nc} collapses -> V={len(Vn)} F={len(Fa)} ({time.time()-_t0:.0f}s collapse)", flush=True)
                     _target.V_last = Vn.copy()
                     if getattr(_target, 'ref_len', None) is not None and len(_target.ref_len) != len(Vn): _target.ref_len = None

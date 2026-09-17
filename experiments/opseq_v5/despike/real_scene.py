@@ -459,6 +459,8 @@ class RealScene:
         with torch.no_grad():
             hull_arr = _carve_hull(fgs_h, self.mvps, lo_norm, hi_norm, nres, hires, vote, self.device)
 
+        lab, n_cc = cc_label(hull_arr)          # real data: permissive voting leaves floaters -> keep the largest component
+        if n_cc > 1: hull_arr = lab == (1 + np.argmax(np.bincount(lab.ravel())[1:]))
         hf = HullField(lo_norm, hi_norm, hull_arr, self.device)
         hf.hull = hull_arr
         self._hull_hf = hf

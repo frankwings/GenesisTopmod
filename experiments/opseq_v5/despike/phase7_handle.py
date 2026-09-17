@@ -40,7 +40,7 @@ MIN_SEP = float(os.environ.get("MIN_SEP", "1.5"))
 PROJ_RADIUS = float(os.environ.get("PROJ_RADIUS", "0.6"))  # also radially project the membrane around the tube (within this radius of the axis) so the mouth eats it; 0 = tube only    # faces closer than this (mean-edge units) are fold/sliver remnants, not a slab   # tunnel must continue hull-free this far beyond BOTH faces (bay vs through-hole)
 DRY = int(os.environ.get("DRY", "0"))
 PRE_SUBDIV = int(os.environ.get("PRE_SUBDIV", "0"))   # 1 = always pre-subdivide entry/exit faces before add_handle (auto when their 1-rings overlap)
-DETECT = os.environ.get("DETECT", "hull")
+DETECT = os.environ.get("DETECT", "membrane")   # membrane (Boss 2026-09-16: DR vertices outside the hull) | hull (closing ladder) | rays
 ABSORB = int(os.environ.get("ABSORB", "0"))
 OPEN = os.environ.get("OPEN", "merge")   # merge = collapse membrane interior verts to the rim, delete interior edges -> rim polygon, add_handle(rim1, rim2)   # after add_handle, eat the blocking membrane into the mouth by DLFL collapses (mouth ring grows to the membrane rim)
 HANDLES_JSON = os.environ.get("HANDLES_JSON", "")     # persisted list of handle midpoints across rounds (one handle per tunnel)
@@ -68,7 +68,7 @@ else:
     gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj")); gvn = normalize_to_range(gv)
     mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
     gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
-    HF = build_vote_hull(ctx, mvps, gvn, gf_gt, V, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)
+    HF = build_vote_hull(ctx, mvps, gvn, gf_gt, None, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)   # GT-bbox grid (not widened by the current mesh): plug detection must not depend on run-to-run mesh noise
 cow_v13.N_VIEWS = 64
 p1b._MVPS, p1b._GT = mvps, gt; p1b.SHAPE = SHAPE
 pitch = HF.pitch
@@ -474,19 +474,23 @@ MODE_BRIDGE = False
 # doesn't prevent adding multiple hull handles in one invocation (spec: "add ALL
 # returned handles in that round").  find_tunnel_by_hull is called fresh each
 # iteration because add_handle modifies V/Fa and invalidates face indices.
-_hull_max = MAX_HANDLES if DETECT != "hull" else max(MAX_HANDLES, G_TARGET if G_TARGET else MAX_HANDLES)
+_hull_max = MAX_HANDLES   # one handle per round so phase7_multi.sh can verify (DR) and revert each one
 for k in range(_hull_max):
     MODE_BRIDGE = False
     if G_TARGET is not None and genus(V, Fa) >= G_TARGET:
         print(f"[p7] genus {genus(V, Fa)} == target g*={G_TARGET}: no more handles", flush=True); break
-    if DETECT == "hull":
-        _hull_cands = find_tunnel_by_hull(V, Fa, HF, prev_handles, G_TARGET)
+    if DETECT in ("hull", "membrane"):
+        if DETECT == "membrane":
+            import membrane_locate
+            _hull_cands = membrane_locate.find_tunnel_by_membranes(V, Fa, HF, prev_handles, G_TARGET, r_dedup=R_DEDUP, log=lambda m: print(m, flush=True))
+        else:
+            _hull_cands = find_tunnel_by_hull(V, Fa, HF, prev_handles, G_TARGET)
         if _hull_cands:
             hit = _hull_cands[0]
             i, j, _ci, _cj, _blob = hit
             tri = V[Fa]; cen = tri.mean(1); d = hdist(cen)
             negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
-            print(f"[p7] tunnel-evidence pairs: 1 (hull)", flush=True)
+            print(f"[p7] tunnel-evidence pairs: 1 ({DETECT})", flush=True)
         elif G_TARGET is not None and genus(V, Fa) < G_TARGET:
             # Hull candidates exhausted or no valid face pair: fall back to rays
             print(f"[p7] hull: 0 valid candidates, genus {genus(V, Fa)} < g*={G_TARGET}: rays fallback", flush=True)
@@ -613,7 +617,9 @@ for k in range(_hull_max):
     else:
         tube_verts = set(map(int, Fa[i])) | set(map(int, Fa[j])) | set(range(n_before, len(V2)))
     V, Fa = V2, F2
-    a0 = cen[i]; u = cen[j] - cen[i]; L_ = float(np.linalg.norm(u)); u = u / L_   # tunnel axis from the two face centroids
+    a0 = cen[i]; u = cen[j] - cen[i]; L_ = float(np.linalg.norm(u))
+    if L_ < 1e-6: u = np.cross(V[Fa[i][1]] - V[Fa[i][0]], V[Fa[i][2]] - V[Fa[i][0]]); u /= np.linalg.norm(u) + 1e-12; L_ = 1e-6   # coincident faces (pinched membrane): axis = face normal
+    else: u = u / L_   # tunnel axis from the two face centroids
     if PROJECT:
         # project FIRST (thin tube -> tunnel wall), then refine on the wall, re-project each level.
         # Refining the thin tube before projecting produced sliver fans that crossed when inflated.
@@ -631,7 +637,7 @@ for k in range(_hull_max):
         if PROJECT:
             V, mv = radial_project(V, a0, u, L_, tube_verts); print(f"[p7] radial projection: moved {mv} verts", flush=True)
     n_added += 1
-    prev_handles.append({"mid": ((cen[i] + cen[j]) / 2).tolist(), "blob": _blob if DETECT in ("rays", "hull") else None})
+    prev_handles.append({"mid": ((cen[i] + cen[j]) / 2).tolist(), "blob": _blob if DETECT in ("rays", "hull", "membrane") else None})
     if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
     report(f"after handle {n_added}", V, Fa); _snap(f"Stage 7 [DLFL add_handle #{n_added}] genus={genus(V, Fa)}", V, Fa, hold=45)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)

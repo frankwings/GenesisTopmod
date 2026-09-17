@@ -133,7 +133,73 @@ def analyse_plug(loc, sheet, seed, R):
             "extent_sd": sd.tolist(), "size": int(loc.sum()), "R": int(R)}
 
 
+def _euler6(vol):
+    return int(measure.euler_number(vol, connectivity=3))   # 26-connected foreground: thin sheets have no spurious 6-conn tunnels
+
+def _cavities(vol):
+    lab, n = ndimage.label(~vol)                                # 6-connected background
+    sizes = np.bincount(lab.ravel())[1:]
+    return n, sizes
+
 def find_plugs(hs, n_needed, viz_dir=None, log=print, r_max=40):
+    """Closing-radius ladder on the cleaned hull -- MOUTH (end-cap) version, Boss 2026-09-16.
+    A tunnel system can be one connected air chamber with k exits (fertility: 3). At the sealing radius the
+    closing fills the chamber as ONE block; its topology test is the old one (genus of the filled solid drops
+    by dg >= 1 when the block is added). The exits are where that block touches the outside air after
+    closing: caps = block & dilate(~close_R). One connected cap = one mouth = one candidate plug (throat =
+    cap centroid, axis from the cap/local segment). A through-tunnel gives 2 caps for 1 membrane -> the
+    face-pair stage dedups pairs. Accepted blocks are frozen into the solid (Boss's rule)."""
+    t0 = time.time(); solid = hs.copy(); edt_bg = ndimage.distance_transform_edt(~hs).astype(np.float32)
+    prev_close = hs.copy(); plugs = []
+    if viz_dir: np.save(os.path.join(viz_dir, "hull_ds.npy"), hs)
+    for R in np.arange(4.0, r_max + 1e-6, float(os.environ.get("HULL_R_STEP", "0.5"))):   # EDT closing takes float radii: half-voxel steps separate tunnels that seal at nearly the same radius
+        R = float(R); g_solid = genus_solid(solid)
+        if g_solid == 0: break
+        close_R = _closing(edt_bg, R)
+        D = close_R & ~solid
+        outside = ndimage.binary_dilation(~close_R, structure=S26)
+        lab, n = ndimage.label(D, structure=S26)
+        sizes = np.bincount(lab.ravel())[1:] if n else np.zeros(0, int)
+        claimed_now = False
+        for c in np.argsort(-sizes):
+            if sizes[c] < 50: break
+            comp = lab == (c + 1)
+            dg = genus_solid(solid | comp) - g_solid
+            if dg >= 0: continue                                          # fillet / no topology change
+            caps = comp & outside & (edt_bg > 2.0)     # cap CORES: drop the 1-2 voxel fillet skin that links the mouths along creases
+            lc, nc = ndimage.label(caps, structure=S26)
+            cap_sizes = np.bincount(lc.ravel())[1:] if nc else np.zeros(0, int)
+            cap_ids = [k + 1 for k in np.argsort(-cap_sizes) if cap_sizes[k] >= 0.25 * np.pi * R * R]   # a mouth cap ~ pi R^2; smaller = fillet fragments
+            log(f"[p7] hull R={R}: block {int(comp.sum())} vox seals dg={dg}: {len(cap_ids)} mouth cap(s) {sorted(cap_sizes[np.array(cap_ids)-1].tolist(), reverse=True) if cap_ids else []}")
+            for k in cap_ids:
+                cap = lc == k; idx = np.argwhere(cap)
+                if (idx.min(0) == 0).any() or (idx.max(0) == np.array(cap.shape) - 1).any(): continue   # grid-boundary cap
+                seed = idx.mean(0)
+                rad = 2.0 * R + 8.0; c0 = np.round(seed).astype(int); r0 = int(np.ceil(rad))
+                sl2 = tuple(slice(max(c0[q] - r0, 0), min(c0[q] + r0 + 1, cap.shape[q])) for q in range(3))
+                sub = comp[sl2].copy(); gi = np.indices(sub.shape).reshape(3, -1).T + np.array([sl2[q].start for q in range(3)])
+                sub &= (np.linalg.norm(gi - seed, axis=1) <= rad).reshape(sub.shape)
+                ls, ns = ndimage.label(sub, structure=S26)
+                if ns > 1:
+                    sv = np.argwhere(cap[sl2]); lab_c = ls[tuple(sv.T)]; lab_c = lab_c[lab_c > 0]
+                    sub = ls == (np.bincount(lab_c).argmax() if len(lab_c) else np.bincount(ls.ravel())[1:].argmax() + 1)
+                loc = np.zeros_like(cap); loc[sl2] = sub
+                info = analyse_plug(loc, cap, seed, R)
+                info["block_vox"] = np.argwhere(loc).astype(np.int16); info["fill"] = int(comp.sum()); info["dg"] = int(dg); info["cap"] = int(cap.sum())
+                plugs.append(info)
+                if viz_dir:
+                    kk = len(plugs)
+                    np.save(os.path.join(viz_dir, f"plug{kk}_vox.npy"), idx)
+                    np.save(os.path.join(viz_dir, f"plug{kk}_block.npy"), np.argwhere(loc))
+                    np.save(os.path.join(viz_dir, f"plug{kk}_path.npy"), np.asarray(info["path_vox"]))
+                log(f"[p7] hull R={R:4.1f} MOUTH cap={int(cap.sum()):5d} local={info['size']:6d} throat={np.round(info['throat_vox'],1)} mode={info['mode']} tangent={np.round(info['tangent_vox'],2)}")
+            solid |= comp; g_solid = genus_solid(solid); claimed_now = True
+        if claimed_now: edt_bg = ndimage.distance_transform_edt(~solid).astype(np.float32)
+        prev_close = close_R | solid
+        log(f"[p7] hull R={R}: genus_remain={g_solid} mouths={len(plugs)} (need {n_needed}) ({time.time()-t0:.0f}s)")
+    return plugs
+
+def find_plugs_v1(hs, n_needed, viz_dir=None, log=print, r_max=40):
     """Closing-radius ladder on the cleaned hull.
     Detection uses CUMULATIVE fill regions (close_R minus solid), which are flush with the hull, so
     genus tests are reliable; a region that lowers genus(solid) by exactly 1 is one tunnel's fill.
@@ -142,7 +208,7 @@ def find_plugs(hs, n_needed, viz_dir=None, log=print, r_max=40):
     t0 = time.time(); solid = hs.copy(); edt_bg = ndimage.distance_transform_edt(~hs).astype(np.float32)
     prev_close = hs.copy(); plugs = []
     if viz_dir: np.save(os.path.join(viz_dir, "hull_ds.npy"), hs)
-    for R in range(4, r_max + 1, 2):
+    for R in range(4, r_max + 1, int(os.environ.get("HULL_R_STEP", "1"))):   # 1-voxel steps: tunnels seal one at a time (2-voxel steps merged fertility's 4 tunnels into messy blocks)
         g_solid = genus_solid(solid)
         if len(plugs) >= n_needed or g_solid == 0: break
         close_R = _closing(edt_bg, R)
@@ -251,9 +317,17 @@ def face_pair_for_plug(p, v2w, w2v, V, F, tri_cen, scene, step_w, log=print, hs=
         return ~hs[q[:, 0], q[:, 1], q[:, 2]]
     pmax = float(np.max(v2w([1, 1, 1]) - v2w([0, 0, 0])))      # largest voxel pitch (grid is anisotropic)
     cap = (3.0 * R + 10.0) * pmax; near_w = (2.0 * R + 6.0) * pmax
+    AIR_FRAC = float(os.environ.get("HULL_PAIR_AIR", "0.6"))
     def _ok(res_pair):
         if res_pair is None: return False
-        return float(np.linalg.norm(res_pair[2] - res_pair[3])) <= cap
+        ci, cj = np.asarray(res_pair[2], float), np.asarray(res_pair[3], float)
+        if float(np.linalg.norm(ci - cj)) > cap: return False
+        # decisive rule: the mesh material between the two crossings must be TUNNEL (hull air), not body.
+        # A line through a limb also has both crossings in hull air; only the interior tells them apart.
+        seg = ci[None, :] + np.linspace(0.05, 0.95, 19)[:, None] * (cj - ci)[None, :]
+        fa = float(air(seg).mean())
+        if fa < AIR_FRAC: why_all.append(f"pair rejected: interior hull-air {fa:.2f} < {AIR_FRAC} (sep={np.linalg.norm(ci-cj):.3f})"); return False
+        return True
     why_all = []
     # (0) straight walk through the throat along the tunnel axis (from the sealing increment's shape)
     axis = np.asarray(p["tangent_vox"], float); axis /= np.linalg.norm(axis) + 1e-12
@@ -328,8 +402,9 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None, res=128, ca
     import open3d as o3d
     t0 = time.time()
     lo = np.asarray(HF_in.lo, float); hi = np.asarray(HF_in.hi, float)
-    def v2w(v): return lo + np.asarray(v, float) / (res - 1) * (hi - lo)
-    def w2v(w): return (np.asarray(w, float) - lo) / (hi - lo) * (res - 1)
+    PAD = int(os.environ.get("HULL_PAD", "24"))     # air margin around the grid: closing must not seal pockets against the grid boundary
+    def v2w(v): return lo + (np.asarray(v, float) - PAD) / (res - 1) * (hi - lo)
+    def w2v(w): return (np.asarray(w, float) - lo) / (hi - lo) * (res - 1) + PAD
     plugs = None
     if cache and os.path.exists(cache):
         try:
@@ -339,7 +414,7 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None, res=128, ca
             log(f"[p7] hull: loaded {len(plugs)} plug(s) from cache {cache}")
         except Exception: plugs = None
     if plugs is None:
-        hs = downsample(clean_hull(np.asarray(HF_in.hull).astype(bool)), res)
+        hs = np.pad(downsample(clean_hull(np.asarray(HF_in.hull).astype(bool)), res), PAD)
         g0 = genus_solid(hs); g_mesh = genus_fn(V, F) if genus_fn else 0
         n_needed = (g_target - g_mesh) if g_target is not None else g0
         log(f"[p7] hull: {res}^3 genus_solid={g0} mesh_genus={g_mesh} need={n_needed}")
@@ -364,12 +439,15 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None, res=128, ca
         dup = False
         for h in prev_handles:
             if not isinstance(h, dict): continue
-            if h.get("blob") == p["key"] or ("mid" in h and np.linalg.norm(np.asarray(h["mid"]) - thr) < r_dedup): dup = True; break
+            if h.get("blob") == p["key"] or (h.get("mid") is not None and np.linalg.norm(np.asarray(h["mid"], float) - thr) < r_dedup): dup = True; break
         if dup: n_dedup += 1; log(f"[p7] hull plug R={p['R']} at {np.round(thr,3)}: dedup skip"); continue
         res_pair, why = face_pair_for_plug(p, v2w, w2v, V, F, tri_cen, scene, step_w, log=log, hs=hs)
         if res_pair is None:
             n_fail += 1; log(f"[p7] hull plug R={p['R']} at {np.round(thr,3)}: no face pair ({why})"); continue
         fi, fj, ci, cj, pa, pb = res_pair
+        _mid = 0.5 * (np.asarray(ci) + np.asarray(cj))
+        if any(fi in (o[0], o[1]) or fj in (o[0], o[1]) or np.linalg.norm(0.5 * (np.asarray(o[2]) + np.asarray(o[3])) - _mid) < r_dedup / 3 for o in out):
+            n_dedup += 1; log(f"[p7] hull plug R={p['R']} at {np.round(thr,3)}: same membrane as an accepted pair (faces {fi},{fj}) -> skip"); continue
         p["cross_w"] = [pa.tolist(), pb.tolist()]
         if viz_dir: json.dump([{k: v for k, v in q.items() if k != "block_vox"} for q in plugs], open(os.path.join(viz_dir, "plugs.json"), "w"))
         log(f"[p7] hull plug R={p['R']} ({p['mode']}/{why}): accepted faces {fi},{fj} sep={np.linalg.norm(cj-ci):.3f}")
