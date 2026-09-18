@@ -350,22 +350,31 @@ class RealScene:
             m_nv   = _flip_v(m_rsz)          # row 0 = bottom
             return np.where(m_nv, np.uint8(0), np.uint8(255))  # 0=fg, 255=bg
 
+        # OUT-OF-FRAME pixels: the crop (S_px = 1360) is wider than the portrait frame (1080), and the object can leave
+        # the frame (tail/head). _safe_crop pads with 0 = background, which CARVED the object there. Treat padding as
+        # unknown: excluded from the silhouette loss (self.valid) and never carved (hull masks set to foreground there).
+        valid_full = np.full((H_orig, W_orig), 255, np.uint8)
+        def _valid_nv(x0i, y0i, r):
+            v = _safe_crop(valid_full, y0i, x0i, S_px); v = np.array(Image.fromarray(v).resize((r, r), Image.NEAREST)) > 127
+            return _flip_v(v)
         def _mask_to_hires_nv(m_pil, x0i, y0i, hires):
             m_crop = _safe_crop(m_pil, y0i, x0i, S_px)
             m_rsz  = np.array(Image.fromarray(m_crop).resize((hires, hires), Image.BILINEAR)) > 127
             m_rsz  = binary_dilation(m_rsz, iterations=1)  # match dilate=True
+            m_rsz |= ~_flip_v(_valid_nv(x0i, y0i, hires))   # out of frame -> "foreground" -> not carved (m_rsz is still in PIL row order here)
             m_nv   = _flip_v(m_rsz)
             return torch.from_numpy(m_nv)
 
         # Training
         train_mvps_list, train_views_list, train_gt_list = [], [], []
-        train_masks_hires_list = []
+        train_masks_hires_list = []; train_valid_list = []
         for idx in train_idx:
             im  = all_imgs[idx]
             mvp_i, view_i, (x0i, y0i) = _build_mvp_view(im, idx)
             train_mvps_list.append(mvp_i)
             train_views_list.append(view_i)
             train_gt_list.append(_mask_to_gt_nv(all_masks_pil[idx], x0i, y0i))
+            train_valid_list.append(_valid_nv(x0i, y0i, res))
             train_masks_hires_list.append(_mask_to_hires_nv(all_masks_pil[idx], x0i, y0i, hull_hires))
 
         # Held-out
@@ -379,6 +388,7 @@ class RealScene:
         self.mvps        = torch.stack(train_mvps_list)      # [64,4,4]
         self.views       = torch.stack(train_views_list)     # [64,4,4]
         self.gt          = np.stack(train_gt_list)           # [64,res,res] uint8, 0=fg
+        self.valid       = np.stack(train_valid_list)        # [64,res,res] bool: inside the original frame (loss weight)
         self.gtd         = np.zeros((len(train_idx), res, res), np.float32)
         self.gtdiff      = np.zeros((len(train_idx), res, res), np.float32)
         self.max_r       = 0.8
@@ -469,10 +479,15 @@ class RealScene:
 
     def heldout_exam(self, ctx, v, t):
         """Same signature as run_64v.heldout_exam but on held-out real masks."""
-        from eval_local_refine import render_views_n
+        import nvdiffrast.torch as dr
         pvt = torch.tensor(np.asarray(v, np.float32), dtype=torch.float32, device=self.device)
         pft = torch.tensor(np.asarray(t, np.int32),   dtype=torch.int32,   device=self.device)
-        ps  = render_views_n(ctx, pvt, pft, self.ho_mvps)
+        ones = torch.ones(pvt.shape[0], 1, device=self.device); vh = torch.cat([pvt, ones], -1); ps = []
+        with torch.no_grad():
+            for mvp in self.ho_mvps:                                   # render at the scene resolution (ho_gt is res x res)
+                pos = (mvp @ vh.T).T.unsqueeze(0).contiguous()
+                rast, _ = dr.rasterize(ctx, pos, pft, resolution=[self.res, self.res]); ps.append((rast[0, :, :, 3] > 0).float().cpu().numpy())
+        ps = np.stack(ps)
         inter = un = hair = 0; maxblob = 0
         for i in range(len(self.ho_mvps)):
             g = self.ho_gt[i] < 128   # fg (flipped, nvdiffrast convention)

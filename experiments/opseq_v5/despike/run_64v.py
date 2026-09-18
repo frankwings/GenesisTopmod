@@ -85,6 +85,13 @@ def star_cameras(max_radius, device=DEVICE):
     return torch.cat(mvps, 0), torch.stack(views, 0)  # [64,4,4] mvp, view
 
 
+def render_views_train(ctx, verts_t, faces_t, mvps):
+    """silhouettes at TRAIN_RES (render_views_n is fixed at IMG_RES=256; gt is TRAIN_RES x TRAIN_RES)"""
+    from eval_extrude_v3 import render_silhouette
+    with torch.no_grad():
+        return np.stack([render_silhouette(ctx, verts_t, faces_t, mvps[i], resolution=(TRAIN_RES, TRAIN_RES))[0, :, :, 0].cpu().numpy() for i in range(mvps.shape[0])])
+
+
 def vertex_normals(verts_t, faces_l, nv):
     tri = verts_t[faces_l]
     fn = torch.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0], dim=-1)
@@ -207,6 +214,7 @@ def make_gt(ctx, mvps, views, shape):
 def optimize_phase64(ctx, verts_np, tris_np, gt, gtd, gtdiff, mvps, views,
                      steps, label, settle=False, use_fold=False, use_tube=False):
     targets = torch.from_numpy((gt < 128).astype(np.float32)).unsqueeze(-1).to(DEVICE)
+    from batch_losses import soft_targets as _soft; targets = _soft(targets, float(os.environ.get("SIL_BLUR", "0")))   # SIL_BLUR px: soft silhouettes for inconsistent real views
     gtd_t   = [torch.from_numpy(gtd[i]).float().to(DEVICE) for i in range(NV)]
     gtfg_t  = [torch.from_numpy(gt[i] < 128).to(DEVICE)   for i in range(NV)]
     gtdf_t  = [torch.from_numpy(gtdiff[i]).float().to(DEVICE) for i in range(NV)]
@@ -277,10 +285,10 @@ def optimize_phase64(ctx, verts_np, tris_np, gt, gtd, gtdiff, mvps, views,
         if viz_snap.enabled():
             viz_snap.snap(ctx, mvps, verts_t.detach().cpu().numpy(), tris_np, f"Stage 1 [{label}] step {step+1}/{steps}", step=step)
         if step % 200 == 0:
-            iou = compute_iou_n(render_views_n(ctx, verts_t, faces_t, mvps), gt)
+            iou = compute_iou_n(render_views_train(ctx, verts_t, faces_t, mvps), gt)
             print(f"  [{label}] {step:4d}/{steps} iou={iou:.4f} "
                   f"sil={float(sl):.4f} diff={float(fl):.4f}", flush=True)
-    iou = compute_iou_n(render_views_n(ctx, verts_t, faces_t, mvps), gt)
+    iou = compute_iou_n(render_views_train(ctx, verts_t, faces_t, mvps), gt)
     print(f"  [{label}] END iou={iou:.4f}", flush=True)
     return verts_t.detach().cpu().numpy().astype(np.float64), iou
 
@@ -399,6 +407,7 @@ def main():
         W_DIFF = 0.0; W_DEPTH = 0.0
         import phase1b_pipeline as _p1b; _p1b.heldout_exam = _real_scene.heldout_exam
         print(f"[run_64v] REAL_DATA={REAL_DATA}: forced W_DEPTH=0 W_DIFF=0", flush=True)
+        import batch_losses as _bl; _bl.VALID = torch.from_numpy(_real_scene.valid.astype(np.float32)).to(DEVICE)   # out-of-frame pixels carry no silhouette loss
     else:
         # bootstrap: need max_radius before cameras -> load GT once
         gv, _gf = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
@@ -430,7 +439,7 @@ def main():
     def iou_fn(vv, ff):
         vt = torch.tensor(np.asarray(vv), dtype=torch.float32, device=DEVICE)
         ft = torch.tensor(np.asarray(ff, dtype=np.int32), dtype=torch.int32, device=DEVICE)
-        return compute_iou_n(render_views_n(ctx, vt, ft, mvps), gt)
+        return compute_iou_n(render_views_train(ctx, vt, ft, mvps), gt)
 
     def escape_fn(Vnp):
         vt = torch.tensor(np.asarray(Vnp), dtype=torch.float32, device=DEVICE)

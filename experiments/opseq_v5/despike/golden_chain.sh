@@ -9,7 +9,7 @@ cd /home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5; ln -sfn $PWD
 NS=/usr/lib/wsl/lib/nvidia-smi; export PATH=$PATH:/usr/lib/wsl/lib
 GLIM=${GUARD_MIB:-28000}
 guard() { for n in $(seq 1 180); do u=$($NS --query-gpu=memory.used --format=csv,noheader,nounits | head -1); [ "$u" -le $GLIM ] && { echo "[guard] GPU used ${u} MiB -> go"; return; }; echo "[guard] GPU used ${u} MiB > $GLIM, waiting 60s ($n/180)"; sleep 60; done; }
-PALF="ADAM_BETAS=0.8,0.8 PALF_LAP=0.02 PALF_CLIP=10 LR_EDGE=0.3 ADAPT_REMESH=1 ADAPT_MODE=velocity ADAPT_NU_GAIN=0.2 ADAPT_LMIN_PX=1.3 ADAPT_MAX_F=100000 ADAPT_SI_GATE=0.3 FLIP_EVERY=25 COLLAPSE_EVERY=50 COLLAPSE_RATIO=0.4 SI_PUSH=0.15 STEPS=1200"
+PALF="ADAM_BETAS=0.8,0.8 PALF_LAP=0.02 PALF_CLIP=10 LR_EDGE=0.3 ADAPT_REMESH=1 ADAPT_MODE=velocity ADAPT_NU_GAIN=0.2 ADAPT_LMIN_PX=${ADAPT_LMIN_PX:-1.3} ADAPT_MAX_F=100000 ADAPT_SI_GATE=0.3 FLIP_EVERY=25 COLLAPSE_EVERY=50 COLLAPSE_RATIO=0.4 SI_PUSH=0.15 STEPS=1200"
 export SEED=${SEED:-0}; P=${TAGP:-v4}; [ "$SEED" != "0" ] && P=${P}s${SEED}
 export SNAPSHOT_EVERY=${SNAPSHOT_EVERY:-0} SNAPSHOT_MODE=64
 F4="\[adapt\] step.*->\|\[final\]\|\[vram\]\|Traceback\|Error"

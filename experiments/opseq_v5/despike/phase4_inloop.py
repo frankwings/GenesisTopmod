@@ -269,6 +269,7 @@ if MODE == "64v":
         p1b.heldout_exam = _real_scene.heldout_exam
         heldout_exam = _real_scene.heldout_exam   # rebind the name imported at module top
         print(f"[p4] REAL_DATA={REAL_DATA}: forced W_DEPTH=0 W_DIFF=0", flush=True)
+        import batch_losses as _bl; _bl.VALID = torch.from_numpy(_real_scene.valid.astype(np.float32)).to(DEVICE)   # out-of-frame pixels carry no silhouette loss
     else:
         gv, gf_gt = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{SHAPE}.obj"))
         gvn = normalize_to_range(gv)
@@ -323,6 +324,7 @@ NV = len(mvps)
 p1b._MVPS, p1b._GT = mvps, gt
 p1b.SHAPE = SHAPE
 targets = torch.from_numpy((gt < 128).astype(np.float32)).unsqueeze(-1).to(DEVICE)
+from batch_losses import soft_targets as _soft; targets = _soft(targets, float(os.environ.get("SIL_BLUR", "0")))   # SIL_BLUR px: soft silhouettes for inconsistent real views
 gtd_t = [torch.from_numpy(np.asarray(gtd[i], np.float32)).to(DEVICE) for i in range(NV)]
 gtfg_t = [torch.from_numpy(gt[i] < 128).to(DEVICE) for i in range(NV)]
 # Stacked GT tensors for batched rendering (MODE==64v only)

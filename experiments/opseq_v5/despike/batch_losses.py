@@ -24,7 +24,11 @@ def sil_loss_batch(sil_batch, targets_batch):
     Identical to sum_i F.l1_loss(sil_i[0], targets_i) / N because
     F.l1_loss means over all elements regardless of batching.
     """
-    return F.l1_loss(sil_batch, targets_batch)
+    w = VALID
+    if w is None: return F.l1_loss(sil_batch, targets_batch)
+    return ((sil_batch - targets_batch).abs() * w).sum() / w.sum().clamp_min(1.0)
+
+VALID = None   # optional [N,H,W] float weight (real data: 0 outside the original frame); set by run_64v / phase4_inloop
 
 
 def depth_loss_batch(ndc_z_batch, fg_batch, gtd_stack, gtfg_stack):
@@ -57,3 +61,20 @@ def diff_loss_batch(diff_batch, gtdf_stack):
     Identical to sum_i F.l1_loss(diff_i, gtdf_i) / N.
     """
     return F.l1_loss(diff_batch, gtdf_stack)
+
+
+def soft_targets(targets, sigma_px):
+    """Gaussian-blur binary silhouette targets [N,H,W,1] (or [N,H,W]) with sigma in pixels.
+    Boss 2026-09-17: real views disagree by a few px (pose noise); a soft target lets DR settle on the AVERAGE boundary
+    instead of being pulled by whichever view it is closest to (a slightly misplaced thin arm costs little, a missing arm
+    costs its full area). sigma_px <= 0 returns the input unchanged (synthetic path)."""
+    import torch, torch.nn.functional as F, math
+    if sigma_px <= 0: return targets
+    squeeze = targets.dim() == 4
+    x = targets[..., 0] if squeeze else targets
+    r = int(math.ceil(3 * sigma_px)); k = torch.arange(-r, r + 1, device=x.device, dtype=x.dtype)
+    g = torch.exp(-0.5 * (k / sigma_px) ** 2); g = g / g.sum()
+    y = x.unsqueeze(1)
+    y = F.conv2d(F.pad(y, (r, r, 0, 0), mode="replicate"), g.view(1, 1, 1, -1))
+    y = F.conv2d(F.pad(y, (0, 0, r, r), mode="replicate"), g.view(1, 1, -1, 1))[:, 0]
+    return y.unsqueeze(-1) if squeeze else y

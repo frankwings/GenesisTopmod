@@ -173,7 +173,8 @@ def taubin_adaptive(V, F, iters, lam, mu, w):
     return V
 
 def train_iou(V, F):
-    from cow_v13 import render_views_n, compute_iou_n
+    from cow_v13 import compute_iou_n
+    from run_64v import render_views_train as render_views_n   # renders at TRAIN_RES (gt is TRAIN_RES x TRAIN_RES)
     vt = torch.tensor(np.asarray(V), dtype=torch.float32, device=DEVICE)
     ft = torch.tensor(np.asarray(F, np.int32), dtype=torch.int32, device=DEVICE)
     return compute_iou_n(render_views_n(ctx, vt, ft, mvps), gt)
