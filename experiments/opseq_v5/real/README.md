@@ -102,3 +102,18 @@ quality with the handle DISCOVERED (membrane detector + verify only need masks).
 `real/mono_depth.py` + the gradient-dominant depth prior (dgrad settings) as an optional geometry refinement stage.
 Env note: xatlas 0.0.11 installed into the user site with `pip install --user --no-deps --break-system-packages`
 (PEP 668 guard; wheel has no runtime deps; numpy/torch verified unchanged; undo with `pip uninstall xatlas`).
+
+### 7b. Addendum 2026-09-18: textured renders, the geometry+texture control, texture speckle
+- `real/render_textured.py <mesh.npz with uvs,uv_idx> <texture.png> <out> [--turn N] [--tex-down k]`: free-viewpoint renders of
+  the UV-textured mesh (full triangle rasterisation + dr.texture; render_mesh.py only knows vertex colours).
+- The textured results shown so far (`dino_joint_ctrl_tex1.npz` + `real/dino3/tex_ctrl_tex1.png`) have geometry
+  BIT-IDENTICAL to dgrad (max vertex displacement 0.0): every completed v3 run was a gate run with FREEZE_GEO=1.
+- Control actually optimising geometry WITH the texture (`v3_cam0`: TEX=1, cameras frozen, dgrad depth settings,
+  W_PHO=0.3, 2500 steps, 7.6 min): held-out sil IoU 0.9669 -> 0.9660, held-out PSNR 21.6 -> 22.4 dB, crumpling 2.7 -> 3.5
+  deg, vertices move 4.0 px mean / 9.9 px p95, yet no arms / mouth cavity / eye sockets appear; the only visible change is
+  the solar-panel outline carved deeper = a TEXTURE edge baked into geometry (same failure as shading-only).
+  => texture makes the render more photo-like, it does not improve geometry here (cmp_v3cam0_geo.png).
+- "Pits" on the textured surface are texture noise, not geometry and not point rendering: the 2048^2 atlas is finer than
+  the 512 px supervision, so a training pixel only constrains the AVERAGE of ~4x4 texels and single texels stay free.
+  Box-filtering the texture to 512^2 before rendering removes the speckle (textured_zoom_texres.png). Proper fix if ever
+  needed: supervise with the full-resolution photos. Grey mosaic on the back = never observed (capture covers ~150 deg).
