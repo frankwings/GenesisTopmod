@@ -341,7 +341,8 @@ class RealScene:
             view_i = _view_matrix_norm(R_i, t_i, X.astype(np.float32), float(s))
             mvp_t  = torch.tensor(P_i @ view_i, dtype=torch.float32, device=device)
             view_t = torch.tensor(view_i,        dtype=torch.float32, device=device)
-            return mvp_t, view_t, all_xy0[idx]
+            proj_t = torch.tensor(P_i,           dtype=torch.float32, device=device)
+            return mvp_t, view_t, all_xy0[idx], proj_t
 
         def _mask_to_gt_nv(m_pil, x0i, y0i):
             """Crop, resize to res, flip vertically (nvdiffrast convention), 0=fg 255=bg."""
@@ -365,38 +366,98 @@ class RealScene:
             m_nv   = _flip_v(m_rsz)
             return torch.from_numpy(m_nv)
 
+        # ── Photo / mono-depth loaders (same crop/resize/flip as masks) ─────
+        image_dir = os.path.join(scene_dir, "images")
+        depth_dir = os.path.join(scene_dir, "depth_da2")
+        _has_depth = os.path.isdir(depth_dir)
+
+        def _load_mono_nv(name, x0i, y0i):
+            """Load cached DA2 depth map, crop/resize/flip exactly like masks.
+            Returns float32 [res,res] inverse-depth (larger=nearer). 0.0 where missing."""
+            if not _has_depth:
+                return np.zeros((res, res), dtype=np.float32)
+            stem = os.path.splitext(name)[0]
+            npy_path = os.path.join(depth_dir, stem + ".npy")
+            try:
+                mono = np.load(npy_path).astype(np.float32)   # [H_full, W_full]
+                h_img, w_img = mono.shape[:2]
+                full = np.zeros((S_px, S_px), dtype=np.float32)   # pad with 0
+                y1 = min(y0i + S_px, h_img); x1 = min(x0i + S_px, w_img)
+                full[:y1 - y0i, :x1 - x0i] = mono[y0i:y1, x0i:x1]
+                m_rsz = np.array(Image.fromarray(full).resize((res, res), Image.BILINEAR))
+                return _flip_v(m_rsz)                          # float32 [res,res]
+            except Exception:
+                return np.zeros((res, res), dtype=np.float32)
+
+        def _load_photo_nv(name, x0i, y0i):
+            """Load photo, crop/resize exactly like masks → float32 [res,res,3] in [0,1]."""
+            stem = os.path.splitext(name)[0]
+            img_path = os.path.join(image_dir, stem + ".jpg")
+            try:
+                img = np.array(Image.open(img_path).convert("RGB"))
+                h_img, w_img = img.shape[:2]
+                full = np.zeros((S_px, S_px, 3), dtype=np.uint8)
+                y1 = min(y0i + S_px, h_img); x1 = min(x0i + S_px, w_img)
+                full[:y1-y0i, :x1-x0i] = img[y0i:y1, x0i:x1]
+                m_rsz = np.array(Image.fromarray(full).resize((res, res), Image.BILINEAR))
+                return _flip_v(m_rsz).astype(np.float32) / 255.0
+            except Exception:
+                return np.full((res, res, 3), 0.5, np.float32)
+
         # Training
         train_mvps_list, train_views_list, train_gt_list = [], [], []
         train_masks_hires_list = []; train_valid_list = []
+        train_proj_list = []; train_rgb_list = []; train_mono_list = []
         for idx in train_idx:
             im  = all_imgs[idx]
-            mvp_i, view_i, (x0i, y0i) = _build_mvp_view(im, idx)
+            mvp_i, view_i, (x0i, y0i), proj_i = _build_mvp_view(im, idx)
             train_mvps_list.append(mvp_i)
             train_views_list.append(view_i)
+            train_proj_list.append(proj_i)
             train_gt_list.append(_mask_to_gt_nv(all_masks_pil[idx], x0i, y0i))
             train_valid_list.append(_valid_nv(x0i, y0i, res))
             train_masks_hires_list.append(_mask_to_hires_nv(all_masks_pil[idx], x0i, y0i, hull_hires))
+            train_rgb_list.append(_load_photo_nv(im.name, x0i, y0i))
+            train_mono_list.append(_load_mono_nv(im.name, x0i, y0i))
 
         # Held-out
         hold_mvps_list, hold_gt_list = [], []
+        hold_views_list = []
+        hold_rgb_list = []; hold_mono_list = []
         for idx in hold_idx:
             im  = all_imgs[idx]
-            mvp_i, _, (x0i, y0i) = _build_mvp_view(im, idx)
+            mvp_i, view_i, (x0i, y0i), _ = _build_mvp_view(im, idx)
             hold_mvps_list.append(mvp_i)
+            hold_views_list.append(view_i)
             hold_gt_list.append(_mask_to_gt_nv(all_masks_pil[idx], x0i, y0i))
+            hold_rgb_list.append(_load_photo_nv(im.name, x0i, y0i))
+            hold_mono_list.append(_load_mono_nv(im.name, x0i, y0i))
 
         self.mvps        = torch.stack(train_mvps_list)      # [64,4,4]
         self.views       = torch.stack(train_views_list)     # [64,4,4]
+        self.proj        = torch.stack(train_proj_list)      # [64,4,4] projection matrices
+        self.view_w2c    = self.views                        # alias: view_w2c == views (world→cam, OpenGL, normalised)
         self.gt          = np.stack(train_gt_list)           # [64,res,res] uint8, 0=fg
         self.valid       = np.stack(train_valid_list)        # [64,res,res] bool: inside the original frame (loss weight)
         self.gtd         = np.zeros((len(train_idx), res, res), np.float32)
         self.gtdiff      = np.zeros((len(train_idx), res, res), np.float32)
         self.max_r       = 0.8
         self.masks_hires = train_masks_hires_list
-        self.ho_mvps     = torch.stack(hold_mvps_list)       # [16,4,4]
+        self.rgb         = np.stack(train_rgb_list)          # [64,res,res,3] float32 [0,1]
+        self.mono        = np.stack(train_mono_list)         # [64,res,res] float32 inv-depth (0 if no cache)
+        self.ho_mvps     = torch.stack(hold_mvps_list)        # [16,4,4]
+        self.ho_view_w2c = torch.stack(hold_views_list)      # [16,4,4] world→cam for held-out
         self.ho_gt       = np.stack(hold_gt_list)            # [16,res,res] uint8
+        self.ho_rgb      = np.stack(hold_rgb_list)           # [16,res,res,3] float32 [0,1]
+        self.ho_mono     = np.stack(hold_mono_list)          # [16,res,res] float32 inv-depth
+        self._has_depth  = _has_depth
         self._hull_hf    = None
         self._hull_pre   = hull_pre
+        # Sanity: proj @ view_w2c == mvps (float32 rounding may give ~1e-6)
+        with torch.no_grad():
+            _mvp_check = torch.bmm(self.proj, self.view_w2c)
+            _diff = (_mvp_check - self.mvps).abs().max().item()
+            print(f"[real_scene] proj@view_w2c sanity: max_abs_diff={_diff:.2e}", flush=True)
 
         # ── Final IoU validation on all 64 training views ────────────────────
         try:

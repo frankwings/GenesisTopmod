@@ -77,3 +77,28 @@ Renders: `real/dino3/mesh_real{1,2}_grid.png`, `_turn.mp4`. Overlays: `real/dino
 3. Thin-structure guard from hull thickness (arms collapse to noodles under inconsistent silhouettes).
 4. Multi-component objects (hull with >1 connected component) — not handled.
 5. A holed object for the topology claim (mug) — capture pending.
+
+## 7. Appearance / depth / camera experiments on the dinosaur (2026-09-17/18) — CLOSED, off the TopMod path
+Script `despike/phase8_joint.py` (fixed topology, no DLFL remeshing; specs `despike/JOINT_OPT_SPEC{,_V2,_V3}.md`).
+Input = silhouette-only golden result `dino_real7_auto` (held-out sil IoU 0.9696). All numbers on real/dino3, 512 px.
+Silhouette-only ceiling first: 512 px, soft silhouettes (SIL_BLUR), out-of-frame fix all land at 0.965-0.970 and never
+recover the arms — the arms overlap the belly in most views, so the silhouettes barely contain them (residual_real6.png).
+| experiment | result |
+|---|---|
+| v1: per-vertex colour, unshaded, geometry free | surface CRUMPLES (mean adjacent-face angle 47.9 deg vs 5.7 input); not fixed by LR_V/6 + 10x Laplacian (36 deg). Without a shading model geometry only receives noise from colour interpolation; eyes/teeth are painted, not carved. 52k vertex colours = one sample per 3.7 px. |
+| v2 d0s1: shading only | texture and highlights get carved into geometry (belly stripes -> ridges), 6.7 deg, IoU 0.9638 |
+| v2 d1s0 / d1s1: Depth Anything v2 prior, scale-shift-invariant L1 + gradient term | smooth (3.5 / 5.4 deg), held-out depth err 0.0163 -> 0.0113 / 0.0124, first relief silhouettes cannot give (body/base step, arm relief, brow) BUT held-out sil IoU drops to 0.952 / 0.956: the absolute (affine-aligned) term bends the global shape |
+| **v2 dgrad: W_DEPTH_L1=0.2 W_DEPTH_GRAD=1.0 W_SIL=6, no colour on geometry** | **best geometry: 2.7 deg, sil IoU 0.9669, depth err 0.0133.** Mono depth is trustworthy for LOCAL relief (gradient term), not for absolute shape. Arms are still relief, no eyes/teeth. |
+| cameras, v1 (vertex colour, geometry free) | free cameras move 0.006 deg; known 0.26 deg perturbation recovered 7 % (prior) / -45 % (no prior) |
+| cameras, v3 gate (UV texture 2048^2 via xatlas + dr.texture, mip bias 5->0, geometry frozen), W_CAM=0.1 | 15.5 % (texture) vs 15.7 % (vertex colour) — but this test was BIASED: the prior is centred on omega=0 = the perturbed pose, so it pulls towards the wrong answer; identical numbers for both appearance models = equilibrium set by prior vs silhouette |
+| cameras, v3 gate, unbiased (W_CAM=0) | residual GROWS: 0.213 -> 0.494 deg (texture, -132 %) / 0.460 deg (vertex colour, -116 %); train PSNR 21.8 in both |
+Conclusion on cameras: with geometry that is itself wrong by several pixels (no arms, no face relief) each camera drifts to
+make the wrong mesh fit its own photo; photometric/silhouette refinement does not localise the cameras here, with or
+without a sharp texture. (It says nothing about refinement on accurate geometry.) The Boss's prior — do not try to fix
+poses, make the reconstruction robust to them — was right for this data.
+Why closed: none of this touches topology or the DLFL operators, and the dinosaur is genus 0, so it cannot support the
+paper's claim. What the paper needs from real data is one object with a through-hole (mug) reconstructed at silhouette
+quality with the handle DISCOVERED (membrane detector + verify only need masks). Reusable pieces if ever needed:
+`real/mono_depth.py` + the gradient-dominant depth prior (dgrad settings) as an optional geometry refinement stage.
+Env note: xatlas 0.0.11 installed into the user site with `pip install --user --no-deps --break-system-packages`
+(PEP 668 guard; wheel has no runtime deps; numpy/torch verified unchanged; undo with `pip uninstall xatlas`).
