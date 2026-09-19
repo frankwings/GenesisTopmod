@@ -47,3 +47,28 @@ Topo Carving is the only method that DISCOVERS genus from images AND guarantees 
 mesh by construction — via silhouette-carved topology detection + TopMod DLFL surgery + DR verification; the ICASSP 2026
 PH paper preserves a GIVEN genus on a fixed-connectivity mesh, and every other baseline either fixes genus or lets it
 emerge non-manifold.
+
+## What to BORROW from Gu et al. (ICASSP 2026) — three concrete, actionable items (2026-09-18)
+Their method = Nicolet "Large Steps" (bi-Laplacian preconditioned rendering loss, Eq.1) + persistent homology. Topology is
+TEMPLATE-GIVEN; PH only PRESERVES it. Three pieces are borrowable into our discover+manifold pipeline (they are orthogonal
+to our TopMod create step):
+
+1. **Persistent-homology anti-collapse guard (highest value; fixes our thin-handle risk).**
+   They build a filtration (Vietoris-Rips) on mesh vertices, read H1 as a persistence diagram; each tunnel loop has a
+   birth-death interval = its robustness. A loss keeping that interval >= threshold stops optimisation from thinning a
+   handle to nothing. OUR risk: after DLFL `add_handle`, the following 400-step DR loop (Laplacian + collapse remesh) can
+   slowly pinch a thin handle shut (mug-handle failure mode). We ADD (TopMod), their PH says DON'T-COLLAPSE — orthogonal,
+   stackable. Practical proxy (no full PH library): keep the tunnel throat (min cross-section of the hole) open; see
+   `despike/handle_guard.py` + spike below.
+2. **Spanning-tree loop extraction -> cheap H1 = 2g verification.**
+   Their algorithm: spanning tree T of the mesh edge graph; non-tree edges G\T = {e1..ek} give k independent cycles;
+   rank H1 = 2g for genus g. We can run this after every `add_handle` to confirm a real non-contractible loop was created
+   (rank went up by 2), a topology-side second check alongside our DR-verified accept/reject.
+3. **Topology-aware evaluation metric (persistence-diagram distance, their "Birthday" metric).**
+   Beyond Chamfer / Volume IoU we report only binary "genus correct?". Adding a bottleneck / persistence-diagram distance
+   to GT gives a CONTINUOUS topological-correctness score, more informative under noise and a direct answer to their
+   strongest column.
+
+NOT borrowable: their template-given topology (Eq.1 starts from a genus-g mesh) and their "collaborative rendering"
+(Phong vertex+fragment shaders for Mitsuba path tracing; we use nvdiffrast rasterisation). Our discovery + manifold-by-
+construction differentiators stay the headline.
