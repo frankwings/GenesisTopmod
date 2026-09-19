@@ -117,3 +117,19 @@ Env note: xatlas 0.0.11 installed into the user site with `pip install --user --
   the 512 px supervision, so a training pixel only constrains the AVERAGE of ~4x4 texels and single texels stay free.
   Box-filtering the texture to 512^2 before rendering removes the speckle (textured_zoom_texres.png). Proper fix if ever
   needed: supervise with the full-resolution photos. Grey mosaic on the back = never observed (capture covers ~150 deg).
+
+## 8. iPhone (StrayScanner) captures survey — 2026-09-18
+Pipeline: prep_object.sh (frames + prep_arkit.py ARKit->COLMAP + rembg + sam2_video_masks.py) then carve_object.py.
+ARKit poses are excellent everywhere (ray-miss 4-8 mm). The captures were shot for Gaussian Splatting scenes, so the
+BLOCKERS are (a) partial angular coverage of the object even when the camera path is a "full orbit", (b) SAM2-video can't
+track thin/dark clutter-surrounded objects, (c) handle holes fill in the silhouette (see 7b).
+| capture | object | genus | ray-miss | object-orbit | SAM2-video | hull result | usable? |
+|---|---|---|---|---|---|---|---|
+| bb126f8e17 | flower mug | 1 | 7 mm | ~full | ok (12/148 leak) | handle HOLE fills -> genus 0; force-reopen -> genus 1670 (coffee/interior) | NO (hole ambiguity) |
+| e7da89a9bb | flower mug | 1 | 4 mm | ~220° arc | ok | handle visible, back unbounded | NO (partial) |
+| 1bea72bf80 | green-tea bottle | 0 | 4 mm | 151° eff. | poor (IoU 0.64) | thin crescent wedge, spurious genus 5 | NO (coverage) |
+| 6c96741473 | headphones | ~1 | 8 mm | 347° | FAIL (IoU 0.16) | empty hull (tiny dark object untrackable) | NO (segmentation) |
+| others (0b555, 120d, 1470, b2c4, e354, e3bc) | rooms / bottle | - | - | 238-286° | - | scene captures, not single objects | NO |
+Conclusion: none of the existing iPhone captures are clean enough for silhouette-based topology. ARKit conversion +
+SAM2-video tooling is ready and reusable; a dedicated CLEAN capture (plain background, single object, full 360° at two
+elevations, empty mug) is the path to a real genus-1 result. Tools: real/prep_object.sh, real/carve_object.py.
