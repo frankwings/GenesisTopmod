@@ -50,6 +50,8 @@ FLIP_EVERY = int(os.environ.get("FLIP_EVERY", "25"))
 SMOOTH_ITERS = int(os.environ.get("SMOOTH_ITERS", "1"))
 SMOOTH_LAM = float(os.environ.get("SMOOTH_LAM", "0.2"))
 W_T = float(os.environ.get("W_T", "20.0"))
+HANDLE_GUARD = float(os.environ.get("HANDLE_GUARD", "0"))   # >0: PH-inspired anti-collapse guard (Gu et al.) keeping each add_handle tunnel throat open during DR
+HANDLE_GUARD_KEEP = float(os.environ.get("HANDLE_GUARD_KEEP", "0.8"))   # target throat = keep x initial throat
 MEMB_EXEMPT = float(os.environ.get("MEMB_EXEMPT", "0"))   # >0: faces whose interior is more than this many voxels outside the hull are MEMBRANES spanning a tunnel -> no hull-field pull (keep them visible for topology discovery)
 THIN_GUARD = int(os.environ.get("THIN_GUARD", "0"))          # 1: thin-structure guard from hull thickness (real data): no hull-field loss and no collapses where the hull is thin
 THIN_PX_LO = float(os.environ.get("THIN_PX_LO", "3.0"))     # hull thickness (px) at/below which a vertex is fully "thin" (guard weight 0)
@@ -448,6 +450,19 @@ def report(tag, V, Fa):
 # ---------------------------------------------------------------- optimize
 ho0, si0 = report("base", V, Fa)
 verts_t = torch.tensor(V, dtype=torch.float32, device=DEVICE).requires_grad_(True)
+# --- anti-collapse handle guard (Gu et al. ICASSP 2026, borrow #1) ---
+import handle_guard as _hg
+_GUARD_AXES = []; _GUARD_TARGETS = []
+if HANDLE_GUARD > 0:
+    _bx = BASE_NPZ + ".haxes.npz"
+    if os.path.exists(_bx):
+        _z = np.load(_bx)
+        for _k in range(int(_z["n"])):
+            a0 = torch.tensor(_z[f"a0_{_k}"], dtype=torch.float32, device=DEVICE); u = torch.tensor(_z[f"u_{_k}"], dtype=torch.float32, device=DEVICE)
+            _GUARD_AXES.append((a0, u)); _GUARD_TARGETS.append(_hg.axis_throat_target(verts_t.detach(), a0, u, HANDLE_GUARD_KEEP))
+        print(f"[p4] handle guard ON: {len(_GUARD_AXES)} tunnel(s), targets {[round(t,3) for t in _GUARD_TARGETS]}", flush=True)
+    else:
+        print(f"[p4] handle guard requested but no {_bx}; guard inactive", flush=True)
 opt = torch.optim.Adam([verts_t], lr=LR, betas=ADAM_BETAS)
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=STEPS, eta_min=LR_MIN)
 
@@ -509,7 +524,8 @@ for step in range(STEPS):
             + W_SPIKE * spike_pen(verts_t, src, dst, deg, me)
             + W_SLIVER * sliver_pen(verts_t, faces_l, me)
             + W_FOLD * FOLD_MULT * fold_loss(verts_t, faces_l, pairs_t)
-            + W_T * field_loss(verts_t, faces_l))
+            + W_T * field_loss(verts_t, faces_l)
+            + (HANDLE_GUARD * _hg.handles_guard_loss(verts_t, _GUARD_AXES, _GUARD_TARGETS) if _GUARD_AXES else 0.0))
     loss.backward()
     if PALF_LAP > 0 or PALF_CLIP > 0:
         # Palfinger MeshOptimizer.step(): nu = |m1 / sqrt(m2)| (Adam-normalised velocity, O(1) while moving,
@@ -736,5 +752,8 @@ hof, sif = report("final", V, Fa)
 print(f"[p4] ho16 {ho0:.4f} -> {hof:.4f} ({(hof-ho0)*100:+.2f}) | SI {100*si0/len(Fa):.1f}% -> "
       f"{100*sif/len(Fa):.1f}% | total flips={nflips_total}", flush=True)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
+_bx0 = BASE_NPZ + ".haxes.npz"
+if os.path.exists(_bx0):
+    import shutil as _sh; _sh.copy(_bx0, f"{OUTD}/cow_{SHAPE}_{TAG}.npz.haxes.npz")
 print(f"[vram] peak {torch.cuda.max_memory_allocated()/2**30:.2f} GB (reserved {torch.cuda.max_memory_reserved()/2**30:.2f} GB)", flush=True)
 print(f"[p4] saved cow_{SHAPE}_{TAG}.npz", flush=True)

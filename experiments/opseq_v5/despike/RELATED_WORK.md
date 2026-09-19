@@ -72,3 +72,19 @@ to our TopMod create step):
 NOT borrowable: their template-given topology (Eq.1 starts from a genus-g mesh) and their "collaborative rendering"
 (Phong vertex+fragment shaders for Mitsuba path tracing; we use nvdiffrast rasterisation). Our discovery + manifold-by-
 construction differentiators stay the headline.
+
+## Result of porting Gu's tools (synthetic test, 2026-09-18)
+All three ported: guard (handle_guard.py -> phase4_inloop HANDLE_GUARD, phase7 saves the tunnel axes sidecar),
+H1=2g verification (phase7 logs "N generator loops = 2*genus" after every add_handle -> confirmed OK on kitten),
+loop-length topology metric (handle_guard.loop_length_spectrum). Guard mechanism validated in isolation
+(test_handle_guard.py: a hole-closing force collapses a genus-1 torus 1->0; the throat guard keeps it 1).
+KEY FINDING — on OUR synthetic pipeline the guard is a NO-OP: the handle never collapses. Stress test (kitten post-
+add_handle mesh, hull field OFF W_T=0, diffuse OFF, Laplacian smoothing up to LAP_MULT=600, 300 steps) keeps genus 1
+WITH OR WITHOUT the guard. Reason: our remesh is DLFL `collapse_short_edges` = TOPOLOGY-PRESERVING (never collapses an
+edge that would change genus) and vertex motion alone cannot change topology. Gu et al. NEED the PH prior because their
+base (Nicolet) is a FIXED-CONNECTIVITY mesh whose vertices can slide the handle into a self-intersection that a later
+remesh then removes; that failure mode DOES NOT EXIST in our TopMod pipeline. So the anti-collapse guard is redundant
+with our manifold-by-construction guarantee -> this is a DIFFERENTIATOR, not a gap: we are inherently robust to the
+exact failure their prior patches. Residual value of the guard: a soft insurance signal for very thin REAL handles
+(mug) under noisy silhouettes; kept opt-in (HANDLE_GUARD=0 default), to revisit with clean mug data. The H1 verification
+and loop-length metric are useful now (per-handle topology confirmation + a continuous topological-fidelity score).

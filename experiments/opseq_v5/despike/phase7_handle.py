@@ -468,6 +468,11 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
 report("base", V, Fa); _snap(f"Stage 7 [genus discovery] base genus={genus(V, Fa)}", V, Fa)
 import json
 prev_handles = json.load(open(HANDLES_JSON)) if HANDLES_JSON and os.path.exists(HANDLES_JSON) else []
+import handle_guard as _hg
+_HAXES = []                                             # accepted tunnel axes (a0, u, L) for the anti-collapse guard
+_bx = BASE_NPZ + ".haxes.npz"
+if os.path.exists(_bx):
+    _z = np.load(_bx); _HAXES = [(_z[f"a0_{k}"], _z[f"u_{k}"], float(_z[f"L_{k}"])) for k in range(int(_z["n"]))]
 n_added = 0
 MODE_BRIDGE = False
 # When DETECT=hull, override MAX_HANDLES so phase7_multi.sh's MAX_HANDLES=1
@@ -637,8 +642,16 @@ for k in range(_hull_max):
         if PROJECT:
             V, mv = radial_project(V, a0, u, L_, tube_verts); print(f"[p7] radial projection: moved {mv} verts", flush=True)
     n_added += 1
+    _HAXES.append((np.asarray(a0,float), np.asarray(u,float)/(np.linalg.norm(u)+1e-12), float(L_)))
     prev_handles.append({"mid": ((cen[i] + cen[j]) / 2).tolist(), "blob": _blob if DETECT in ("rays", "hull", "membrane") else None})
     if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
+    _loops = _hg.tree_cotree_loops(V, Fa); _g = genus(V, Fa)
+    print(f"[p7] H1 verification: {len(_loops)} generator loops = 2*genus? (2*{_g}={2*_g})  {'OK' if len(_loops)==2*_g else 'MISMATCH'}", flush=True)
     report(f"after handle {n_added}", V, Fa); _snap(f"Stage 7 [DLFL add_handle #{n_added}] genus={genus(V, Fa)}", V, Fa, hold=45)
 np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz", verts=V, tris=Fa)
+if _HAXES:
+    _hx = {"n": len(_HAXES)}
+    for k,(a0,u,L) in enumerate(_HAXES): _hx[f"a0_{k}"]=a0; _hx[f"u_{k}"]=u; _hx[f"L_{k}"]=L
+    np.savez_compressed(f"{OUTD}/cow_{SHAPE}_{TAG}.npz.haxes.npz", **_hx)
+    print(f"[p7] saved {len(_HAXES)} handle axes for the guard", flush=True)
 print(f"[p7] handles added: {n_added}; saved cow_{SHAPE}_{TAG}.npz | genus {genus(V, Fa)}" + (f" / target {G_TARGET}" if G_TARGET is not None else ""), flush=True)
