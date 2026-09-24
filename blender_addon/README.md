@@ -57,37 +57,101 @@ Different operators require different selection modes:
 | **Face selection** | Press **3** | Extrude Face, Stellate, Subdivide Face, Triangulate Face, Double Stellate Face, Extrude Face Dome |
 | **Edge selection** | Press **2** | Subdivide Edge, Collapse Edge, Trisect Edge |
 | **Two-face selection** | Press **3**, select 2 faces | Add Handle, Punch Hole |
-| **Vertex selection (ordered)** | Press **1**, click vertices in order | Insert Edge (4 vertices), Delete Vertex (1 vertex) |
+| **Vertex selection** | Press **1**, click 1 vertex | Delete Vertex |
+| **Interactive picking** | — run the operator, then click in the viewport | Insert Edge (2 corners) |
 
-### Insert Edge — detailed selection guide
+### Insert Edge — picking the two corners
 
-`insert_edge` is the most nuanced operator because it requires specifying
-two **half-edges**. A half-edge is a directed edge (A→B) that belongs to
-a specific face.
+`insert_edge` joins two **corners**. A corner is a (face, vertex) pair — not
+just a vertex — because a vertex shared by several faces offers a corner on
+each of them, and which one you mean decides what happens.
 
-**How to select:**
+Insert Edge picks them for you interactively, so nothing has to be selected
+beforehand:
 
-1. Enter **Vertex selection mode** (press **1**)
-2. Click 4 vertices **one by one, in order**:
-   - **V1** then **V2** → defines half-edge 1 (from V1 toward V2)
-   - **V3** then **V4** → defines half-edge 2 (from V3 toward V4)
-3. Run the operator (Mesh → TopMod → Insert Edge, or sidebar)
-4. The new edge connects **V1** and **V3**
+1. Run **Mesh → TopMod → Edge Ops → Insert Edge** (or the sidebar button)
+2. **Click a face.** It highlights orange under the cursor, blue once chosen
+3. **Click one of its corners.** Corners show as white dots; the one under
+   the cursor gets a yellow wedge along its two face edges
+4. **Click the second corner** on the same face. A preview line follows the
+   cursor from the first corner, and the first corner stays green
 
-**Why 4 vertices?** Two vertices A→B define a directed edge, which
-determines not just *which* edge, but *which side* (which face) the
-half-edge belongs to. This eliminates all ambiguity — especially in the
-cross-face case where different face choices produce different topological
-results.
+The viewport header shows the current step throughout.
 
-**Same-face case** (V1 and V3 on the same face): the face is split in two.
+| Key | Action |
+|---|---|
+| **Left click** | Take the highlighted face / corner |
+| **Backspace** | Step back exactly one step |
+| **Esc** or **right click** | Cancel; the original selection and select mode come back |
+| **MMB / wheel / numpad / NDOF** | Orbit, pan and zoom as usual, mid-pick |
 
-**Cross-face case** (V1 and V3 on different faces): the two faces merge
-into one, adding a topological handle (genus +1).
+The new edge is selected when the operator finishes, and the whole
+interaction plus the insertion is a single undo step. The **Redo panel**
+re-runs it from the recorded face and corner indices.
 
-> **Tip**: The selection order matters! Blender records click order via
-> `select_history`. If you box-select or select-all, the order is lost
-> and the operator will report an error.
+**Same face or two faces.** Both corners on one face **splits** it in two.
+Corners on two *different* faces **merges** them into a single face whose
+boundary runs through the new edge once per direction, which opens a handle
+(genus +1) — the `insert_edge_cross` case in
+[docs/operators.md](../docs/operators.md). Both are picked identically.
+
+**Which corners are refused.** Almost nothing. A corner turns red, with the
+reason in the header, in only two cases — and both are because the result
+*hangs*, not because the topology is wrong:
+
+| Refused pick | Why |
+|---|---|
+| The very same corner twice | `insert_edge` splices both new half-edges against one half-edge, leaving a face loop that never closes; the next traversal spins forever |
+| Both corners on the same vertex | The self-loop edge that makes is stored by Blender perfectly well, but `bm.normal_update()` and clearing the selection then spin forever on it. TopMod proper allows this; the Blender bridge cannot |
+
+Everything else goes through — including the two cases stock Blender
+modelling cannot express:
+
+- **Corners on two different faces** merge the faces into one whose boundary
+  runs through the new edge once per direction (genus +1).
+- **Corners whose vertices are already joined** add a *second, parallel*
+  edge beside the existing one, bounding a 2-gon. Neighbouring corners of
+  one face are the everyday case.
+
+### How the exotic topology is stored
+
+DLFL meshes hold three things a Blender mesh cannot be *built* with:
+
+| Shape | Produced by | What refuses to build it |
+|---|---|---|
+| A face that visits a vertex twice | cross-face insert | `bmesh.faces.new()` — "found the same (BMVert) used multiple times" |
+| Two edges on one vertex pair | inserting between joined corners | `bmesh.edges.new()` — "this edge exists" |
+| A 2-gon | the same | nothing; it is fine once built |
+
+Blender *stores* all of them — verified on 4.4 and 5.3 through Edit Mode
+round trips and `.blend` save/reload. Only the constructors refuse. So
+`converter._load_dlfl_into_bmesh` fills a scratch mesh's arrays directly,
+setting each loop's **`edge_index`** as well as its vertex, and hands that
+to `bm.from_mesh`. Writing the edge per corner is what keeps two parallel
+edges apart; `Mesh.from_pydata` would look each corner's edge up by vertex
+pair and silently merge them.
+
+Reading back is the same story in reverse: `bmesh_to_dlfl` takes each face
+as its loops' `(vertex index, edge index)` pairs, and
+`corner_rules.build_dlfl_from_corners` pairs half-edges by **edge index**.
+The core's `primitives._build_mesh` keys them by directed vertex pair, so
+two parallel edges would overwrite each other and one would lose its twin —
+which is why the converter no longer uses it. A side benefit: `_be_map` is
+now keyed on Blender's own edge indices, so the selected-edge operators
+target the right one of a parallel pair.
+
+Three consequences worth knowing:
+
+- **Never call `mesh.validate()`** on a mesh in this state — it deletes
+  duplicate edges *and* faces that repeat a vertex. The addon does not, but
+  a stock Blender operator that validates will clean the topology up.
+- **A one-corner polygon crashes Blender** outright on Mesh→BMesh
+  conversion. `insert_edge` cannot make one; `create_vertex` can, as its
+  degenerate loop face, so the writer drops those.
+- **The subdivision operators do not handle merged faces yet.** Running
+  Catmull-Clark on one yields a non-manifold result. That is a limitation of
+  the topmod core, not the Blender bridge — it reproduces in pure Python.
+  Insert Edge itself chains fine.
 
 ### Available operators (46)
 
@@ -231,6 +295,8 @@ topmod_blender/
   __init__.py       ← bl_info + register/unregister
   converter.py      ← BMesh ↔ DLFLMesh conversion + selection helpers
   operators.py      ← 46 bpy.types.Operator classes (factory pattern)
+  corner_pick.py    ← Insert Edge: modal corner picker + viewport overlays
+  corner_rules.py   ← Corner rules + the lossless DLFL <-> corner-array form
   panels.py         ← Mesh menu + N-panel sidebar
   topmod/           ← Bundled pure-Python topmod core (zero dependencies)
 ```
@@ -244,7 +310,7 @@ Selection-based operators use helper functions in `converter.py`:
 - `apply_local_face_op()` — operates on selected faces
 - `apply_local_edge_op()` — operates on selected edges
 - `apply_two_face_op()` — requires exactly 2 selected faces
-- `apply_insert_edge()` — reads 4 vertices from select history
+- `apply_insert_edge_corners()` — takes two (face index, corner position) pairs from the picker
 - `apply_delete_vertex()` — operates on 1 selected vertex
 
 ## For developers
@@ -257,3 +323,37 @@ bash blender_addon/build_zip.sh
 
 This copies the latest core files (excluding torch-dependent `diffgeo.py`
 and `tokenizer.py`) and rebuilds the zip.
+
+### Tests
+
+The corner rules are pure Python and run under pytest with the rest of the
+suite — `corner_rules.py` imports no `bpy` on purpose:
+
+```bash
+python -m pytest tests/test_corner_rules.py
+```
+
+Everything reachable through `execute()` — registration, the corner →
+half-edge adapter, the refusals, the resulting selection — runs headlessly:
+
+```bash
+blender -b --factory-startup --python blender_addon/test_headless.py
+```
+
+The modal picker itself needs a real 3D Viewport. Check it by hand:
+
+| Scenario | Expected |
+|---|---|
+| Two non-adjacent corners of one cube face | The face splits; one undo reverts everything |
+| One corner on each of two different faces | The two faces merge; the mesh stays closed and genus goes up by 1 |
+| Two neighbouring corners of one face | A second edge appears beside the one they share, bounding a 2-gon; the mesh stays closed |
+| Hover the stored corner itself, or any corner on its vertex | Red wedge, red preview line, reason in the header, click ignored |
+| Backspace at each step | Steps back exactly one step |
+| Esc / right click at each step | Original selection and select mode restored; overlays and header text gone |
+| Orbit, pan, zoom mid-pick (MMB, wheel, trackpad, numpad, NDOF) | Navigation works; hover updates on the next mouse move |
+| Object with rotation and non-uniform scale | Face and corner picking land on the right elements |
+| Perspective, orthographic, quad view, X-ray on | Picking and overlays correct; labels in the right place |
+| UI scale 2.0 | Overlay sizes and hover radius scale with it |
+| Mesh with hidden faces | Hidden faces cannot be picked |
+| Adjust the Redo panel after confirming | Undo and re-execute with the new values works |
+| Leave Edit Mode mid-pick | Operator cancels; no draw errors in the console afterwards |

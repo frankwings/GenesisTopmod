@@ -32,12 +32,13 @@ open('$DEST/__init__.py', 'w').write(t)
 # Remove __pycache__
 find topmod_blender -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
-# Build zip
+# Build zip.
+# The archive root must be topmod_blender/ itself: Blender's "Install from
+# Disk" extracts the zip straight into scripts/addons, so an extra leading
+# folder would land the package at addons/blender_addon/topmod_blender,
+# where Blender never looks for it.
 rm -f topmod_blender.zip
-cd ..
-zip -r blender_addon/topmod_blender.zip \
-    blender_addon/topmod_blender/ \
-    -x '*.pyc' -x '*__pycache__*'
+zip -r topmod_blender.zip topmod_blender/ -x '*.pyc' -x '*__pycache__*'
 
 echo ""
 echo "Built: blender_addon/topmod_blender.zip"
