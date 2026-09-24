@@ -43,10 +43,19 @@ Measured: **14/15** (rescue fired 8× in the real pipeline). Residual miss (c15)
 surfaced at Stage-5b with **out_vox = 0** — the refined mesh is flush to the hull, so the "air" signal
 is gone even though the tunnel is real. Rule C's air-gate correctly-by-its-own-logic rejected it.
 
-## Open: Rule C′ — trust the oracle's LOCATION
-Root cause of the residual: at the refined stage the geometric air evidence vanishes; the only reliable
-signal left is the hull oracle's *knowledge* that a tunnel must be there. Proposed C′: pass the real
-candidate provenance (hull-located vs ray-fallback) to the gate and, when `g < g*` and the candidate is
-**hull-located** (the oracle pointing at the known missing-tunnel location), accept unconditionally
-regardless of out_vox/Δho. Ray-fallback candidates still require the air evidence. Expected → 15/15.
-(This is the long-pending "hull-guided completion".)
+## Shipped: Rule C′ — trust the oracle's LOCATION (gate half)
+C′ passes real candidate provenance (hull-located vs ray-fallback) to the gate and, when `g < g*` and
+the candidate is **hull-located**, accepts unconditionally regardless of out_vox/Δho; ray-fallback
+candidates still require air. `phase7_multi.sh` now derives `prov` from the phase7 log (`(ray` → ray).
+
+Measured: **14/15** — identical to C, because **`rescue-hull` fired 0 times**. Diagnosis (cp6 stage-5b):
+the 4th tunnel candidate arrives as **`prov=ray`, out_vox=0** — the refined mesh is flush to the hull, so
+the outside-hull membrane detector finds nothing → phase7 falls through to the ray fallback, which
+image-guesses at out_vox=0. C′ correctly rejects that unreliable guess. So the gate is no longer the
+bottleneck: **the hull's known tunnel LOCATION is never used to propose the handle at the refined stage.**
+
+## Open: hull-guided completion (upstream / detection half)
+The real fix is in `phase7_handle.py`: when `g < g*` and outside-hull membrane detection is empty, query
+the hull's tree-cotree tunnel locations (`hull_locate.py` / `handle_guard.tree_cotree_loops`) and propose
+the handle THERE with `prov=hull`. C′ then accepts it via `rescue-hull`. Expected → stable 15/15.
+The gate half (C′) is already in place and inert until this lands.

@@ -31,12 +31,13 @@ for r in $(seq 1 $R); do
     curg=$(python3 -c "import numpy as np; z=np.load('$prev_cur'); V,F=z['verts'],z['tris'].astype('int64'); E=len(np.unique(np.sort(np.concatenate([F[:,[0,1]],F[:,[1,2]],F[:,[2,0]]]),1),axis=0)); print((2-(len(V)-E+len(F)))//2)" 2>/dev/null)
     outvox=$(echo "$out" | sed -nE 's/.*add_handle between faces [0-9]+,[0-9]+: out ([0-9.]+)\/([0-9.]+) vox.*/\1 \2/p' | tail -1 | python3 -c "import sys; a=sys.stdin.read().split(); print(min(map(float,a)) if a else 2.5)" 2>/dev/null)
     blob=$(python3 -c "import json; h=json.load(open('$HANDLES_JSON')); b=h[-1].get('blob'); print(int(min(b)) if isinstance(b,list) and b else 100)" 2>/dev/null)
+    prov=hull; echo "$out" | grep -q "(ray" && prov=ray   # real provenance: ray-fallback candidates are image guesses, not oracle-located
     jev=$(VERIFY_DHO=${VERIFY_DHO:-0.002} python3 despike/jev_handle_gate.py --json \
       --g-star "${gstar:-0}" --cur-genus "${curg:-0}" \
       --d-ho "$(python3 -c "print(${ho_new:-0}-${ho_ref:-0})")" --hair-ratio "$(python3 -c "print(${hair_new:-1}/max(${hair_ref:-1},1e-9))")" \
-      --out-vox "${outvox:-2.5}" --blob-vox "${blob:-100}" --located hull 2>/dev/null)
+      --out-vox "${outvox:-2.5}" --blob-vox "${blob:-100}" --located "$prov" 2>/dev/null)
     ok=$(echo "$jev" | python3 -c "import sys,json; print(1 if json.load(sys.stdin)['gated_accept'] else 0)" 2>/dev/null)
-    echo "##### $S round $r: JEV gate (g$curg<g*$gstar, dho=$(python3 -c "print(round(${ho_new:-0}-${ho_ref:-0},4))"), out=${outvox} blob=${blob}) -> $jev"
+    echo "##### $S round $r: JEV gate (g$curg<g*$gstar, dho=$(python3 -c "print(round(${ho_new:-0}-${ho_ref:-0},4))"), out=${outvox} blob=${blob} prov=${prov}) -> $jev"
   fi
   if [ "$ok" = "1" ]; then
     echo "##### $S round $r: handle VERIFIED (ho16 $ho_ref -> $ho_new, hair $hair_ref -> $hair_new)"; ho_ref=$ho_new; hair_ref=$hair_new

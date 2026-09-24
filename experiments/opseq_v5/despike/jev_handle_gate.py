@@ -111,9 +111,16 @@ def _count_first(f: HandleFeatures):
     reproducible, no external dependency. Bounded by the g* stop, so it can never overshoot the genus."""
     thr = f.verify_threshold
     legacy = (f.d_ho16 >= thr) or (f.hair_ratio <= VERIFY_HAIR)
-    rescue = f.count_says_missing() and (f.out_vox >= AIR_VOX) and (f.blob_vox >= BLOB_MIN)
+    # Rule C':  hull-located candidates come straight from the space-carving oracle's tunnel LOCATION, so
+    # when a tunnel is still missing (g<g*) we trust them unconditionally -- even at the refined stage where
+    # the mesh is flush to the hull (out_vox=0) and the geometric air signal is gone. Ray-fallback candidates
+    # are only image guesses, so they still require genuine air.
+    air = (f.out_vox >= AIR_VOX) and (f.blob_vox >= BLOB_MIN)
+    hull_located = (f.located_by == "hull")
+    rescue = f.count_says_missing() and (hull_located or air)
     accept = legacy or rescue
-    return ("accept" if accept else "reject"), (1.0 if accept else 0.0), ("count" + (":rescue" if (rescue and not legacy) else ""))
+    tag = ":rescue-hull" if (rescue and not legacy and hull_located) else (":rescue-air" if (rescue and not legacy) else "")
+    return ("accept" if accept else "reject"), (1.0 if accept else 0.0), ("count" + tag)
 
 
 # ----------------------------------------------------------------------------- Laya (free local backend, same paradigm)
