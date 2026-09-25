@@ -411,14 +411,21 @@ def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None, res=128, ca
             plugs = json.load(open(cache)); bz = np.load(cache + ".blocks.npz")
             for i, p in enumerate(plugs): p["block_vox"] = bz[f"plug{i}"]
             hs = bz["hs"]
-            log(f"[p7] hull: loaded {len(plugs)} plug(s) from cache {cache}")
+            _g0c = genus_solid(hs)
+            if len(plugs) < _g0c:   # stale/truncated cache: older code cached only n_needed<g0 plugs -> recompute the full set
+                log(f"[p7] hull: cache has {len(plugs)} plug(s) < hull genus {_g0c} -> stale, recomputing full set")
+                plugs = None
+            else:
+                log(f"[p7] hull: loaded {len(plugs)} plug(s) from cache {cache}")
         except Exception: plugs = None
     if plugs is None:
         hs = np.pad(downsample(clean_hull(np.asarray(HF_in.hull).astype(bool)), res), PAD)
         g0 = genus_solid(hs); g_mesh = genus_fn(V, F) if genus_fn else 0
         n_needed = (g_target - g_mesh) if g_target is not None else g0
-        log(f"[p7] hull: {res}^3 genus_solid={g0} mesh_genus={g_mesh} need={n_needed}")
-        plugs = find_plugs(hs, n_needed, viz_dir=viz_dir, log=log) if (n_needed > 0 and g0 > 0) else []
+        # Always locate ALL g0 hull tunnels so the cache is COMPLETE and mesh-independent; the caller subsets
+        # via prev_handles dedup (face-pair casting still runs only for non-deduped plugs, so this stays cheap).
+        log(f"[p7] hull: {res}^3 genus_solid={g0} mesh_genus={g_mesh} need={n_needed}; locating all {g0} hull plug(s)")
+        plugs = find_plugs(hs, g0, viz_dir=viz_dir, log=log) if g0 > 0 else []
         for p in plugs:
             p["throat_w"] = v2w(p["throat_vox"]).tolist(); p["cen_w"] = v2w(p["cen_vox"]).tolist()
             p["key"] = ["hull", [round(float(x), 3) for x in p["throat_w"]]]

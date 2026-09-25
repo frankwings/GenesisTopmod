@@ -54,8 +54,19 @@ the outside-hull membrane detector finds nothing → phase7 falls through to the
 image-guesses at out_vox=0. C′ correctly rejects that unreliable guess. So the gate is no longer the
 bottleneck: **the hull's known tunnel LOCATION is never used to propose the handle at the refined stage.**
 
-## Open: hull-guided completion (upstream / detection half)
-The real fix is in `phase7_handle.py`: when `g < g*` and outside-hull membrane detection is empty, query
-the hull's tree-cotree tunnel locations (`hull_locate.py` / `handle_guard.tree_cotree_loops`) and propose
-the handle THERE with `prov=hull`. C′ then accepts it via `rescue-hull`. Expected → stable 15/15.
-The gate half (C′) is already in place and inert until this lands.
+## Shipped: hull-guided completion (upstream / detection half) — E2E VERIFIED
+`phase7_handle.py`: when `g < g*` and outside-hull membrane detection is empty, `find_tunnel_by_hull`
+(closing-ladder plug analysis on the carved hull, mesh-independent) proposes the handle with
+`prov=hull` before falling back to rays (`HULL_COMPLETE=1`, default). C′ accepts it via `rescue-hull`.
+
+Two bugs found and fixed on the way (`hull_locate.py`):
+- **Stale-truncated plug cache**: `find_plugs` stopped early at `n_needed = g*−g_mesh`, so a cache written
+  when only 1–3 plugs were needed poisoned later calls needing more (observed: a 3-plug cache made the
+  locator report 3/4). Fix: the ladder now always locates ALL `g0` hull plugs (cache complete and
+  mesh-independent; face-pair casting still runs only for non-deduped plugs), and a loaded cache with
+  fewer plugs than the hull genus is discarded as stale.
+
+End-to-end proof (forced Stage-5b scenario, `phase7_multi.sh` on a real genus-3 flush fertility mesh):
+membrane detection stalls → hull-completion locates 4/4 plugs (fresh ladder 37 s) → the missing 4th
+arrives as `prov=hull, Δho=−0.0014, out_vox=0.0` → gate `count:rescue-hull` accepts → handle verified →
+**final genus 4 = GT**. This is exactly the case where legacy (13/15) and Rule C alone (14/15) fail.

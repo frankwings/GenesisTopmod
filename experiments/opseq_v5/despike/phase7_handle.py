@@ -497,15 +497,27 @@ for k in range(_hull_max):
             negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
             print(f"[p7] tunnel-evidence pairs: 1 ({DETECT})", flush=True)
         elif G_TARGET is not None and genus(V, Fa) < G_TARGET:
-            # Hull candidates exhausted or no valid face pair: fall back to rays
-            print(f"[p7] hull: 0 valid candidates, genus {genus(V, Fa)} < g*={G_TARGET}: rays fallback", flush=True)
-            hit = None
-            for _lv, (_mp, _ov) in enumerate(RELAX):
-                OUT_VOX = _ov
-                hit = find_tunnel_by_rays(V, Fa, min_px=int(_mp), prev_handles=prev_handles)
-                if hit is not None:
-                    if _lv > 0: print(f"[p7] rays fallback at relaxation level {_lv} (min_px {_mp}, out_vox {_ov})", flush=True)
-                    break
+            hit = None; _hc_hit = False
+            # HULL-GUIDED COMPLETION: membrane detection stalled (at the refined stage the mesh is flush to the
+            # hull, so no face sits OUTSIDE it and there is no outside-hull membrane to find) -- but the oracle
+            # says a tunnel is still missing. Ask the HULL itself where it is (closing-ladder plug analysis on the
+            # carved hull is independent of mesh refinement). These candidates carry key[0]=="hull", so the
+            # count-first gate (Rule C') accepts them unconditionally via rescue-hull.
+            if DETECT == "membrane" and int(os.environ.get("HULL_COMPLETE", "1")):
+                _hc = find_tunnel_by_hull(V, Fa, HF, prev_handles, G_TARGET)
+                if _hc:
+                    hit = _hc[0]; _hc_hit = True
+                    print(f"[p7] hull-guided completion: {len(_hc)} plug(s) located on the hull, genus {genus(V, Fa)} < g*={G_TARGET}", flush=True)
+                    print(f"[p7] tunnel-evidence pairs: 1 (hull-completion)", flush=True)
+            if hit is None:
+                # Hull candidates exhausted or no valid face pair: fall back to rays
+                print(f"[p7] hull: 0 valid candidates, genus {genus(V, Fa)} < g*={G_TARGET}: rays fallback", flush=True)
+                for _lv, (_mp, _ov) in enumerate(RELAX):
+                    OUT_VOX = _ov
+                    hit = find_tunnel_by_rays(V, Fa, min_px=int(_mp), prev_handles=prev_handles)
+                    if hit is not None:
+                        if _lv > 0: print(f"[p7] rays fallback at relaxation level {_lv} (min_px {_mp}, out_vox {_ov})", flush=True)
+                        break
             if hit is None and int(os.environ.get("BRIDGE", "0")):
                 hit = find_bridge(V, Fa)
                 if hit is not None: MODE_BRIDGE = True
@@ -517,7 +529,7 @@ for k in range(_hull_max):
             i, j, _ci, _cj, _blob = hit
             tri = V[Fa]; cen = tri.mean(1); d = hdist(cen)
             negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
-            print(f"[p7] tunnel-evidence pairs: 1 (ray fallback)", flush=True)
+            if not _hc_hit: print(f"[p7] tunnel-evidence pairs: 1 (ray fallback)", flush=True)
         else:
             print(f"[p7] tunnel-evidence pairs: 0", flush=True); break
     elif DETECT == "rays":
