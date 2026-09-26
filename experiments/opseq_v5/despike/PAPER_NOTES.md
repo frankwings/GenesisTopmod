@@ -79,7 +79,7 @@ rescue fired naturally 4/15; hull locates 4/4 tunnels on the genus-3 flush mesh 
 
 ## 8. TODO before submission
 
-- [ ] v6.3 5-shape ×3 regression green (running)
+- [x] v6.3 5-shape ×3 regression: 15/15 chains correct genus, 0 mismatch (2026-09-26, task v63_full_reg)
 - [ ] real mug genus-1 result (needs capture per CAPTURE_SPEC.md)
 - [ ] ablation runs (§5) + figures: pipeline diagram, fertility seam before/after, hull-plug viz,
       gate decision table, DMesh comparison plot
