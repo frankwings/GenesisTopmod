@@ -463,6 +463,19 @@ if HANDLE_GUARD > 0:
         print(f"[p4] handle guard ON: {len(_GUARD_AXES)} tunnel(s), targets {[round(t,3) for t in _GUARD_TARGETS]}", flush=True)
     else:
         print(f"[p4] handle guard requested but no {_bx}; guard inactive", flush=True)
+# --- optional vertex freeze mask (localized DR, e.g. seam repair at a 5b handle mouth) ---
+# FREEZE_MASK=path.npz with array "w" (len V): 1 = free to move, 0 = frozen at the input position,
+# fractional = partially constrained. Applied by projection after every optimizer step, so this is a
+# constraint DURING optimization (no post-hoc blending of two converged solutions -> no wrinkle band).
+# Requires a vertex-count-stable run (COLLAPSE/SUBDIV off); mask is dropped with a warning otherwise.
+_FREEZE = os.environ.get("FREEZE_MASK", "")
+_fw_t = None
+if _FREEZE:
+    _fz = np.load(_FREEZE); _fw = _fz["w"].astype(np.float32)
+    assert len(_fw) == len(V), f"FREEZE_MASK len {len(_fw)} != V {len(V)}"
+    _fw_t = torch.tensor(_fw, device=DEVICE)[:, None]
+    _fV0 = torch.tensor(V, dtype=torch.float32, device=DEVICE)
+    print(f"[p4] freeze mask: {int((_fw > 0.01).sum())} free / {len(V)} verts", flush=True)
 opt = torch.optim.Adam([verts_t], lr=LR, betas=ADAM_BETAS)
 sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=STEPS, eta_min=LR_MIN)
 
@@ -547,6 +560,8 @@ for step in range(STEPS):
     if LR_EDGE > 0:
         for _g in opt.param_groups: _g["lr"] = LR_EDGE * float(me)
     opt.step(); sched.step()
+    if _fw_t is not None:
+        with torch.no_grad(): verts_t.data = _fV0 * (1 - _fw_t) + verts_t.data * _fw_t
     if W_VLAP > 0 and verts_t.shape[0] == _vl_prev.shape[0]:
         with torch.no_grad():
             _disp = (verts_t.detach() - _vl_prev).norm(dim=-1)
@@ -725,6 +740,8 @@ for step in range(STEPS):
             if nc > 0 or ns > 0:
                 # vertex count changed: new parameter tensor + fresh Adam at current lr
                 cur_lr = opt.param_groups[0]["lr"]
+                if _fw_t is not None:
+                    print("[p4] WARNING: vertex count changed -> freeze mask dropped", flush=True); _fw_t = None
                 V = Vn
                 verts_t = torch.tensor(Vn, dtype=torch.float32, device=DEVICE).requires_grad_(True)
                 opt = torch.optim.Adam([verts_t], lr=cur_lr, betas=ADAM_BETAS)

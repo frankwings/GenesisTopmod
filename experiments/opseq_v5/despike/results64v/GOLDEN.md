@@ -143,3 +143,33 @@ fell below the 256² supervision pixel size (~0.01): per-pixel losses carry no i
 scale. Effective resolution limit for this recipe ≈ 50–60k faces at 256²; go to 512² images first
 to push further. Command: `SUBDIV_TOP=1500 LAP_MULT=3 STEPS=1200 FLIP_EVERY=25 COLLAPSE_EVERY=100
 COLLAPSE_RATIO=0.4 COLLAPSE_MAX=800 SI_PUSH=0.15 BASE_NPZ=<golden> phase4_inloop.py` then Taubin×5.
+
+## golden v6.3 (2026-09-26): late-handle reliability + seam refit
+
+Chain = v6.1 stages + three additions (commits be26439, 61c4123, 3cf5df3 + this):
+
+1. **Count-first handle gate (Rule C/C′)** replaces the hard Δho threshold at propose-and-verify:
+   accept ⟺ legacy render/hair evidence OR (g<g* AND membrane is genuine air) OR (g<g* AND candidate
+   is hull-located). Rescues the thin 4th fertility tunnel that opens with NEGATIVE Δho at Stage 5b
+   (render noise floor) — the root cause of v6.1's 13/15. A typed-decision text model (TypeSafe Jev
+   paradigm via Laya) was rigorously tried for this decision and measured to be a coin flip at the
+   decisive point — negative result archived in GATE_DECISION_findings.md.
+2. **Hull-guided completion**: when membrane detection stalls (refined mesh flush to the hull) and
+   g<g*, `find_tunnel_by_hull` proposes the handle from the hull's own tunnel location (prov=hull →
+   unconditional accept). Plug cache now always stores the COMPLETE g0 set (stale-truncated-cache fix).
+3. **Stage 6b, late-handle seam refit** (this entry): a handle opened at 5b misses the Stage-4/5
+   polishing and leaves a crack/seam at its mouth (fertility arm). Trigger: genus(p4) ≠ genus(p4g).
+   Recipe: one gentle vertex-count-stable refit (STEPS=500, flips on, collapse OFF, LAP×1) + Taubin
+   fixed ×5 (AUTO can under-polish). Failed alternatives measured and archived: local Taubin (fades,
+   trace remains), positional blending ×3 (transition-band wrinkles), masked-DR via FREEZE_MASK
+   (frozen boundary shatters the patch) — the seam needs unconstrained image-evidence refit.
+   The 5b handle mids are now archived (handles_<tag>_5b.json) = the seam locations.
+
+| metric | v6.1 | v6.3 |
+|---|---|---|
+| fertility genus (GT 4, n=15) | 13/15 | **15/15** (rescue fired naturally 4×) |
+| fertility seam artifact | crack on arm | **gone** (v62r1: VolIoU 0.9908→0.9915, CD 0.00644→0.00641) |
+| per-chain time | ~5.5 min | ~5.8 min normal; +~1 min only on stall runs (~13%) |
+
+phase4_inloop gains an experimental FREEZE_MASK env (per-vertex freeze projection during
+optimization; off by default; dropped with a warning if the vertex count changes).

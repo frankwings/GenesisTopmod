@@ -33,10 +33,21 @@ chain() { S=$1; T0=$(date +%s); T=${S}_$P
   if [ -f $O/cow_${T}_p4g.npz ]; then echo "[$S 5b] skip"; else guard
     # late genus pass through the same propose-and-verify loop as Stage 3 (one handle per round, DR-verified, reverted if ineffective)
     env SNAPSHOT_TITLE="Stage 5b [late genus pass]" SHAPE=$S ROUNDS=4 COLLAPSE_FRAC=0.02 SKIP_FINAL=1 GENUS_TARGET=hull bash despike/phase7_multi.sh $O/cow_${S}_${T}_p4.npz 2>&1 | grep --line-buffered "genus target\|after handle\|contact\|no more\|UNREACHED\|handles added\|JEV gate\|broke\|VERIFIED\|REJECTED\|failed\|Traceback\|Error" | sed "s/^/[$S 5b] /"
-    cp /tmp/liou_cow_viz/cow_${S}_${S}_hlast.npz $O/cow_${T}_p4g.npz; fi
+    cp /tmp/liou_cow_viz/cow_${S}_${S}_hlast.npz $O/cow_${T}_p4g.npz
+    cp $O/handles_${S}.json despike/results_genus/handles_${T}_5b.json 2>/dev/null; fi   # archive the LATE handle mids too (v6.3: they mark the seam location)
   echo "[$S 5b] genus after late pass: $(genus_of $O/cow_${T}_p4g.npz) (GT $(_gt_of $S))"
   if [ -f $O/cow_${S}_${T}_p5.npz ]; then echo "[$S 6] skip"; else guard; env SNAPSHOT_TITLE="Stage 6 [golden v3 refine, LAP x3]" MODE=64v SHAPE=$S TAG=${T}_p5 $PALF LAP_MULT=3 BASE_NPZ=$O/cow_${T}_p4g.npz python3 -u despike/phase4_inloop.py 2>&1 | grep --line-buffered "$F4" | sed "s/^/[$S 6] /"; fi
-  if [ -f $O/cow_${S}_${T}_auto.npz ]; then echo "[$S 7] skip"; else guard; env SNAPSHOT_TITLE="Stage 7 Taubin" MODE=64v SHAPE=$S AUTO=1 TAG=${T}_auto BASE_NPZ=$O/cow_${S}_${T}_p5.npz python3 -u despike/phase5_taubin.py 2>&1 | grep --line-buffered "\[taubin x\|\[vram\]\|Traceback\|Error" | sed "s/^/[$S 7] /"; fi
+  # Stage 6b (golden v6.3): a handle opened LATE at 5b misses the Stage-4/5 polishing every Stage-3 handle
+  # gets, and its mouth leaves a crack/seam on the surface (fertility arm). If 5b actually raised the genus,
+  # run one gentle vertex-count-stable refit (flips on, collapse off) so the image evidence irons the seam.
+  # Measured: ~56 s on 5090; fertility v62r1 seam gone, VolIoU 0.9908->0.9915, CD 0.00644->0.00641, genus kept.
+  if [ "$(genus_of $O/cow_${S}_${T}_p4.npz)" != "$(genus_of $O/cow_${T}_p4g.npz)" ]; then
+    if [ -f $O/cow_${S}_${T}_p5b.npz ]; then echo "[$S 6b] skip"; else guard; env SNAPSHOT_TITLE="Stage 6b [late-handle seam refit]" MODE=64v SHAPE=$S TAG=${T}_p5b STEPS=500 MEMB_EXEMPT=2 FLIP_EVERY=25 COLLAPSE_EVERY=100000 COLLAPSE_FRAC=0 SI_PUSH=0.15 LAP_MULT=1 BASE_NPZ=$O/cow_${S}_${T}_p5.npz python3 -u despike/phase4_inloop.py 2>&1 | grep --line-buffered "$F4" | sed "s/^/[$S 6b] /"; fi
+    TB_BASE=$O/cow_${S}_${T}_p5b.npz; TB_ENV="ITERS=5"   # fixed x5: AUTO can pick too few iterations to polish the refit
+  else
+    TB_BASE=$O/cow_${S}_${T}_p5.npz; TB_ENV="AUTO=1"
+  fi
+  if [ -f $O/cow_${S}_${T}_auto.npz ]; then echo "[$S 7] skip"; else guard; env SNAPSHOT_TITLE="Stage 7 Taubin" MODE=64v SHAPE=$S $TB_ENV TAG=${T}_auto BASE_NPZ=$TB_BASE python3 -u despike/phase5_taubin.py 2>&1 | grep --line-buffered "\[taubin x\|\[vram\]\|Traceback\|Error" | sed "s/^/[$S 7] /"; fi
   cp $O/cow_${S}_${T}_p5.npz despike/results_genus/${T}_raw.npz; cp $O/cow_${S}_${T}_auto.npz despike/results_genus/${T}_auto.npz
   G=$(genus_of despike/results_genus/${T}_auto.npz); echo "[RESULT] $S $P: final genus $G (GT $(_gt_of $S)) $([ "$G" = "$(_gt_of $S)" ] && echo OK || echo MISMATCH)"
   guard; if [ -n "${REAL_DATA:-}" ]; then
