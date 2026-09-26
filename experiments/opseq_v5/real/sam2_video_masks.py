@@ -12,12 +12,23 @@ pred=build_sam2_video_predictor(cfg, ckpt, device="cuda")
 names=sorted(os.path.basename(p)[:-4] for p in glob.glob(f"{D}/images/f_*.jpg"))
 tmp=f"{D}/_sam2frames"; shutil.rmtree(tmp,ignore_errors=True); os.makedirs(tmp)
 for i,nm in enumerate(names): shutil.copy(f"{D}/images/{nm}.jpg", f"{tmp}/{i}.jpg")
-# anchor points from rembg mask of the click frame
+# TWO SEED POINTS: one on the body, one on the cap/second-part (Boss 2026-09-18)
 m0=cv2.imread(f"{D}/masks/{names[CLICK]}.png",0)>127; ys,xs=np.nonzero(m0)
-# positive: centroid + 3 distance-transform peaks (spread over body+handle); negative: 4 points just outside bbox
-dt=cv2.distanceTransform(m0.astype(np.uint8),cv2.DIST_L2,5); pts=[[xs.mean(),ys.mean()]]
-for _ in range(4):
-    iy,ix=np.unravel_index(np.argmax(dt),dt.shape); pts.append([float(ix),float(iy)]); cv2.circle(dt,(int(ix),int(iy)),int(max(np.ptp(xs),np.ptp(ys))*0.12),0,-1)
+img0=cv2.imread(f"{D}/images/{names[CLICK]}.jpg"); hsv=cv2.cvtColor(img0,cv2.COLOR_BGR2HSV)
+dt=cv2.distanceTransform(m0.astype(np.uint8),cv2.DIST_L2,5)
+by,bx=np.unravel_index(np.argmax(dt),dt.shape)          # BODY seed = deepest interior point of rembg mask
+pts=[[float(bx),float(by)]]
+# CAP seed = centroid of the desaturated part-region hugging the body border (cap/handle)
+near=cv2.dilate(m0.astype(np.uint8),np.ones((41,41),np.uint8))>0
+adj=near&~m0&(hsv[:,:,1]<70)&(hsv[:,:,2]>90)&(hsv[:,:,2]<245)
+adj=cv2.morphologyEx(adj.astype(np.uint8),cv2.MORPH_OPEN,np.ones((5,5),np.uint8))
+nl,lab,st,cen=cv2.connectedComponentsWithStats(adj)
+caps=[c for c in range(1,nl) if st[c,cv2.CC_STAT_AREA]>800]
+if caps:
+    c=max(caps,key=lambda c:st[c,cv2.CC_STAT_AREA]); pts.append([float(cen[c][0]),float(cen[c][1])])
+    print(f"[sam2-video] 2 seeds: body {(bx,by)}, cap {cen[c].round().astype(int)}",flush=True)
+else:
+    print(f"[sam2-video] 1 seed (no cap region found): body {(bx,by)}",flush=True)
 x0,x1,y0,y1=xs.min(),xs.max(),ys.min(),ys.max(); neg=[[x0-15,y0-15],[x1+15,y0-15],[x0-15,y1+15],[x1+15,y1+15]]
 P=np.array(pts+neg,np.float32); L=np.array([1]*len(pts)+[0]*len(neg),np.int32)
 with torch.inference_mode(), torch.autocast("cuda",dtype=torch.bfloat16):
