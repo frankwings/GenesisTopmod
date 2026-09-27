@@ -21,10 +21,18 @@ def _next_index():
     open(p, "w").write(str(n + 1)); return n
 
 def snap(ctx, mvps, V, F, title, step=None, res=192, cols=8, hold=1):
-    """Write one (or `hold` identical) frames. `step`=None bypasses SNAPSHOT_EVERY."""
+    """Write one (or `hold` identical) frames. `step`=None bypasses SNAPSHOT_EVERY.
+    SNAPSHOT_HERO=1: instead of the all-camera mosaic, render 2 large views ~90° apart
+    (res = SNAPSHOT_HERO_RES, default 760) — for high-definition evolution GIFs."""
     global _font
     if not SNAPSHOT_DIR: return
     if step is not None and step % SNAPSHOT_EVERY != 0: return
+    if int(os.environ.get("SNAPSHOT_HERO", "0")):
+        n0 = len(mvps)
+        _cams = os.environ.get("SNAPSHOT_HERO_CAMS", "")   # "i,j" training-camera indices (pick per shape)
+        idx = [int(x) % n0 for x in _cams.split(",")] if _cams else [n0 // 8, (3 * n0) // 8]
+        mvps = [mvps[i] for i in idx]
+        res = int(os.environ.get("SNAPSHOT_HERO_RES", "760")); cols = len(mvps)
     dev = "cuda"
     V = np.asarray(V, np.float64); F = np.asarray(F, np.int64)
     vt = torch.tensor(V, dtype=torch.float32, device=dev); ft = torch.tensor(F, dtype=torch.int32, device=dev)
@@ -45,6 +53,7 @@ def snap(ctx, mvps, V, F, title, step=None, res=192, cols=8, hold=1):
     if _font is None:
         try: _font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
         except Exception: _font = ImageFont.load_default()
-    ImageDraw.Draw(canvas).text((10, 6), f"{title}   V={len(V)} F={len(F)}   {n} training views", fill=0, font=_font)
+    _suffix = "" if int(os.environ.get("SNAPSHOT_HERO", "0")) else f"   {n} training views"
+    ImageDraw.Draw(canvas).text((10, 6), f"{title}   V={len(V)} F={len(F)}{_suffix}", fill=0, font=_font)
     for _ in range(hold):
         canvas.save(os.path.join(SNAPSHOT_DIR, f"frame_{_next_index():06d}.png"))

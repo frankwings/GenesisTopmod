@@ -8,10 +8,16 @@ oracle tells the optimizer *how many* tunnels the shape has and *where* they are
 change is executed as a TopMod **DLFL `add_handle`** — so the mesh is a valid orientable 2-manifold,
 watertight, after **every** step, and the genus can never drift silently.
 
+## The whole algorithm in one strip
+
 <p align="center">
-<img src="experiments/opseq_v5/despike/results_genus/gifs/fertility_golden_v3_discord.gif" width="640" alt="fertility reconstruction: genus discovered 0 -> 4"/>
-<br/><i>Fertility: starting from a genus-0 sphere, the pipeline discovers and opens all 4 tunnels —
-each one a DR-verified DLFL add_handle.</i>
+<img src="experiments/opseq_v5/despike/results_genus/fig_evolution_strip.png" width="980" alt="evolution: sphere to genus-4"/>
+</p>
+
+<p align="center">
+<img src="experiments/opseq_v5/despike/results_genus/gifs/fertility_evolution_hd.gif" width="680" alt="fertility reconstruction: genus discovered 0 -> 4"/>
+<br/><i>Live: fertility from a genus-0 icosphere to the correct genus-4 statue. The title bar tracks
+the stage and the genus — watch <code>add_handle</code> open each tunnel.</i>
 </p>
 
 ## Highlights (golden v6.3)
@@ -26,36 +32,41 @@ each one a DR-verified DLFL add_handle.</i>
 - Held-out silhouette IoU **0.9972** on armadillo (DMesh plateaus at 0.989), volume IoU **0.9915**
   on fertility with the seam-free finish.
 
-## Algorithm in one figure
+## How it works
 
 <p align="center">
-<img src="experiments/opseq_v5/despike/results_genus/fig_pipeline.png" width="900" alt="pipeline"/>
+<img src="experiments/opseq_v5/despike/results_genus/fig_pipeline.png" width="920" alt="pipeline"/>
 </p>
 
-1. **Carve the oracle.** A voting visual hull is carved from the input silhouettes once. Its Euler
-   number gives the tunnel **count** g\* (morphological closing ladder, mode over radii); a
-   closing-ladder plug analysis gives each tunnel's **location** on demand.
-2. **Discover topology by propose-and-verify.** Outside-hull membranes propose handle sites; a
-   deterministic count-first gate accepts/rejects; the handle is executed as DLFL `add_handle` and
-   verified by differentiable rendering. The loop stops exactly at g\*.
-3. **Complete from the hull when detection stalls.** Late in refinement the mesh hugs the hull and
-   membranes vanish — the oracle's plug locations take over (`prov=hull` → unconditional accept).
-4. **Refine with guaranteed-manifold operators only.** Link-condition-guarded collapses,
-   Euler-preserving flips/subdivision, position-only DR: topological robustness holds **by
-   construction**, not by a regularizer.
+**1 — Carve the oracle.** A voting visual hull is carved from the input silhouettes once. Its Euler
+number gives the tunnel **count** g\* (morphological closing ladder, mode over radii); a
+closing-ladder plug analysis gives each tunnel's **location** on demand.
 
-## Results
-
-| | | |
-|:--:|:--:|:--:|
-| <img src="experiments/opseq_v5/despike/results_genus/gifs/armadillo_golden_v3_discord.gif" width="260"/> | <img src="experiments/opseq_v5/despike/results_genus/gifs/kitten_golden_v3_discord.gif" width="260"/> | <img src="experiments/opseq_v5/despike/results_genus/gifs/rockerarm_golden_v3_discord.gif" width="260"/> |
-| armadillo — discovered genus **0** | kitten — discovered genus **1** | rockerarm — discovered genus **1** |
+**2 — See the membranes.** Faces whose interior samples sit in hull *air* are membranes blocking a
+tunnel — the orange patches below are literally what the detector proposes to open:
 
 <p align="center">
-<img src="experiments/opseq_v5/despike/results_genus/fig_hull_plugs.png" width="520" alt="hull plugs"/>
-<br/><i>The oracle knows <b>where</b>: hull tunnel plugs on a genus-3 intermediate mesh — the yellow
-plug is the missing 4th tunnel, located even though the mesh sits flush to the hull.</i>
+<img src="experiments/opseq_v5/despike/results_genus/fig_membrane_detect.png" width="440" alt="membrane detection"/>
+<img src="experiments/opseq_v5/despike/results_genus/fig_hull_plugs.png" width="470" alt="hull plugs"/>
 </p>
+
+**3 — Propose-and-verify every handle.** Each membrane pair becomes a DLFL `add_handle` (manifold by
+construction), kept only if a count-first gate and a differentiable-render check agree. The loop
+stops exactly at g\*. When the refined mesh hugs the hull and membranes vanish, the oracle's plug
+locations (right figure — the yellow plug is a missing 4th tunnel found on a flush mesh) take over.
+
+**4 — Refine with guaranteed-manifold operators only.** Link-condition-guarded collapses,
+Euler-preserving flips/subdivision, position-only DR: topological robustness holds **by
+construction**, not by a regularizer.
+
+## Results — genus discovered, never assumed
+
+| | |
+|:--:|:--:|
+| <img src="experiments/opseq_v5/despike/results_genus/gifs/threeholes_evolution_hd.gif" width="380"/> | <img src="experiments/opseq_v5/despike/results_genus/gifs/kitten_evolution_hd.gif" width="380"/> |
+| threeholes — discovered genus **3** | kitten — discovered genus **1** |
+| <img src="experiments/opseq_v5/despike/results_genus/gifs/rockerarm_evolution_hd.gif" width="380"/> | <img src="experiments/opseq_v5/despike/results_genus/gifs/armadillo_evolution_hd.gif" width="380"/> |
+| rockerarm — discovered genus **1** | armadillo — discovered genus **0** (no false tunnels) |
 
 ## Comparison with prior work
 
@@ -87,6 +98,7 @@ cd experiments/opseq_v5
 SHAPES="fertility threeholes kitten rockerarm armadillo" TAGP=repro \
 USE_JEV=1 GATE_BACKEND=count HULL_COMPLETE=1 bash despike/golden_chain.sh
 # prints [RESULT] <shape>: final genus G (GT g) OK per shape
+# add SNAPSHOT_EVERY=2 SNAPSHOT_HERO=1 to record the evolution GIFs
 ```
 
 Requires: PyTorch (cu-enabled), nvdiffrast, open3d, scipy/scikit-image. Tested on RTX 5090
