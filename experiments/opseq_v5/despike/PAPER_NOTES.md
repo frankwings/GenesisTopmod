@@ -56,8 +56,20 @@ rescue fired naturally 4/15; hull locates 4/4 tunnels on the genus-3 flush mesh 
 - fertility: genus 15/15; CD 0.0064, VolIoU 0.9915 (with 6b); seam artifact eliminated.
 - armadillo vs DMesh (GOLDEN.md): ours 0.9957 ho16 @36.5k faces vs DMesh 0.9894 plateau; fair
   face-count comparison table already written (decimated 0.9921 @5.5k beats DMesh 0.9891 @4.8k).
-- Ablations to run for the paper: (a) gate: legacy vs C vs C′ (have n=15 each for legacy/C/C′-family);
-  (b) no-oracle (GENUS_TARGET=off); (c) no hull-completion; (d) no 6b (visual).
+- **Ablation table (fertility, GT genus 4, n=15 each; 2026-09-26 task ablation_run):**
+
+  | config | genus correct | failure mode |
+  |---|---|---|
+  | full v6.3 | 15/15 (two rounds: 30/30) | — |
+  | no oracle (GT_MODE=off) | **4/15** | drifts BOTH ways: g3 ×6 (missed), g5 ×3 / g6 ×2 (spurious) |
+  | no hull-completion (HULL_COMPLETE=0) | 13/15 | 2× stuck g3 (refined-stage stall) |
+  | legacy hard-threshold gate | 13/15 | rejects real tunnel at negative Δho |
+  | laya text-model gate | (15/15 but confounded; coin flip at decisive point) | see §6 |
+
+  Reading: the oracle is the foundation (removing it collapses accuracy to 27% and fails in BOTH
+  directions — it simultaneously prevents missed and spurious handles); the C′ gate and hull-guided
+  completion each close the remaining 13/15→15/15 gap from a different side (decision vs detection).
+  (d) no-6b is visual: fig_fertility_seam_before_after_6b.png.
 
 ## 6. Negative results (report honestly — reviewers like these)
 
@@ -81,6 +93,6 @@ rescue fired naturally 4/15; hull locates 4/4 tunnels on the genus-3 flush mesh 
 
 - [x] v6.3 5-shape ×3 regression: 15/15 chains correct genus, 0 mismatch (2026-09-26, task v63_full_reg)
 - [ ] real mug genus-1 result (needs capture per CAPTURE_SPEC.md)
-- [ ] ablation runs (§5) + figures: pipeline diagram, fertility seam before/after, hull-plug viz,
+- [x] ablation runs (§5 table complete) — figures still to make: pipeline diagram, fertility seam before/after, hull-plug viz,
       gate decision table, DMesh comparison plot
 - [ ] decide venue (ICASSP direct rebuttal to Gu? or 3DV/CVPR-W with fuller eval)
