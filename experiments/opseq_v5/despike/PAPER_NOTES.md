@@ -93,6 +93,8 @@ rescue fired naturally 4/15; hull locates 4/4 tunnels on the genus-3 flush mesh 
 
 - [x] v6.3 5-shape ×3 regression: 15/15 chains correct genus, 0 mismatch (2026-09-26, task v63_full_reg)
 - [ ] real mug genus-1 result (needs capture per CAPTURE_SPEC.md)
-- [x] ablation runs (§5 table complete) — figures still to make: pipeline diagram, fertility seam before/after, hull-plug viz,
-      gate decision table, DMesh comparison plot
+- [x] ablation runs (§5 table complete)
+- [x] figures v1 (results_genus/fig_*.png): pipeline diagram, hull-plug viz, DMesh comparison,
+      ablation bars, fertility seam before/after + arm GT comparison. (Pipeline diagram is a draft;
+      redraw in TikZ for camera-ready.)
 - [ ] decide venue (ICASSP direct rebuttal to Gu? or 3DV/CVPR-W with fuller eval)
