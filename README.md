@@ -46,17 +46,27 @@ closing-ladder plug analysis gives each tunnel's **location** on demand.
 tunnel — the orange patches below are literally what the detector proposes to open:
 
 <p align="center">
-<img src="experiments/opseq_v5/despike/results_genus/fig_membrane_detect.png" width="440" alt="membrane detection"/>
-<img src="experiments/opseq_v5/despike/results_genus/fig_hull_plugs.png" width="470" alt="hull plugs"/>
+<img src="experiments/opseq_v5/despike/results_genus/fig_oracle_membranes_plugs.png" width="560" alt="oracle: membranes + tunnel plugs"/>
 </p>
 
 **3 — Propose-and-verify every handle.** Each membrane pair becomes a DLFL `add_handle` (manifold by
 construction), kept only if a count-first gate and a differentiable-render check agree. The loop
 stops exactly at g\*. When the refined mesh hugs the hull and membranes vanish, the oracle's plug
-locations (right figure — the yellow plug is a missing 4th tunnel found on a flush mesh) take over.
+locations take over (hull-guided completion).
 
-**4 — Refine with guaranteed-manifold operators only.** Link-condition-guarded collapses,
-Euler-preserving flips/subdivision, position-only DR: topological robustness holds **by
+**4 — TopMod operators run the whole pipeline, not just the topology step.** `add_handle` is the
+only *genus-changing* operator; everything else is topology-preserving TopMod machinery:
+
+| stage | TopMod operators at work |
+|---|---|
+| init | `make_icosahedron`, `catmull_clark` (coarse-to-fine levels) |
+| carve to hull (DR loop) | `flip`, `collapse_edge_tri` (link-condition guarded) |
+| genus discovery | `insert_edge`/`delete_edge` (merge a membrane into one rim polygon), `subdivide_edge` (rim alignment), **`add_handle`** (genus +1, DR-verified) |
+| refine | `catmull_clark`, `subdivide_edge`, `collapse_edge_tri`, `flip` — driven by a Palfinger-style adaptive schedule, executed as DLFL ops |
+| final | Taubin smoothing (vertex positions only — topology untouched) |
+
+Because every one of these preserves the DLFL invariants, the mesh is manifold + watertight after
+**every** step, and the genus can only change at a verified `add_handle` — robustness **by
 construction**, not by a regularizer.
 
 ## Results — genus discovered, never assumed
@@ -67,6 +77,9 @@ construction**, not by a regularizer.
 | threeholes — discovered genus **3** | kitten — discovered genus **1** |
 | <img src="experiments/opseq_v5/despike/results_genus/gifs/rockerarm_evolution_hd.gif" width="380"/> | <img src="experiments/opseq_v5/despike/results_genus/gifs/armadillo_evolution_hd.gif" width="380"/> |
 | rockerarm — discovered genus **1** | armadillo — discovered genus **0** (no false tunnels) |
+
+1080p MP4 versions of all five runs:
+[`results_genus/gifs/*_evolution_hd.mp4`](experiments/opseq_v5/despike/results_genus/gifs/)
 
 ## Comparison with prior work
 
