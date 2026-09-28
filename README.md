@@ -22,8 +22,13 @@ the stage and the genus — watch <code>add_handle</code> open each tunnel.</i>
 
 ## Highlights (golden v6.3)
 
-- **Correct genus on 5/5 benchmark shapes** (armadillo 0, kitten 1, rockerarm 1, threeholes 3,
-  fertility 4) — 15/15 chains in a ×3 regression, robust to CUDA nondeterminism.
+> **Status (2026-09-27): re-validation in progress.** A bug was found in the hull-guided-completion
+> fallback (it could open a handle at the wrong place while the genus *number* still came out right).
+> The genus counts below are genus-**count** results; tunnel-**location** verification is being re-run
+> with the fix. Numbers will be updated.
+
+- **Correct genus count on 5/5 benchmark shapes** (armadillo 0, kitten 1, rockerarm 1, threeholes 3,
+  fertility 4) — 15/15 chains in a ×3 regression *(location check pending, see status)*.
 - **Count-first propose-and-verify**: a handle is accepted on render evidence *or* when the oracle
   says a tunnel is missing and the membrane is genuine air / hull-located — fixing the classic
   failure where a real thin tunnel opens with a *negative* render gain and gets rejected.
@@ -31,6 +36,25 @@ the stage and the genus — watch <code>add_handle</code> open each tunnel.</i>
   stalls, the hull's own tunnel location proposes the handle.
 - Held-out silhouette IoU **0.9972** on armadillo (DMesh plateaus at 0.989), volume IoU **0.9915**
   on fertility with the seam-free finish.
+
+## What `add_handle` actually does
+
+TopMod's `add_handle(f1, f2)` deletes two faces and stitches their boundary loops together with a ring
+of new side quads — a tube. Applied to the two pages of a thin membrane, it **drills a through-hole**:
+
+<p align="center">
+<img src="experiments/opseq_v5/despike/results_genus/fig_add_handle_donut.png" width="980" alt="add_handle on a membrane donut"/>
+</p>
+
+A donut whose hole is covered by a thin membrane is genus 0 (panels 1–2). `add_handle` on the
+membrane's top face (red) and bottom face (blue) deletes both and joins their rims with 20 side quads
+(orange, panel 4) — the tube wall; inside the tube is air, so the genus becomes 1 (panel 3). In the
+pipeline, DLFL collapses then absorb the leftover membrane and the hole grows to the real tunnel
+(panel 5). Real TopMod output, reproducible with
+[`demo_add_handle_donut.py`](experiments/opseq_v5/despike/demo_add_handle_donut.py).
+If the two faces had **air** between them instead of membrane material, the same operator would build
+a *bridge* instead of drilling a hole — still genus +1, but a wrong tunnel. Keeping `add_handle` fed
+with genuine membranes is exactly what the propose-and-verify gate is for.
 
 ## How it works
 
