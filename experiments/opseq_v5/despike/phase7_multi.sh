@@ -32,7 +32,7 @@ for r in $(seq 1 $R); do
     outvox=$(echo "$out" | sed -nE 's/.*add_handle between faces [0-9]+,[0-9]+: out ([0-9.]+)\/([0-9.]+) vox.*/\1 \2/p' | tail -1 | python3 -c "import sys; a=sys.stdin.read().split(); print(min(map(float,a)) if a else 2.5)" 2>/dev/null)
     blob=$(python3 -c "import json; h=json.load(open('$HANDLES_JSON')); b=h[-1].get('blob'); print(int(min(b)) if isinstance(b,list) and b else 100)" 2>/dev/null)
     prov=membrane; echo "$out" | grep -q "(hull-completion)" && prov=hull; echo "$out" | grep -q "(ray" && prov=ray   # 2026-09-27: was default-hull (bug)
-    site=$(echo "$out" | sed -nE 's/.*membrane check: .* -> (MEMBRANE|CONTACT|INVALID).*/\1/p' | tail -1)
+    site=$(echo "$out" | sed -nE 's/.*membrane check: .* -> (MEMBRANE|CONTACT|CREASE|INVALID).*/\1/p' | tail -1)
     { [ "$site" = "MEMBRANE" ] || [ "$site" = "CONTACT" ]; } && memb=1 || memb=0   # memb = site is topologically consistent
     jev=$(VERIFY_DHO=${VERIFY_DHO:-0.002} python3 despike/jev_handle_gate.py --json \
       --g-star "${gstar:-0}" --cur-genus "${curg:-0}" \

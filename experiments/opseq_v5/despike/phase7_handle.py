@@ -113,6 +113,26 @@ def site_kind(inside, air):
     if inside <= 0.4 and air <= 0.4: return "CONTACT"
     return "INVALID"
 
+CONTACT_GEO_RATIO = float(os.environ.get("CONTACT_GEO_RATIO", "50"))
+def contact_geo_ratio(V, F, fi, fj):
+    """Surface (geodesic, Dijkstra on the edge graph) distance / straight distance between two faces.
+    A true CONTACT joins two DIFFERENT parts pressed together (arm on body): far apart along the
+    surface (fertility: ratio 108-560). A crease/crack is the same sheet folded: near along the surface
+    too (ratio 1-12). Joining a crease with add_handle adds a spurious tiny handle. Calibrated 2026-09-28
+    on 112 GT-labelled candidates (fy1-15): no sample between 11.6 and 108 -> threshold 50."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import dijkstra
+    F = np.asarray(F, np.int64); V = np.asarray(V, float)
+    E = np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]); w = np.linalg.norm(V[E[:, 0]] - V[E[:, 1]], axis=1)
+    G = coo_matrix((np.r_[w, w], (np.r_[E[:, 0], E[:, 1]], np.r_[E[:, 1], E[:, 0]])), shape=(len(V), len(V))).tocsr()
+    d = dijkstra(G, indices=[int(x) for x in F[int(fi)]], min_only=True)
+    geo = float(d[F[int(fj)]].min()); eu = float(np.linalg.norm(V[F[int(fi)]].mean(0) - V[F[int(fj)]].mean(0)))
+    return geo / max(eu, 1e-9)
+def site_kind_full(V, F, fi, fj, inside, air):
+    k = site_kind(inside, air)
+    if k == "CONTACT" and contact_geo_ratio(V, F, fi, fj) < CONTACT_GEO_RATIO: return "CREASE"
+    return k
+
 R_REJ = float(os.environ.get("R_REJ", "0.3"))   # 2026-09-28: a candidate this close to a REJECTED handle position is skipped
 def _rejected_mids():
     return [np.asarray(h["rej_mid"], float) for h in globals().get("prev_handles", [])
@@ -559,8 +579,9 @@ for k in range(_hull_max):
                     _hc_ok = []
                     for _c in _hc:
                         _in, _air, _okm = membrane_check(V, Fa, _c[2], _c[3])
-                        print(f"[p7] hull-completion candidate faces {_c[0]},{_c[1]}: inside={_in:.2f} air={_air:.2f} -> {site_kind(_in, _air)}", flush=True)
-                        if _okm: _hc_ok.append(_c)
+                        _k = site_kind_full(V, Fa, _c[0], _c[1], _in, _air)
+                        print(f"[p7] hull-completion candidate faces {_c[0]},{_c[1]}: inside={_in:.2f} air={_air:.2f} -> {_k}", flush=True)
+                        if _k in ("MEMBRANE", "CONTACT"): _hc_ok.append(_c)
                     _hc = _hc_ok
                     os.makedirs(os.path.dirname(_mf), exist_ok=True); pickle.dump(_hc, open(_mf, "wb"))
                 if _hc:
@@ -616,7 +637,9 @@ for k in range(_hull_max):
     if DRY:
         print(f"[p7] DRY: best pair {i},{j} out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],2)} {np.round(cen[j],2)}", flush=True); break
     _mi, _ma, _mok = membrane_check(V, Fa, cen[i], cen[j])
-    print(f"[p7] membrane check: inside={_mi:.2f} air={_ma:.2f} -> {site_kind(_mi, _ma)}", flush=True)
+    _mk = site_kind_full(V, Fa, i, j, _mi, _ma)
+    _gr = f" geo_ratio={contact_geo_ratio(V, Fa, i, j):.0f}" if site_kind(_mi, _ma) == "CONTACT" else ""
+    print(f"[p7] membrane check: inside={_mi:.2f} air={_ma:.2f}{_gr} -> {_mk}", flush=True)
     print(f"[p7] add_handle between faces {i},{j}: out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],3)} {np.round(cen[j],3)}", flush=True)
     # Thin/pinched membrane: entry and exit faces are on different sheets but their 1-rings overlap
     # (sheets touch at 1-ring distance) -> the tube's side quads would duplicate existing edges and break

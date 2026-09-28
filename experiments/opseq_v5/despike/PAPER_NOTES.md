@@ -75,6 +75,20 @@ rescue fired naturally 4/15; hull locates 4/4 tunnels on the genus-3 flush mesh 
   (air-loop linking number) in progress; see-through-string and voxel audits failed calibration.
   (d) no-6b is visual: fig_fertility_seam_before_after_6b.png.
 
+## 5b. Site-check calibration (2026-09-28, results_genus/site_dataset_fertility_fy.json)
+
+112 candidates enumerated by the membrane and contact detectors on 30 intermediate meshes (fy1-15, coarse
+and refined), each labelled against GT (drill correct iff GT is air between the faces; join correct iff GT
+is material). Where the gate can fire (mesh genus < g*): 71/71 decisions correct (70 membranes, 1 contact).
+All errors of the inside/air rule occur on genus-4 meshes where the count stop blocks the gate. For
+CONTACT candidates the geodesic/straight-line ratio (idea: the user) separates two populations with an
+empty gap between 11.6 and 108: true contacts (arm pressed on body) 108-560; creases/cracks and bridges
+over real air 1-12. Joining a crease with add_handle would add a spurious handle -> CONTACT now requires
+ratio >= 50 (CREASE otherwise). Held-out check (thresholds from fy1-10, tested on fy11-15): same clean gap.
+Also observed: 5 candidates where the hull stays SOLID over true air (thin tunnels not carved by the
+silhouettes) - harmless here (all at genus 4) but a known limit for thinner tunnels.
+Figure: fig_site_calibration.png.
+
 ## 6. Negative results (report honestly — reviewers like these)
 
 - **Typed-decision text model (TypeSafe Jev paradigm, via Laya)** for the accept/reject gate:
