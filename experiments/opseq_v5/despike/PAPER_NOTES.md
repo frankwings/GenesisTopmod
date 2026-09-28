@@ -60,7 +60,8 @@ rescue fired naturally 4/15; hull locates 4/4 tunnels on the genus-3 flush mesh 
 
   | config | genus correct | failure mode |
   |---|---|---|
-  | full v6.3, completion FIXED (membrane check) | **14/15** | 1× honest stop at g3 (fx2) |
+  | full, TWO-SIDED site check (membrane drill + contact join), 2026-09-28 | **15/15** | none; all 15 visually matched to GT |
+  | full, membrane-only check (over-corrected, rejected contact joins) | 14/15 | fx2 stopped at g3: arm touching body not joined |
   | no hull-completion (HULL_COMPLETE=0), fixed gate | 11/15 | 4× honest stop at g3 |
   | ~~full v6.3 before the fix~~ | ~~15/15~~ | WITHDRAWN: completion could bridge an open tunnel (genus number right, location wrong) |
   | no oracle (GT_MODE=off) | **4/15** | drifts BOTH ways: g3 ×6 (missed), g5 ×3 / g6 ×2 (spurious) |

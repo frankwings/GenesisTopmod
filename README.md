@@ -22,15 +22,16 @@ the stage and the genus — watch <code>add_handle</code> open each tunnel.</i>
 
 ## Highlights (golden v6.3)
 
-> **Status (2026-09-28): bug fixed and re-run.** The hull-guided-completion fallback could open a handle
-> at the wrong place (a *bridge* over an already-open tunnel) while the genus number still came out
-> right. Fix: every candidate must pass a **membrane check** (the stretch between the two faces is our
-> material lying in hull air) before a count-based rescue may accept it. Numbers below are the post-fix
-> re-run; an independent topological location metric is still in progress.
+> **Status (2026-09-28): bug fixed, re-run, visually audited.** The hull-guided-completion fallback could
+> open a handle at the wrong place (a *bridge*) while the genus number still came out right. Fix: every
+> candidate is classified by what lies between its two faces — MEMBRANE (our material in hull air →
+> drill) or CONTACT (our air gap where the hull is solid → join); anything else is never accepted by the
+> count rescue. Fertility re-run: 15/15 genus 4, all 15 visually checked against GT (tunnel layout
+> identical). A quantitative location metric is still open.
 
-- **Correct genus count**: armadillo 0, kitten 1, rockerarm 1, threeholes 3 — 12/12 runs; fertility
-  (genus 4) — 14/15 runs, the one failure stops honestly at genus 3. In every fertility run every
-  accepted handle passed the membrane check (no bridges).
+- **Correct genus**: fertility (genus 4) 15/15 after the fix, every run visually matched to GT
+  ([audit](experiments/opseq_v5/despike/results_genus/fig_audit_fy_upper_vs_gt.png)); armadillo 0,
+  kitten 1, rockerarm 1, threeholes 3 — 12/12 (genus count, run with the previous membrane-only fix).
 - **Count-first propose-and-verify**: a handle is accepted on render evidence *or* when the oracle
   says a tunnel is missing and the membrane is genuine air / hull-located — fixing the classic
   failure where a real thin tunnel opens with a *negative* render gain and gets rejected.
