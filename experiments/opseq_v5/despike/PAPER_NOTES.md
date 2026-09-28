@@ -60,15 +60,18 @@ rescue fired naturally 4/15; hull locates 4/4 tunnels on the genus-3 flush mesh 
 
   | config | genus correct | failure mode |
   |---|---|---|
-  | full v6.3 | 15/15 (two rounds: 30/30) | — |
+  | full v6.3, completion FIXED (membrane check) | **14/15** | 1× honest stop at g3 (fx2) |
+  | no hull-completion (HULL_COMPLETE=0), fixed gate | 11/15 | 4× honest stop at g3 |
+  | ~~full v6.3 before the fix~~ | ~~15/15~~ | WITHDRAWN: completion could bridge an open tunnel (genus number right, location wrong) |
   | no oracle (GT_MODE=off) | **4/15** | drifts BOTH ways: g3 ×6 (missed), g5 ×3 / g6 ×2 (spurious) |
-  | no hull-completion (HULL_COMPLETE=0) | 13/15 | 2× stuck g3 (refined-stage stall) |
   | legacy hard-threshold gate | 13/15 | rejects real tunnel at negative Δho |
   | laya text-model gate | (15/15 but confounded; coin flip at decisive point) | see §6 |
 
-  Reading: the oracle is the foundation (removing it collapses accuracy to 27% and fails in BOTH
-  directions — it simultaneously prevents missed and spurious handles); the C′ gate and hull-guided
-  completion each close the remaining 13/15→15/15 gap from a different side (decision vs detection).
+  Reading (post-fix, 2026-09-28): the oracle is the foundation (27% without it, failing in BOTH
+  directions); membrane-checked hull-guided completion adds ~+3/15 (11→14). The earlier reading that
+  the count-first gate alone closes part of the gap is WITHDRAWN: fixed gate without completion is
+  11/15 vs legacy 13/15 (within n=15 noise). Other 4 shapes post-fix: 12/12. Location metric
+  (air-loop linking number) in progress; see-through-string and voxel audits failed calibration.
   (d) no-6b is visual: fig_fertility_seam_before_after_6b.png.
 
 ## 6. Negative results (report honestly — reviewers like these)

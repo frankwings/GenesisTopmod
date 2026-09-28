@@ -38,7 +38,8 @@ class HandleFeatures:
     out_vox: float              # how far outside the hull the membrane faces sit (voxels); >2 = real air
     blob_vox: int               # voxel-block size of the see-through membrane (bigger = more real)
     sep_edges: float            # graph separation of the two mesh faces being bridged
-    located_by: str             # 'hull' | 'ray' | 'bridge' -- provenance of the candidate
+    located_by: str             # 'hull' | 'ray' | 'membrane' -- provenance of the candidate
+    memb: int = -1              # 1 = segment between the faces is our material in hull air (membrane_check), 0 = not, -1 = unknown
 
     def count_says_missing(self) -> bool:
         return self.current_mesh_genus < self.hull_genus_target
@@ -115,11 +116,16 @@ def _count_first(f: HandleFeatures):
     # when a tunnel is still missing (g<g*) we trust them unconditionally -- even at the refined stage where
     # the mesh is flush to the hull (out_vox=0) and the geometric air signal is gone. Ray-fallback candidates
     # are only image guesses, so they still require genuine air.
-    air = (f.out_vox >= AIR_VOX) and (f.blob_vox >= BLOB_MIN)
-    hull_located = (f.located_by == "hull")
-    rescue = f.count_says_missing() and (hull_located or air)
+    # 2026-09-27 fix: the rescue now needs positive proof that the pair spans a MEMBRANE (our material in hull
+    # air, membrane_check in phase7). The former "hull-located => unconditional accept" let hull-guided
+    # completion bridge an already-open tunnel (genus number right, tunnel location wrong).
+    if f.memb in (0, 1):
+        membrane = (f.memb == 1)
+    else:                                   # unknown (legacy callers): fall back to the air heuristic, never unconditional
+        membrane = (f.out_vox >= AIR_VOX) and (f.blob_vox >= BLOB_MIN)
+    rescue = f.count_says_missing() and membrane
     accept = legacy or rescue
-    tag = ":rescue-hull" if (rescue and not legacy and hull_located) else (":rescue-air" if (rescue and not legacy) else "")
+    tag = (":rescue-membrane" if (rescue and not legacy) else "")
     return ("accept" if accept else "reject"), (1.0 if accept else 0.0), ("count" + tag)
 
 
@@ -207,7 +213,8 @@ def _args():
     p.add_argument("--out-vox", type=float, default=2.5)
     p.add_argument("--blob-vox", type=int, default=100)
     p.add_argument("--sep-edges", type=float, default=8.0)
-    p.add_argument("--located", default="hull")
+    p.add_argument("--located", default="membrane")
+    p.add_argument("--memb", type=int, default=-1)
     p.add_argument("--json", action="store_true")
     return p.parse_args()
 
@@ -215,7 +222,7 @@ def _args():
 if __name__ == "__main__":
     a = _args()
     f = HandleFeatures(a.g_star, a.cur_genus, a.d_ho, a.thr, a.hair_ratio,
-                       a.out_vox, a.blob_vox, a.sep_edges, a.located)
+                       a.out_vox, a.blob_vox, a.sep_edges, a.located, a.memb)
     out = decide(f)
     if a.json:
         print(json.dumps({**out, "features": asdict(f)}))

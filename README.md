@@ -22,13 +22,15 @@ the stage and the genus — watch <code>add_handle</code> open each tunnel.</i>
 
 ## Highlights (golden v6.3)
 
-> **Status (2026-09-27): re-validation in progress.** A bug was found in the hull-guided-completion
-> fallback (it could open a handle at the wrong place while the genus *number* still came out right).
-> The genus counts below are genus-**count** results; tunnel-**location** verification is being re-run
-> with the fix. Numbers will be updated.
+> **Status (2026-09-28): bug fixed and re-run.** The hull-guided-completion fallback could open a handle
+> at the wrong place (a *bridge* over an already-open tunnel) while the genus number still came out
+> right. Fix: every candidate must pass a **membrane check** (the stretch between the two faces is our
+> material lying in hull air) before a count-based rescue may accept it. Numbers below are the post-fix
+> re-run; an independent topological location metric is still in progress.
 
-- **Correct genus count on 5/5 benchmark shapes** (armadillo 0, kitten 1, rockerarm 1, threeholes 3,
-  fertility 4) — 15/15 chains in a ×3 regression *(location check pending, see status)*.
+- **Correct genus count**: armadillo 0, kitten 1, rockerarm 1, threeholes 3 — 12/12 runs; fertility
+  (genus 4) — 14/15 runs, the one failure stops honestly at genus 3. In every fertility run every
+  accepted handle passed the membrane check (no bridges).
 - **Count-first propose-and-verify**: a handle is accepted on render evidence *or* when the oracle
   says a tunnel is missing and the membrane is genuine air / hull-located — fixing the classic
   failure where a real thin tunnel opens with a *negative* render gain and gets rejected.
@@ -120,10 +122,11 @@ construction**, not by a regularizer.
 <img src="experiments/opseq_v5/despike/results_genus/fig_ablation.png" width="440" alt="ablation"/>
 </p>
 
-Every component earns its place (fertility, GT genus 4, n=15 per config): removing the oracle
-collapses genus accuracy to **4/15** and fails in *both* directions (missed **and** spurious
-tunnels); the count-first gate and hull-guided completion each close the remaining 13/15 → 15/15
-gap from different sides (decision vs detection). Full study:
+Ablation (fertility, GT genus 4, n=15 per config, after the fix): removing the oracle collapses
+genus accuracy to **4/15** and fails in *both* directions (missed **and** spurious tunnels);
+membrane-checked hull-guided completion lifts 11/15 → 14/15. The count-first gate *alone* shows no
+measurable gain over the legacy threshold gate at n=15 (11/15 vs 13/15, within run-to-run noise) — an
+earlier claim that it did was withdrawn after the fix. Full study:
 [`GATE_DECISION_findings.md`](experiments/opseq_v5/despike/GATE_DECISION_findings.md) — including
 the honest negative result that a typed-decision language model is a coin flip at the decisive
 geometric decision.

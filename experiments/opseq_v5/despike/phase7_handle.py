@@ -86,6 +86,22 @@ def genus(V, F):
 def hdist(P):
     return HF.dist(torch.tensor(np.asarray(P, np.float32), device=DEVICE)).detach().cpu().numpy()
 
+def membrane_check(V, F, ci, cj, n=7):
+    """Is the stretch between the two faces a genuine MEMBRANE = our material lying in hull air?
+    inside = fraction of interior samples inside the current mesh (material between the two pages)
+    air    = fraction of interior samples outside the carved hull (space the silhouettes prove empty)
+    Only a membrane passes both. An already-open tunnel (air, no material) fails `inside` -> add_handle
+    would build a BRIDGE; a real solid slab such as a base plate (material, hull solid) fails `air`.
+    (2026-09-27 fix: hull-guided completion bridged the open base arch while genus still read 4.)"""
+    import open3d as o3d
+    ts = np.linspace(0.15, 0.85, n)
+    S = (np.asarray(ci)[None, :] * (1 - ts[:, None]) + np.asarray(cj)[None, :] * ts[:, None]).astype(np.float32)
+    sc = o3d.t.geometry.RaycastingScene()
+    sc.add_triangles(o3d.core.Tensor(np.asarray(V, np.float32)), o3d.core.Tensor(np.asarray(F, np.uint32)))
+    inside = float((sc.compute_occupancy(o3d.core.Tensor(S)).numpy() > 0.5).mean())
+    air = float((hdist(S) > 0.5 * pitch).mean())
+    return inside, air, (inside >= 0.6 and air >= 0.6)
+
 def report(tag, V, F):
     ho = heldout_exam(ctx, V, F); wt, _ = check_watertight(F)
     print(f"[{tag}] V={len(V)} F={len(F)} watertight={wt} genus={genus(V, F)} | ho16={ho[0]:.4f} hair={ho[1]} maxblob={ho[2]}", flush=True)
@@ -504,7 +520,23 @@ for k in range(_hull_max):
             # carved hull is independent of mesh refinement). These candidates carry key[0]=="hull", so the
             # count-first gate (Rule C') accepts them unconditionally via rescue-hull.
             if DETECT == "membrane" and int(os.environ.get("HULL_COMPLETE", "1")):
-                _hc = find_tunnel_by_hull(V, Fa, HF, prev_handles, G_TARGET)
+                # memo: after a rejected round phase7_multi reverts to the SAME mesh, so the (slow, ~15 min)
+                # hull face-pair query would be recomputed on identical input. Key = mesh + prior handles.
+                import hashlib, pickle
+                _mk = hashlib.sha1(np.ascontiguousarray(V, np.float64).tobytes() + np.ascontiguousarray(Fa, np.int64).tobytes()
+                                   + json.dumps(prev_handles, sort_keys=True, default=str).encode()).hexdigest()[:16]
+                _mf = os.path.join(OUTD, "hc_memo", f"{SHAPE}_{_mk}.pkl")
+                if os.path.exists(_mf):
+                    _hc = pickle.load(open(_mf, "rb")); print(f"[p7] hull-completion memo hit ({len(_hc)} validated candidate(s))", flush=True)
+                else:
+                    _hc = find_tunnel_by_hull(V, Fa, HF, prev_handles, G_TARGET)
+                    _hc_ok = []
+                    for _c in _hc:
+                        _in, _air, _okm = membrane_check(V, Fa, _c[2], _c[3])
+                        print(f"[p7] hull-completion candidate faces {_c[0]},{_c[1]}: inside={_in:.2f} air={_air:.2f} -> {'MEMBRANE' if _okm else 'reject (not a membrane)'}", flush=True)
+                        if _okm: _hc_ok.append(_c)
+                    _hc = _hc_ok
+                    os.makedirs(os.path.dirname(_mf), exist_ok=True); pickle.dump(_hc, open(_mf, "wb"))
                 if _hc:
                     hit = _hc[0]; _hc_hit = True
                     print(f"[p7] hull-guided completion: {len(_hc)} plug(s) located on the hull, genus {genus(V, Fa)} < g*={G_TARGET}", flush=True)
@@ -557,6 +589,8 @@ for k in range(_hull_max):
         score, negL, i, j = pairs[0]
     if DRY:
         print(f"[p7] DRY: best pair {i},{j} out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],2)} {np.round(cen[j],2)}", flush=True); break
+    _mi, _ma, _mok = membrane_check(V, Fa, cen[i], cen[j])
+    print(f"[p7] membrane check: inside={_mi:.2f} air={_ma:.2f} -> {'MEMBRANE' if _mok else 'NOT-MEMBRANE'}", flush=True)
     print(f"[p7] add_handle between faces {i},{j}: out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],3)} {np.round(cen[j],3)}", flush=True)
     # Thin/pinched membrane: entry and exit faces are on different sheets but their 1-rings overlap
     # (sheets touch at 1-ring distance) -> the tube's side quads would duplicate existing edges and break
