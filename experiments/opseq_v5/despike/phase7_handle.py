@@ -100,7 +100,30 @@ def membrane_check(V, F, ci, cj, n=7):
     sc.add_triangles(o3d.core.Tensor(np.asarray(V, np.float32)), o3d.core.Tensor(np.asarray(F, np.uint32)))
     inside = float((sc.compute_occupancy(o3d.core.Tensor(S)).numpy() > 0.5).mean())
     air = float((hdist(S) > 0.5 * pitch).mean())
-    return inside, air, (inside >= 0.6 and air >= 0.6)
+    return inside, air, site_kind(inside, air) != "INVALID"
+
+def site_kind(inside, air):
+    """Two consistent ways a handle can be right, two ways it can be wrong (2026-09-28):
+      MEMBRANE: our material where the hull proves AIR   -> add_handle drills it (hard evidence: carving)
+      CONTACT : our air gap where the hull is SOLID       -> add_handle joins two touching sheets (LESSONS 25b;
+                softer evidence: a visual hull also fills concavities)
+      INVALID : material where the hull is solid (drilling real material) or air where the hull is air
+                (bridging real empty space) -> never accept."""
+    if inside >= 0.6 and air >= 0.6: return "MEMBRANE"
+    if inside <= 0.4 and air <= 0.4: return "CONTACT"
+    return "INVALID"
+
+R_REJ = float(os.environ.get("R_REJ", "0.3"))   # 2026-09-28: a candidate this close to a REJECTED handle position is skipped
+def _rejected_mids():
+    return [np.asarray(h["rej_mid"], float) for h in globals().get("prev_handles", [])
+            if isinstance(h, dict) and h.get("rej_mid") is not None]
+def near_rejected(ci, cj):
+    m = 0.5 * (np.asarray(ci, float) + np.asarray(cj, float))
+    return any(np.linalg.norm(m - r) < R_REJ for r in _rejected_mids())
+def search_handles():
+    """prev_handles + the rejected positions as pseudo-handles, so every detector's existing mid-distance
+    dedup also steps AWAY from places we already tried and rejected (instead of re-proposing them)."""
+    return list(globals().get("prev_handles", [])) + [{"mid": r.tolist(), "blob": None} for r in _rejected_mids()]
 
 def report(tag, V, F):
     ho = heldout_exam(ctx, V, F); wt, _ = check_watertight(F)
@@ -366,6 +389,7 @@ def find_tunnel_by_rays(V, F, min_px=int(os.environ.get("MIN_PX", "30")), prev_h
             fj = int(h2["primitive_ids"].numpy()[0])
             if fi == fj or (set(F[fi]) & set(F[fj])): continue
             ci = V[F[fi]].mean(0); cj = V[F[fj]].mean(0)
+            if near_rejected(ci, cj): continue   # already tried here and rejected -> look elsewhere
             # topological one-handle-per-tunnel rule: both membrane patches must still be disks
             ki, kj = comp.get(fi), comp.get(fj)
             if ki is None or kj is None or chi[ki] != 1 or chi[kj] != 1:
@@ -461,6 +485,8 @@ def find_contact_join(V, F, prev_handles=(), r_vox=float(os.environ.get("CONTACT
     for r in sorted(set(roots.tolist()), key=lambda r: -(roots == r).sum()):
         m = np.where(roots == r)[0]; mid = P[m].mean(0); key = ["contact", [round(float(x), 2) for x in mid]]
         if any(h.get("blob") == key for h in prev_handles if isinstance(h, dict)): continue
+        if any(np.linalg.norm(mid - r) < R_REJ for r in _rejected_mids()):
+            print(f"[p7]   contact cluster at {np.round(mid, 3)}: near a rejected position -> skip", flush=True); continue
         best = sorted(m, key=lambda q: nrm[ok[q][0]] @ nrm[ok[q][1]])                   # most opposed first
         for q in best:
             i, j = ok[q]
@@ -503,9 +529,9 @@ for k in range(_hull_max):
     if DETECT in ("hull", "membrane"):
         if DETECT == "membrane":
             import membrane_locate
-            _hull_cands = membrane_locate.find_tunnel_by_membranes(V, Fa, HF, prev_handles, G_TARGET, r_dedup=R_DEDUP, log=lambda m: print(m, flush=True))
+            _hull_cands = membrane_locate.find_tunnel_by_membranes(V, Fa, HF, search_handles(), G_TARGET, r_dedup=R_DEDUP, log=lambda m: print(m, flush=True))
         else:
-            _hull_cands = find_tunnel_by_hull(V, Fa, HF, prev_handles, G_TARGET)
+            _hull_cands = find_tunnel_by_hull(V, Fa, HF, search_handles(), G_TARGET)
         if _hull_cands:
             hit = _hull_cands[0]
             i, j, _ci, _cj, _blob = hit
@@ -529,11 +555,11 @@ for k in range(_hull_max):
                 if os.path.exists(_mf):
                     _hc = pickle.load(open(_mf, "rb")); print(f"[p7] hull-completion memo hit ({len(_hc)} validated candidate(s))", flush=True)
                 else:
-                    _hc = find_tunnel_by_hull(V, Fa, HF, prev_handles, G_TARGET)
+                    _hc = find_tunnel_by_hull(V, Fa, HF, search_handles(), G_TARGET)
                     _hc_ok = []
                     for _c in _hc:
                         _in, _air, _okm = membrane_check(V, Fa, _c[2], _c[3])
-                        print(f"[p7] hull-completion candidate faces {_c[0]},{_c[1]}: inside={_in:.2f} air={_air:.2f} -> {'MEMBRANE' if _okm else 'reject (not a membrane)'}", flush=True)
+                        print(f"[p7] hull-completion candidate faces {_c[0]},{_c[1]}: inside={_in:.2f} air={_air:.2f} -> {site_kind(_in, _air)}", flush=True)
                         if _okm: _hc_ok.append(_c)
                     _hc = _hc_ok
                     os.makedirs(os.path.dirname(_mf), exist_ok=True); pickle.dump(_hc, open(_mf, "wb"))
@@ -554,7 +580,7 @@ for k in range(_hull_max):
                 hit = find_bridge(V, Fa)
                 if hit is not None: MODE_BRIDGE = True
             if hit is None and int(os.environ.get("CONTACT", "1")):
-                hit = find_contact_join(V, Fa, prev_handles=prev_handles)
+                hit = find_contact_join(V, Fa, prev_handles=search_handles())
                 if hit is not None: MODE_BRIDGE = True
             if hit is None:
                 print(f"[p7] tunnel-evidence pairs: 0 (genus {genus(V, Fa)} < g*={G_TARGET}: UNREACHED)", flush=True); break
@@ -576,7 +602,7 @@ for k in range(_hull_max):
             hit = find_bridge(V, Fa)
             if hit is not None: MODE_BRIDGE = True
         if hit is None and G_TARGET is not None and genus(V, Fa) < G_TARGET and int(os.environ.get("CONTACT", "1")):
-            hit = find_contact_join(V, Fa, prev_handles=prev_handles)
+            hit = find_contact_join(V, Fa, prev_handles=search_handles())
             if hit is not None: MODE_BRIDGE = True                                   # plain single-face add_handle (no membrane merge)
         if hit is None: print(f"[p7] tunnel-evidence pairs: 0" + (f" (genus {genus(V, Fa)} < g*={G_TARGET}: UNREACHED)" if G_TARGET is not None else ""), flush=True); break
         i, j, _ci, _cj, _blob = hit
@@ -590,7 +616,7 @@ for k in range(_hull_max):
     if DRY:
         print(f"[p7] DRY: best pair {i},{j} out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],2)} {np.round(cen[j],2)}", flush=True); break
     _mi, _ma, _mok = membrane_check(V, Fa, cen[i], cen[j])
-    print(f"[p7] membrane check: inside={_mi:.2f} air={_ma:.2f} -> {'MEMBRANE' if _mok else 'NOT-MEMBRANE'}", flush=True)
+    print(f"[p7] membrane check: inside={_mi:.2f} air={_ma:.2f} -> {site_kind(_mi, _ma)}", flush=True)
     print(f"[p7] add_handle between faces {i},{j}: out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],3)} {np.round(cen[j],3)}", flush=True)
     # Thin/pinched membrane: entry and exit faces are on different sheets but their 1-rings overlap
     # (sheets touch at 1-ring distance) -> the tube's side quads would duplicate existing edges and break

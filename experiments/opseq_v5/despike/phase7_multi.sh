@@ -32,21 +32,22 @@ for r in $(seq 1 $R); do
     outvox=$(echo "$out" | sed -nE 's/.*add_handle between faces [0-9]+,[0-9]+: out ([0-9.]+)\/([0-9.]+) vox.*/\1 \2/p' | tail -1 | python3 -c "import sys; a=sys.stdin.read().split(); print(min(map(float,a)) if a else 2.5)" 2>/dev/null)
     blob=$(python3 -c "import json; h=json.load(open('$HANDLES_JSON')); b=h[-1].get('blob'); print(int(min(b)) if isinstance(b,list) and b else 100)" 2>/dev/null)
     prov=membrane; echo "$out" | grep -q "(hull-completion)" && prov=hull; echo "$out" | grep -q "(ray" && prov=ray   # 2026-09-27: was default-hull (bug)
-    memb=$(echo "$out" | sed -nE 's/.*membrane check: .* -> (MEMBRANE|NOT-MEMBRANE).*/\1/p' | tail -1); [ "$memb" = "MEMBRANE" ] && memb=1 || memb=0
+    site=$(echo "$out" | sed -nE 's/.*membrane check: .* -> (MEMBRANE|CONTACT|INVALID).*/\1/p' | tail -1)
+    { [ "$site" = "MEMBRANE" ] || [ "$site" = "CONTACT" ]; } && memb=1 || memb=0   # memb = site is topologically consistent
     jev=$(VERIFY_DHO=${VERIFY_DHO:-0.002} python3 despike/jev_handle_gate.py --json \
       --g-star "${gstar:-0}" --cur-genus "${curg:-0}" \
       --d-ho "$(python3 -c "print(${ho_new:-0}-${ho_ref:-0})")" --hair-ratio "$(python3 -c "print(${hair_new:-1}/max(${hair_ref:-1},1e-9))")" \
       --out-vox "${outvox:-2.5}" --blob-vox "${blob:-100}" --located "$prov" --memb "$memb" 2>/dev/null)
     ok=$(echo "$jev" | python3 -c "import sys,json; print(1 if json.load(sys.stdin)['gated_accept'] else 0)" 2>/dev/null)
-    echo "##### $S round $r: JEV gate (g$curg<g*$gstar, dho=$(python3 -c "print(round(${ho_new:-0}-${ho_ref:-0},4))"), out=${outvox} blob=${blob} prov=${prov} memb=${memb}) -> $jev"
+    echo "##### $S round $r: JEV gate (g$curg<g*$gstar, dho=$(python3 -c "print(round(${ho_new:-0}-${ho_ref:-0},4))"), out=${outvox} blob=${blob} prov=${prov} site=${site} memb=${memb}) -> $jev"
   fi
   if [ "$ok" = "1" ]; then
     echo "##### $S round $r: handle VERIFIED (ho16 $ho_ref -> $ho_new, hair $hair_ref -> $hair_new)"; ho_ref=$ho_new; hair_ref=$hair_new
     cur=/tmp/liou_cow_viz/cow_${S}_${S}_h${r}b.npz
   else
-    echo "##### $S round $r: handle REJECTED (ho16 $ho_ref -> $ho_new, hair $hair_ref -> $hair_new): reverting; plug marked rejected (hull will not re-propose it; rays may)"
+    echo "##### $S round $r: handle REJECTED (ho16 $ho_ref -> $ho_new, hair $hair_ref -> $hair_new): reverting; position marked rejected (no detector re-proposes within R_REJ of it)"
     python3 -c "
-import json; p='$HANDLES_JSON'; h=json.load(open(p)); h[-1]['rejected']=True; h[-1]['mid']=None; json.dump(h, open(p,'w'))"
+import json; p='$HANDLES_JSON'; h=json.load(open(p)); h[-1]['rejected']=True; h[-1]['rej_mid']=h[-1].get('mid'); h[-1]['mid']=None; json.dump(h, open(p,'w'))"
     cur=$prev_cur
   fi
 done
