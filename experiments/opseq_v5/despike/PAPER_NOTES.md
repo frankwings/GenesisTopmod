@@ -89,6 +89,28 @@ Also observed: 5 candidates where the hull stays SOLID over true air (thin tunne
 silhouettes) - harmless here (all at genus 4) but a known limit for thinner tunnels.
 Figure: fig_site_calibration.png.
 
+## 5c. Site check v2 (2026-09-29): normal-sign inside + exact silhouette air (both suggested by the user)
+
+Correction to 5b: the GT labels there used RAY-PARITY for "is this point inside our mesh". A generalized
+winding-number referee (robust to self-intersections) shows parity is wrong on 31/112 candidates (72%
+agreement); the two faces' NORMALS (back-to-back = inside, face-to-face = outside) agree with the winding
+number on 83/84 decided cases and side with it in 28 of the 29 parity/normal disagreements. Relabelled
+with winding-number truth, the OLD check scores 66/71 (not 71/71) where the gate can fire, with 26
+accept-but-wrong and 6 missed sites. Air: evaluate the carving rule per query point (>=2 silhouettes see
+background at 1024 px) instead of the 256^3 voxel hull with a half-voxel margin; this recovers 3 of the
+5 "hull-uncarved" membranes (the other 2 are true visual-hull limits).
+
+| inside | air | accept-but-wrong | missed | genus<g* correct |
+|---|---|---|---|---|
+| parity (old) | voxel, 0.5 vox margin (old) | 26 | 6 | 66/71 |
+| normals (+winding fallback) | voxel, margin | 6 | 1 | 71/71 |
+| normals (+winding fallback) | exact silhouette | 4 | 0 | 71/71 |
+| + geodesic crease guard | | **1** | **0** | **71/71** |
+
+The one remaining wrong accept (fy12, ratio 379, GT air) is the predicted residual: two different parts
+separated by a real narrow gap that the visual hull fills; it occurs at genus 4 where the count stop
+blocks the gate. SITE_V2=1 is now the default.
+
 ## 6. Negative results (report honestly — reviewers like these)
 
 - **Typed-decision text model (TypeSafe Jev paradigm, via Laya)** for the accept/reject gate:

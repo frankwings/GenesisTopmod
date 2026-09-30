@@ -69,7 +69,25 @@ else:
     mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
     gt, gtd, gtdiff, _ = run_64v.make_gt(ctx, mvps, views, SHAPE)
     HF = build_vote_hull(ctx, mvps, gvn, gf_gt, None, DEVICE, nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)   # GT-bbox grid (not widened by the current mesh): plug detection must not depend on run-to-run mesh noise
+    SITE_V2 = int(os.environ.get("SITE_V2", "1"))
+    _AIR_MASKS = None
+    if SITE_V2:
+        # Exact hull-air test for individual points (2026-09-29, user suggestion): instead of sampling the
+        # 256^3 voxel hull with a half-voxel margin, project each query point into all training
+        # silhouettes directly (the carving rule itself, at image resolution = an infinitely refined octree).
+        from pipeline.cameras import transform_to_clip
+        import torch.nn.functional as _Fnn
+        _AIR_RES = int(os.environ.get("AIR_RES", "1024"))
+        _gvt = torch.tensor(gvn, dtype=torch.float32, device=DEVICE); _gft = torch.tensor(np.asarray(gf_gt, np.int32), dtype=torch.int32, device=DEVICE)
+        _AIR_MASKS = []
+        with torch.no_grad():
+            for _k in range(len(mvps)):
+                _r, _ = dr.rasterize(ctx, transform_to_clip(_gvt, mvps[_k]), _gft, resolution=[2 * _AIR_RES, 2 * _AIR_RES])
+                _cov = _Fnn.avg_pool2d((_r[0, :, :, 3] > 0).float()[None, None], 2)[0, 0]
+                _AIR_MASKS.append(_cov >= 0.25)          # unbiased edge (hull_field ss_thr mode)
+        print(f"[p7] SITE_V2: exact silhouette air test on {len(_AIR_MASKS)} views at {_AIR_RES}px", flush=True)
 cow_v13.N_VIEWS = 64
+SITE_V2 = globals().get("SITE_V2", int(os.environ.get("SITE_V2", "1"))); _AIR_MASKS = globals().get("_AIR_MASKS", None)
 p1b._MVPS, p1b._GT = mvps, gt; p1b.SHAPE = SHAPE
 pitch = HF.pitch
 from hull_field import hull_genus
@@ -86,7 +104,40 @@ def genus(V, F):
 def hdist(P):
     return HF.dist(torch.tensor(np.asarray(P, np.float32), device=DEVICE)).detach().cpu().numpy()
 
-def membrane_check(V, F, ci, cj, n=7):
+def hull_air_exact(P, vote=2):
+    """Point is hull AIR iff >= `vote` training silhouettes see background at its projection (same rule as
+    carve_hull, evaluated per point at image resolution; no voxels, no margin). Falls back to the voxel
+    distance field (margin 0) when no masks are available (real-data path)."""
+    if _AIR_MASKS is None:
+        return hdist(P) > 0
+    Pt = torch.tensor(np.asarray(P, np.float32), device=DEVICE); Ph = torch.cat([Pt, torch.ones(len(Pt), 1, device=DEVICE)], 1)
+    votes = torch.zeros(len(Pt), dtype=torch.int32, device=DEVICE); R = _AIR_MASKS[0].shape[0]
+    for k, m in enumerate(_AIR_MASKS):
+        mvp = mvps[k] if isinstance(mvps[k], torch.Tensor) else torch.tensor(mvps[k], dtype=torch.float32, device=DEVICE)
+        c = (mvp.to(DEVICE).float() @ Ph.T).T; w = c[:, 3].clamp(min=1e-8); x = c[:, 0] / w; y = c[:, 1] / w
+        inb = (x.abs() <= 1) & (y.abs() <= 1)
+        ui = ((x + 1) * 0.5 * R).long().clamp(0, R - 1); vi = ((y + 1) * 0.5 * R).long().clamp(0, R - 1)
+        votes += (inb & ~m[vi, ui]).int()
+    return (votes >= vote).cpu().numpy()
+
+def normal_side(V, F, fi, fj, tol=0.2):
+    """User suggestion 2026-09-29: decide inside/outside of the segment between two faces from their
+    normals alone. Back-to-back (each face's partner lies BEHIND it) -> the segment is inside our solid
+    (membrane pages); face-to-face (partner IN FRONT) -> outside (contact gap). Returns 1.0 / 0.0, or None
+    when the two faces disagree or are too oblique (then fall back to ray parity). Orientation is taken
+    from the mesh's signed volume so it works whether faces are wound outward or inward."""
+    V = np.asarray(V, float); F = np.asarray(F, np.int64)
+    tri = V[F]; vol = float(np.einsum("ij,ij->i", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])).sum())
+    sgn = 1.0 if vol >= 0 else -1.0
+    def nrm(f):
+        t = V[F[int(f)]]; n = np.cross(t[1] - t[0], t[2] - t[0]); return sgn * n / (np.linalg.norm(n) + 1e-12), t.mean(0)
+    ni, ci = nrm(fi); nj, cj = nrm(fj); d = cj - ci; L = np.linalg.norm(d) + 1e-12
+    si = float(ni @ d) / L; sj = float(nj @ (-d)) / L
+    if si < -tol and sj < -tol: return 1.0
+    if si > tol and sj > tol: return 0.0
+    return None
+
+def membrane_check(V, F, ci, cj, n=7, fi=None, fj=None):
     """Is the stretch between the two faces a genuine MEMBRANE = our material lying in hull air?
     inside = fraction of interior samples inside the current mesh (material between the two pages)
     air    = fraction of interior samples outside the carved hull (space the silhouettes prove empty)
@@ -98,8 +149,16 @@ def membrane_check(V, F, ci, cj, n=7):
     S = (np.asarray(ci)[None, :] * (1 - ts[:, None]) + np.asarray(cj)[None, :] * ts[:, None]).astype(np.float32)
     sc = o3d.t.geometry.RaycastingScene()
     sc.add_triangles(o3d.core.Tensor(np.asarray(V, np.float32)), o3d.core.Tensor(np.asarray(F, np.uint32)))
-    inside = float((sc.compute_occupancy(o3d.core.Tensor(S)).numpy() > 0.5).mean())
-    air = float((hdist(S) > 0.5 * pitch).mean())
+    inside_par = float((sc.compute_occupancy(o3d.core.Tensor(S)).numpy() > 0.5).mean())
+    if SITE_V2:
+        ns = normal_side(V, F, fi, fj) if (fi is not None and fj is not None) else None
+        inside = ns if ns is not None else inside_par
+        air = float(np.asarray(hull_air_exact(S)).mean())
+        if ns is not None and abs(ns - inside_par) > 0.5:
+            print(f"[p7]   site: normals say {'inside' if ns else 'outside'} but ray parity says {inside_par:.2f} (self-intersection nearby?)", flush=True)
+    else:
+        inside = inside_par
+        air = float((hdist(S) > 0.5 * pitch).mean())
     return inside, air, site_kind(inside, air) != "INVALID"
 
 def site_kind(inside, air):
@@ -578,7 +637,7 @@ for k in range(_hull_max):
                     _hc = find_tunnel_by_hull(V, Fa, HF, search_handles(), G_TARGET)
                     _hc_ok = []
                     for _c in _hc:
-                        _in, _air, _okm = membrane_check(V, Fa, _c[2], _c[3])
+                        _in, _air, _okm = membrane_check(V, Fa, _c[2], _c[3], fi=_c[0], fj=_c[1])
                         _k = site_kind_full(V, Fa, _c[0], _c[1], _in, _air)
                         print(f"[p7] hull-completion candidate faces {_c[0]},{_c[1]}: inside={_in:.2f} air={_air:.2f} -> {_k}", flush=True)
                         if _k in ("MEMBRANE", "CONTACT"): _hc_ok.append(_c)
@@ -636,7 +695,7 @@ for k in range(_hull_max):
         score, negL, i, j = pairs[0]
     if DRY:
         print(f"[p7] DRY: best pair {i},{j} out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],2)} {np.round(cen[j],2)}", flush=True); break
-    _mi, _ma, _mok = membrane_check(V, Fa, cen[i], cen[j])
+    _mi, _ma, _mok = membrane_check(V, Fa, cen[i], cen[j], fi=i, fj=j)
     _mk = site_kind_full(V, Fa, i, j, _mi, _ma)
     _gr = f" geo_ratio={contact_geo_ratio(V, Fa, i, j):.0f}" if site_kind(_mi, _ma) == "CONTACT" else ""
     print(f"[p7] membrane check: inside={_mi:.2f} air={_ma:.2f}{_gr} -> {_mk}", flush=True)
