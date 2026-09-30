@@ -137,6 +137,23 @@ def normal_side(V, F, fi, fj, tol=0.2):
     if si > tol and sj > tol: return 0.0
     return None
 
+def winding_numbers(V, F, P):
+    """Generalized winding number (Jacobson et al. 2013) of our mesh at points P: 0 outside, 1 inside,
+    2 where two parts of the surface interpenetrate (e.g. an arm pushed into the body). Unlike ray parity it
+    is robust to self-intersections, and unlike a local normal test it COUNTS how many volumes contain P."""
+    V = np.asarray(V, float); F = np.asarray(F, np.int64); P = np.asarray(P, float)
+    tri = V[F]
+    if np.einsum("ij,ij->i", tri[:, 0], np.cross(tri[:, 1], tri[:, 2])).sum() < 0: F = F[:, [0, 2, 1]]
+    out = np.zeros(len(P))
+    for s in range(0, len(F), 20000):
+        Fb = F[s:s + 20000]
+        A = V[Fb[:, 0]][None] - P[:, None]; B = V[Fb[:, 1]][None] - P[:, None]; C = V[Fb[:, 2]][None] - P[:, None]
+        a = np.linalg.norm(A, axis=2); b = np.linalg.norm(B, axis=2); c = np.linalg.norm(C, axis=2)
+        num = np.einsum("pfi,pfi->pf", A, np.cross(B, C))
+        den = a * b * c + np.einsum("pfi,pfi->pf", A, B) * c + np.einsum("pfi,pfi->pf", B, C) * a + np.einsum("pfi,pfi->pf", C, A) * b
+        out += (2 * np.arctan2(num, den)).sum(1)
+    return out / (4 * np.pi)
+
 def membrane_check(V, F, ci, cj, n=7, fi=None, fj=None):
     """Is the stretch between the two faces a genuine MEMBRANE = our material lying in hull air?
     inside = fraction of interior samples inside the current mesh (material between the two pages)
@@ -151,11 +168,17 @@ def membrane_check(V, F, ci, cj, n=7, fi=None, fj=None):
     sc.add_triangles(o3d.core.Tensor(np.asarray(V, np.float32)), o3d.core.Tensor(np.asarray(F, np.uint32)))
     inside_par = float((sc.compute_occupancy(o3d.core.Tensor(S)).numpy() > 0.5).mean())
     if SITE_V2:
-        ns = normal_side(V, F, fi, fj) if (fi is not None and fj is not None) else None
-        inside = ns if ns is not None else inside_par
+        # 2026-09-29: the generalized winding number is the primary inside measure (it also detects
+        # interpenetration, w~2, which a local normal test and ray parity both miss); normals = cross-check.
+        w = winding_numbers(V, F, S)
+        global _LAST_OVERLAP
+        _LAST_OVERLAP = float((w >= 1.5).mean())
+        global _LAST_WMED
+        _LAST_WMED = float(np.median(w))
+        inside = float((w >= 0.5).mean())
         air = float(np.asarray(hull_air_exact(S)).mean())
-        if ns is not None and abs(ns - inside_par) > 0.5:
-            print(f"[p7]   site: normals say {'inside' if ns else 'outside'} but ray parity says {inside_par:.2f} (self-intersection nearby?)", flush=True)
+        ns = normal_side(V, F, fi, fj) if (fi is not None and fj is not None) else None
+        print(f"[p7]   site: winding={np.round(np.median(w), 2)} (overlap {_LAST_OVERLAP:.2f}) normals={ns} parity={inside_par:.2f} air_exact={air:.2f}", flush=True)
     else:
         inside = inside_par
         air = float((hdist(S) > 0.5 * pitch).mean())
@@ -187,8 +210,11 @@ def contact_geo_ratio(V, F, fi, fj):
     d = dijkstra(G, indices=[int(x) for x in F[int(fi)]], min_only=True)
     geo = float(d[F[int(fj)]].min()); eu = float(np.linalg.norm(V[F[int(fi)]].mean(0) - V[F[int(fj)]].mean(0)))
     return geo / max(eu, 1e-9)
+_LAST_OVERLAP = 0.0; _LAST_WMED = 0.0
 def site_kind_full(V, F, fi, fj, inside, air):
     k = site_kind(inside, air)
+    if SITE_V2 and _LAST_WMED < -0.5: return "INVALID"       # negative winding: locally inverted (self-intersecting fold) -> no action
+    if SITE_V2 and _LAST_OVERLAP >= 0.6: k = "CONTACT"      # two parts interpenetrate (winding ~2): join them
     if k == "CONTACT" and contact_geo_ratio(V, F, fi, fj) < CONTACT_GEO_RATIO: return "CREASE"
     return k
 
