@@ -173,3 +173,37 @@ Chain = v6.1 stages + three additions (commits be26439, 61c4123, 3cf5df3 + this)
 
 phase4_inloop gains an experimental FREEZE_MASK env (per-vertex freeze projection during
 optimization; off by default; dropped with a warning if the vertex count changes).
+
+## golden v6.4 (2026-09-30): handle-site validity — supersedes v6.3
+
+**v6.2/v6.3 contained a bug**: hull-guided completion took the first hull plug and the gate accepted
+hull-located candidates unconditionally, so a handle could be opened as a BRIDGE through real material
+while the genus count still read correct (forced-stall test: genus 4, missing upper tunnel still closed).
+The v6.2/v6.3 "15/15" results are withdrawn; the tags are kept for history only.
+
+v6.4 = v6.3 chain + a site check before any count-based rescue (details, math and the measurement
+mistakes made on the way: LESSONS_2026-09-29_site_check.md):
+- what lies between the two candidate faces: generalized winding number of our mesh (|w|~1 material,
+  ~0 air gap, >=1.5 interpenetrating parts; w=-1 is a membrane crushed through itself by DR) and an exact
+  per-point silhouette test for hull air (>=2 views see background, 1024 px; no voxel margin);
+- MEMBRANE (material in hull air) -> drill; CONTACT (air gap or overlap where the hull is solid, and
+  geodesic/straight distance >= 50 so it joins two different parts, not a crease) -> join; else INVALID;
+- rejected positions are remembered and never re-proposed; every candidate is logged (sitelog_<tag>.jsonl).
+
+Regression v67 (SEED=0, 64 views):
+
+| shape | runs | genus correct | accepted handles audited vs GT |
+|---|---|---|---|
+| fertility (g4) | 15 | 15/15 | 60/60 (59 drills on real air, 1 join on real material) |
+| threeholes (g3) | 3 | 3/3 | 9/9 |
+| kitten (g1) | 3 | 3/3 | 3/3 |
+| rockerarm (g1) | 3 | 3/3 | 3/3 |
+| armadillo (g0) | 3 | 3/3 | no handle opened (correct) |
+
+Site labels of the 75 accepted handles: 73 MEMBRANE, 1 CONTACT, 1 INVALID (a zero-thickness coarse
+membrane, kept by the legacy render rule, real per GT). Audit: `audit_sitelog_gt.py` (GT occupancy along
+the segment between the two faces). Calibrated on known cases: flags the known bridge, passes the cp6
+contact, but falsely flags the GT-verified fx2 contact -> reliable for drills, not yet for joins.
+Median chain time 7 min (unchanged). Known limits: geodesic threshold not calibrated on stage-3
+mid-round meshes (a true contact at ratio 20 was rejected once and rescued by render evidence); thin
+tunnels the visual hull cannot carve; mesh self-intersection is not prevented (combinatorial manifold only).

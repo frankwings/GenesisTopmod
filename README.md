@@ -22,16 +22,15 @@ the stage and the genus — watch <code>add_handle</code> open each tunnel.</i>
 
 ## Highlights (golden v6.3)
 
-> **Status (2026-09-28): bug fixed, re-run, visually audited.** The hull-guided-completion fallback could
-> open a handle at the wrong place (a *bridge*) while the genus number still came out right. Fix: every
-> candidate is classified by what lies between its two faces — MEMBRANE (our material in hull air →
-> drill) or CONTACT (our air gap where the hull is solid → join); anything else is never accepted by the
-> count rescue. Fertility re-run: 15/15 genus 4, all 15 visually checked against GT (tunnel layout
-> identical). A quantitative location metric is still open.
+> **Status (2026-09-30, golden v6.4).** v6.2/v6.3 had a bug: a fallback could open a handle at the wrong
+> place (a *bridge* through real material) while the genus number still came out right; those results are
+> withdrawn. v6.4 checks what lies between the two faces of every candidate (winding number of our mesh +
+> exact silhouette test for hull air) before any count-based acceptance. All v6.4 runs below are audited
+> handle-by-handle against ground truth.
 
-- **Correct genus**: fertility (genus 4) 15/15 after the fix, every run visually matched to GT
-  ([audit](experiments/opseq_v5/despike/results_genus/fig_audit_fy_upper_vs_gt.png)); armadillo 0,
-  kitten 1, rockerarm 1, threeholes 3 — 12/12 (genus count, run with the previous membrane-only fix).
+- **Correct genus, handle by handle**: fertility (genus 4) 15/15, threeholes 3/3, kitten 3/3, rockerarm
+  3/3, armadillo 3/3; all 75 accepted handles are consistent with ground truth (drills on real air, joins
+  on real material) — see [`GOLDEN.md`](experiments/opseq_v5/despike/results64v/GOLDEN.md) v6.4.
 - **Count-first propose-and-verify**: a handle is accepted on render evidence *or* when the oracle
   says a tunnel is missing and the membrane is genuine air / hull-located — fixing the classic
   failure where a real thin tunnel opens with a *negative* render gain and gets rejected.
@@ -148,8 +147,9 @@ Requires: PyTorch (cu-enabled), nvdiffrast, open3d, scipy/scikit-image. Tested o
 | tag | what |
 |---|---|
 | `golden-v6.1` | baseline chain (fertility 13/15) |
-| `golden-v6.2` | count-first gate + hull-guided completion + plug-cache fix (15/15) |
-| `golden-v6.3` | + late-handle seam refit (Stage 6b), seam artifact eliminated |
+| `golden-v6.2` | count-first gate + hull-guided completion + plug-cache fix — result withdrawn (bridge bug) |
+| `golden-v6.3` | + late-handle seam refit (Stage 6b) — contains the bridge bug, superseded |
+| `golden-v6.4` | + handle-site check (winding number + exact hull air + geodesic crease guard), per-handle GT audit |
 
 ## Documentation
 
