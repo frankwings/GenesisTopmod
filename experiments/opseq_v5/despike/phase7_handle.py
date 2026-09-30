@@ -172,10 +172,14 @@ def membrane_check(V, F, ci, cj, n=7, fi=None, fj=None):
         # interpenetration, w~2, which a local normal test and ray parity both miss); normals = cross-check.
         w = winding_numbers(V, F, S)
         global _LAST_OVERLAP
-        _LAST_OVERLAP = float((w >= 1.5).mean())
+        # 2026-09-30: use |w|. w = -1 is a membrane whose two pages were pushed THROUGH each other by DR
+        # (self-collision, "negative thickness"): still surplus material blocking the tunnel (14/14 such
+        # candidates in the v66 regression were real tunnels per GT). |w| >= 1.5 = two parts interpenetrate.
+        aw = np.abs(w)
+        _LAST_OVERLAP = float((aw >= 1.5).mean())
         global _LAST_WMED
         _LAST_WMED = float(np.median(w))
-        inside = float((w >= 0.5).mean())
+        inside = float((aw >= 0.5).mean())
         air = float(np.asarray(hull_air_exact(S)).mean())
         ns = normal_side(V, F, fi, fj) if (fi is not None and fj is not None) else None
         print(f"[p7]   site: winding={np.round(np.median(w), 2)} (overlap {_LAST_OVERLAP:.2f}) normals={ns} parity={inside_par:.2f} air_exact={air:.2f}", flush=True)
@@ -213,7 +217,6 @@ def contact_geo_ratio(V, F, fi, fj):
 _LAST_OVERLAP = 0.0; _LAST_WMED = 0.0
 def site_kind_full(V, F, fi, fj, inside, air):
     k = site_kind(inside, air)
-    if SITE_V2 and _LAST_WMED < -0.5: return "INVALID"       # negative winding: locally inverted (self-intersecting fold) -> no action
     if SITE_V2 and _LAST_OVERLAP >= 0.6: k = "CONTACT"      # two parts interpenetrate (winding ~2): join them
     if k == "CONTACT" and contact_geo_ratio(V, F, fi, fj) < CONTACT_GEO_RATIO: return "CREASE"
     return k
@@ -723,6 +726,13 @@ for k in range(_hull_max):
         print(f"[p7] DRY: best pair {i},{j} out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],2)} {np.round(cen[j],2)}", flush=True); break
     _mi, _ma, _mok = membrane_check(V, Fa, cen[i], cen[j], fi=i, fj=j)
     _mk = site_kind_full(V, Fa, i, j, _mi, _ma)
+    try:
+        with open(os.path.join(OUTD, f"sitelog_{SHAPE}.jsonl"), "a") as _sf:
+            _sf.write(json.dumps({"base": os.path.basename(BASE_NPZ), "mesh_genus": int(genus(V, Fa)), "fi": int(i), "fj": int(j),
+                                  "ci": np.asarray(cen[i], float).tolist(), "cj": np.asarray(cen[j], float).tolist(),
+                                  "inside": _mi, "air": _ma, "w_med": globals().get("_LAST_WMED", None), "overlap": globals().get("_LAST_OVERLAP", None),
+                                  "geo_ratio": float(contact_geo_ratio(V, Fa, i, j)), "site": _mk}) + "\n")
+    except Exception as _e: print(f"[p7] sitelog write failed: {_e}", flush=True)
     _gr = f" geo_ratio={contact_geo_ratio(V, Fa, i, j):.0f}" if site_kind(_mi, _ma) == "CONTACT" else ""
     print(f"[p7] membrane check: inside={_mi:.2f} air={_ma:.2f}{_gr} -> {_mk}", flush=True)
     print(f"[p7] add_handle between faces {i},{j}: out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],3)} {np.round(cen[j],3)}", flush=True)

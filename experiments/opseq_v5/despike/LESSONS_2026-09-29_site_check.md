@@ -97,6 +97,21 @@ We substitute H for the unknown Ω — every error comes from that substitution:
 Other findings: the no-oracle ablation (4/15, errors in both directions) and the gate-alone claim being
 withdrawn are in PAPER_NOTES §5.
 
+## 7b. 2026-09-30 addendum: negative winding = a crushed membrane (self-collision)
+
+v66 regression (winding-primary): fertility 15/15, other shapes 12/12; per-handle GT audit 57/57 drills on
+real air. But 14 accepted handles had been labelled INVALID by the rule "w < 0 -> inverted -> no action" and
+were only rescued by render evidence; all were real tunnels. Cause: DR keeps squeezing a membrane (the
+silhouette loss wants that material gone and cannot see interior crossings), the two pages pass THROUGH
+each other, and the pocket between them is bounded by front faces: w = -1 ("negative thickness"). It is
+one closed surface colliding with itself, not two meshes. Interpenetrating parts give w = 2 instead.
+Fix: classify on |w| (|w|>=0.5 material, |w|>=1.5 overlap). Offline: 112-candidate set 0 wrong accepts,
+71/71 where the gate fires; the 14 live cases become MEMBRANE. Remaining known misses: a zero-thickness
+coarse membrane (w ~ 0, pages coincide; 1 case, strong render evidence) and a contact at geodesic ratio 20.
+DR cannot avoid self-collision by itself; mitigation = open membranes earlier (several handles per
+round), not a collision barrier. Every candidate's features + face centroids are now written to
+results_genus/sitelog_<tag>.jsonl for calibration on mid-stage meshes.
+
 ## 8. Open problems
 
 1. Recalibrate on stage-3 mid-round meshes: geodesic threshold (a true contact at 20) and the handling
