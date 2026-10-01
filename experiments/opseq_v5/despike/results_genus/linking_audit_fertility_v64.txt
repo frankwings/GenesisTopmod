@@ -1,0 +1,26 @@
+# fertility: 4 hull tunnel air loops
+fertility_g67f10_auto.npz                    genus 4  tunnels realised 3/4  per tunnel [1, 1, 1, 1]  tiny loops 2  MISMATCH
+fertility_g67f11_auto.npz                    genus 4  tunnels realised 3/4  per tunnel [1, 1, 1, 1]  tiny loops 2  MISMATCH
+fertility_g67f12_auto.npz                    genus 4  tunnels realised 2/4  per tunnel [1, 1, 0, 1]  tiny loops 1  MISMATCH
+fertility_g67f13_auto.npz                    genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_g67f14_auto.npz                    genus 4  tunnels realised 3/4  per tunnel [1, 1, 1, 1]  tiny loops 2  MISMATCH
+fertility_g67f15_auto.npz                    genus 4  tunnels realised 3/4  per tunnel [1, 1, 0, 1]  tiny loops 1  MISMATCH
+fertility_g67f1_auto.npz                     genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_g67f2_auto.npz                     genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_g67f3_auto.npz                     genus 4  tunnels realised 3/4  per tunnel [1, 1, 1, 1]  tiny loops 2  MISMATCH
+fertility_g67f4_auto.npz                     genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_g67f5_auto.npz                     genus 4  tunnels realised 3/4  per tunnel [1, 1, 0, 1]  tiny loops 2  MISMATCH
+fertility_g67f6_auto.npz                     genus 4  tunnels realised 3/4  per tunnel [1, 1, 1, 1]  tiny loops 0  MISMATCH
+fertility_g67f7_auto.npz                     genus 4  tunnels realised 3/4  per tunnel [1, 1, 0, 1]  tiny loops 0  MISMATCH
+fertility_g67f8_auto.npz                     genus 4  tunnels realised 2/4  per tunnel [1, 1, 0, 1]  tiny loops 2  MISMATCH
+fertility_g67f9_auto.npz                     genus 4  tunnels realised 3/4  per tunnel [1, 1, 0, 1]  tiny loops 2  MISMATCH
+fertility_np1_auto.npz                       genus 4  tunnels realised 3/4  per tunnel [1, 1, 0, 1]  tiny loops 1  MISMATCH
+fertility_np2_auto.npz                       genus 4  tunnels realised 3/4  per tunnel [1, 1, 0, 1]  tiny loops 2  MISMATCH
+fertility_np3_auto.npz                       genus 4  tunnels realised 3/4  per tunnel [1, 1, 1, 1]  tiny loops 1  MISMATCH
+fertility_np4_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_np5_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_np6_auto.npz                       genus 4  tunnels realised 3/4  per tunnel [1, 1, 1, 1]  tiny loops 2  MISMATCH
+fertility_bt1_auto.npz                       genus 4  tunnels realised 2/4  per tunnel [1, 1, 1, 0]  tiny loops 0  MISMATCH
+fertility_bt2_auto.npz                       genus 4  tunnels realised 3/4  per tunnel [1, 1, 0, 1]  tiny loops 1  MISMATCH
+fertility_bt3_auto.npz                       genus 4  tunnels realised 2/4  per tunnel [1, 1, 0, 1]  tiny loops 4  MISMATCH
+# strict topology: 6/24

@@ -670,7 +670,13 @@ if os.path.exists(_bx):
 n_added = 0
 if int(os.environ.get("THIN_DRY", "0")):      # debug: enumerate every near-pair cluster with its site kind, then exit
     import time as _t; _t0 = _t.time(); _c = find_near_pairs(V, Fa, all_clusters=True)
-    print(f"[p7] THIN_DRY: {len(_c)} cluster(s), {sum(c[5] in ('MEMBRANE', 'CONTACT') for c in _c)} site-valid, {_t.time() - _t0:.1f}s (mesh genus {genus(V, Fa)})", flush=True); json.dump([{"ci": np.asarray(c[2], float).tolist(), "cj": np.asarray(c[3], float).tolist(), "kind": c[5]} for c in _c], open(f"/tmp/thin_dry_{os.path.basename(BASE_NPZ)}.json", "w")); sys.exit(0)
+    print(f"[p7] THIN_DRY: {len(_c)} cluster(s), {sum(c[5] in ('MEMBRANE', 'CONTACT') for c in _c)} site-valid, {_t.time() - _t0:.1f}s (mesh genus {genus(V, Fa)})", flush=True)
+    _rows = []
+    for c in _c:
+        _in, _air, _ = membrane_check(V, Fa, c[2], c[3], fi=c[0], fj=c[1])
+        _rows.append({"ci": np.asarray(c[2], float).tolist(), "cj": np.asarray(c[3], float).tolist(), "kind": c[5], "inside": _in, "air": _air,
+                      "w_med": globals().get("_LAST_WMED"), "overlap": globals().get("_LAST_OVERLAP"), "geo_ratio": float(contact_geo_ratio(V, Fa, c[0], c[1])), "mesh_genus": int(genus(V, Fa))})
+    json.dump(_rows, open(f"/tmp/thin_dry_{os.path.basename(BASE_NPZ)}.json", "w")); sys.exit(0)
 MODE_BRIDGE = False
 # When DETECT=hull, override MAX_HANDLES so phase7_multi.sh's MAX_HANDLES=1
 # doesn't prevent adding multiple hull handles in one invocation (spec: "add ALL

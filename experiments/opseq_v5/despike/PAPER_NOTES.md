@@ -112,6 +112,14 @@ The one remaining wrong accept (fy12, ratio 379, GT air) is the predicted residu
 separated by a real narrow gap that the visual hull fills; it occurs at genus 4 where the count stop
 blocks the gate. SITE_V2=1 is now the default.
 
+## 5d. Strict-topology audit (2026-10-01) - READ BEFORE CLAIMING "correct topology"
+
+`linking_audit.py`: rank of the linking matrix (mesh H1 generator loops x hull tunnel air loops) = tunnels the
+surface realises. GT 4/4; v6.4 fertility 6/21 (15 runs: genus 4 but rank 2-3, hidden micro-handle + unjoined
+interpenetration). All "15/15", "27/27", "75/75" numbers above are genus-COUNT / per-handle statements, not
+surface-topology statements. Paper claim must be the strict one (Boss decision) -> gate gets the
+linking-independence rule; re-run the table with the audit as the metric. LESSONS 7e.
+
 ## 6. Negative results (report honestly — reviewers like these)
 
 - **Typed-decision text model (TypeSafe Jev paradigm, via Laya)** for the accept/reject gate:

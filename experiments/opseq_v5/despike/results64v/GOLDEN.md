@@ -207,3 +207,10 @@ contact, but falsely flags the GT-verified fx2 contact -> reliable for drills, n
 Median chain time 7 min (unchanged). Known limits: geodesic threshold not calibrated on stage-3
 mid-round meshes (a true contact at ratio 20 was rejected once and rescued by render evidence); thin
 tunnels the visual hull cannot carve; mesh self-intersection is not prevented (combinatorial manifold only).
+
+### 2026-10-01 correction to v6.4 (linking-number audit)
+
+Genus count stands (fertility 15/15 + np1-6 6/6, other shapes 12/12). Strict surface topology (every hull tunnel
+realised by a surface handle, `linking_audit.py`): fertility **6/21**. The rest reach genus 4 with a hidden
+micro-handle while one tunnel is open only by interpenetration. Table: `results_genus/linking_audit_fertility_v64.txt`;
+analysis: `LESSONS_2026-09-29_site_check.md` 7e. v6.4 is therefore NOT golden under the strict criterion.

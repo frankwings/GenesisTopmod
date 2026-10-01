@@ -163,6 +163,42 @@ Idea (Boss): two faces close in Euclidean distance but far geodesically are the 
   fired; this also re-confirms the sequential mode after the 2026-09-30/10-01 edits.
 - Needed before enabling: a criterion for "does this contact need a join" (= open problem 2).
 
+## 7e. 2026-10-01: linking-number audit - genus right, shape right, surface topology WRONG in 15/21 runs
+
+Question that started it: which near-pair CONTACT needs a join (7d)? Dump of all 19 site-valid contact clusters
+on 21 late-stage fertility meshes: the two needed joins (g67f2, np4: w=2, overlap 1, geodesic ratio 78 / 81) are
+numerically identical to 13 unneeded ones on finished genus-4 meshes (w=2, overlap 1, ratio 79-186), at the same
+two places. No local feature can separate them, and the geodesic DISTANCE cannot either. What works is the
+geodesic PATH: close it with the straight segment and ask whether a hull tunnel passes through that loop.
+
+Tool (`linking_audit.py`):
+- Air loops: union of the cached plug blocks = sealed air; a sealed block with m mouths to the outer air gives
+  m-1 closed curves (mouth0 -> mouth j through the block, back through the outer air). Fertility: upper chamber
+  4 mouths + base 2 mouths = 4 loops = g*. No hand-tuning.
+- Gauss linking number of two closed polylines (exact solid-angle form per segment pair): clean integers.
+- Candidate handle (fi, fj): linking vector of [segment + Dijkstra surface path]. Face-to-face gaps (w ~ 0,
+  including the g67f5 candidate on GT air) get the zero vector -> correctly spurious. Every interpenetration
+  (w = 2) links a tunnel, on genus-3 AND genus-4 meshes.
+- Mesh audit: linking matrix of the 2g tree-cotree generator loops with the air loops; rank = number of hull
+  tunnels the SURFACE realises. GT fertility 4/4. bt1 (7c) 2/4, base column zero: the counterexample that the
+  per-handle GT audit passed is caught, without GT.
+
+Result on v6.4 (`results_genus/linking_audit_fertility_v64.txt`): fertility 6/21 pass (g67f1, f2, f4, f13, np4,
+np5); 15 have rank 3 or 2. 13 of the 15 contain a MICRO-HANDLE (generator loops of 3 vertices, length 0.02-0.04,
+linking vector 0); none of the 6 passing meshes does. Most failing meshes also carry an unjoined interpenetration
+whose loop links a tunnel; the two runs that did the late contact join (g67f2, np4) pass. So in ~70% of runs one
+tunnel is only "open" because two parts interpenetrate (the union solid and the silhouettes are right) while the
+4th surface handle is a hidden triangle-sized tube. Genus count 27/27 stands; "surface topology equals GT" does
+not: fertility 6/21, other shapes not audited yet.
+
+Not yet done: a picture of one micro-handle; which stage creates it (negative-winding handles do not explain it:
+f4 has two and passes, f14 has none and fails); air-loop construction for other shapes (kitten: the sealed
+block shows ONE interface component, so no loop is built - mouth labelling must be made robust).
+
+Consequence for the gate (Boss, 2026-10-01: go for strict topology): accept a handle only if its linking
+vector is linearly independent of the vectors already realised by the mesh. One rule covers redundancy (bt1),
+"does this contact need a join", and micro-handles; it also makes the 2-second near-pair detector safe to use.
+
 ## 8. Open problems
 
 1. Recalibrate on stage-3 mid-round meshes: geodesic threshold (a true contact at 20) and the handling

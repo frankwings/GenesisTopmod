@@ -27,6 +27,12 @@ the stage and the genus — watch <code>add_handle</code> open each tunnel.</i>
 > withdrawn. v6.4 checks what lies between the two faces of every candidate (winding number of our mesh +
 > exact silhouette test for hull air) before any count-based acceptance. All v6.4 runs below are audited
 > handle-by-handle against ground truth.
+>
+> **Correction (2026-10-01).** A new GT-free audit (linking numbers between the mesh's handle loops and the hull's
+> tunnels, [`linking_audit.py`](experiments/opseq_v5/despike/linking_audit.py)) shows that the genus COUNT is
+> right in all runs, but on fertility only 6/21 runs have a surface whose handles realise all four tunnels; in the
+> others one tunnel is open only through interpenetrating parts and the fourth handle is a hidden micro-handle.
+> Shapes and silhouettes are unaffected. Fix in progress (linking-independence rule in the handle gate).
 
 - **Correct genus, handle by handle**: fertility (genus 4) 15/15, threeholes 3/3, kitten 3/3, rockerarm
   3/3, armadillo 3/3; all 75 accepted handles are consistent with ground truth (drills on real air, joins
