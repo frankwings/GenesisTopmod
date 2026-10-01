@@ -25,8 +25,9 @@ for t in tags:
     sites = []
     for f in (f"{R}/sitelog_{SHAPE}_{t}.jsonl", f"{R}/sitelog_{SHAPE}_{t}_5b.jsonl"):
         if os.path.exists(f): sites += [json.loads(x) for x in open(f) if x.strip()]
+    batch = [x for x in sites if "decision" in x]; sites = [x for x in sites if "decision" not in x]   # BATCH_OPEN entries carry their own decision
     if len(gates) != len(sites): nomatch += 1; continue
-    for acc, s in zip(gates, sites):
+    for acc, s in [(x["decision"] == "batch_accept", x) for x in batch] + list(zip(gates, sites)):
         if not acc: continue
         join = s["site"] in ("CONTACT", "CREASE") or (s.get("overlap") or 0) >= 0.6
         g = gt_mat(s["ci"], s["cj"]); good = (g >= 0.6) if join else (g <= 0.4)

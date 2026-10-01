@@ -605,6 +605,50 @@ def find_contact_join(V, F, prev_handles=(), r_vox=float(os.environ.get("CONTACT
     return None
 
 
+def find_near_pairs(V, F, prev_handles=(), r_vox=float(os.environ.get("THIN_R_VOX", "6")), cos_max=-0.7, all_clusters=False):
+    """2026-09-30 (Boss): two faces CLOSE in space but FAR along the surface (non-adjacent), with opposed normals, are
+    the two sides of a thin sheet (back-to-back: a crushed membrane) or of a contact (face-to-face / interpenetrating).
+    On the refined mesh this finds in seconds what the hull face-pair search needs ~15 min for. Clusters of such
+    pairs are classified by the site check; only MEMBRANE / CONTACT clusters are returned (a real thin part - a
+    plate, an ear - has no hull air through it and is dropped)."""
+    from scipy.spatial import cKDTree
+    tri = V[F]; cen = tri.mean(1); nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]); nrm /= np.linalg.norm(nrm, axis=1, keepdims=True) + 1e-12
+    vf = {}
+    for k, f in enumerate(F):
+        for x in f: vf.setdefault(int(x), set()).add(k)
+    ring = lambda k: set().union(*[vf[int(x)] for x in F[k]])
+    ringv = lambda k: set(int(x) for q in ring(k) for x in F[q])
+    disjoint = lambda a, b: not (ringv(a) & set(map(int, F[b]))) and not (ringv(b) & set(map(int, F[a])))
+    pairs = cKDTree(cen).query_pairs(r=r_vox * pitch, output_type="ndarray")
+    if len(pairs):
+        i, j = pairs[:, 0], pairs[:, 1]; dv = cen[j] - cen[i]; dn = np.linalg.norm(dv, axis=1) + 1e-12
+        m = (np.einsum("ij,ij->i", nrm[i], nrm[j]) < cos_max) & (np.abs(np.einsum("ij,ij->i", dv, nrm[i])) > float(os.environ.get("THIN_ALIGN", "0.7")) * dn)
+        pairs = pairs[m]
+    ok = [(int(i), int(j)) for i, j in pairs if j not in ring(int(i))]
+    print(f"[p7] near-pair search: {len(ok)} opposed-normal non-adjacent face pairs within {r_vox:g} vox", flush=True)
+    if not ok: return []
+    P = np.array([(cen[i] + cen[j]) / 2 for i, j in ok]); parent = list(range(len(P)))
+    def find(x):
+        while parent[x] != x: parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    for a, b in cKDTree(P).query_pairs(r=4 * pitch, output_type="ndarray"): parent[find(int(a))] = find(int(b))
+    roots = np.array([find(q) for q in range(len(P))]); out = []
+    for r in sorted(set(roots.tolist()), key=lambda r: -(roots == r).sum()):
+        m = np.where(roots == r)[0]; mid = P[m].mean(0); key = ["near", [round(float(x), 2) for x in mid]]
+        if len(m) < int(os.environ.get("THIN_MIN_PAIRS", "3")): continue
+        if not all_clusters:
+            if any(isinstance(h, dict) and (h.get("blob") == key or (h.get("mid") is not None and np.linalg.norm(np.asarray(h["mid"], float) - mid) < R_DEDUP)) for h in prev_handles): continue
+            if any(np.linalg.norm(mid - q) < R_REJ for q in _rejected_mids()): continue
+        best = sorted(m, key=lambda q: np.linalg.norm(P[q] - mid))[:40]                  # pairs nearest the cluster centre
+        hit = next(((ok[q][0], ok[q][1]) for q in best if disjoint(*ok[q])), None)
+        if hit is None: continue
+        i, j = hit; _in, _air, _ = membrane_check(V, F, cen[i], cen[j], fi=i, fj=j); kind = site_kind_full(V, F, i, j, _in, _air)
+        print(f"[p7]   near cluster of {len(m)} pairs at {np.round(mid, 3)}: faces {i},{j} dist {np.linalg.norm(cen[j]-cen[i])/pitch:.2f} vox inside={_in:.2f} air={_air:.2f} -> {kind}", flush=True)
+        if kind in ("MEMBRANE", "CONTACT") or all_clusters: out.append((i, j, cen[i], cen[j], key, kind))
+    if not all_clusters: out.sort(key=lambda c: c[5] != "MEMBRANE")     # stable: membranes (hard hull-air evidence) before contacts
+    return out
+
+
 def find_tunnel_by_hull(V, F, HF_in, prev_handles=(), g_target=None):
     """Hull-located tunnel plugs -> add_handle face pairs. Implementation: hull_locate.py
     (closing-radius ladder with frozen claimed plugs, skeleton centreline, occupancy-walk face pairs)."""
@@ -624,14 +668,27 @@ _bx = BASE_NPZ + ".haxes.npz"
 if os.path.exists(_bx):
     _z = np.load(_bx); _HAXES = [(_z[f"a0_{k}"], _z[f"u_{k}"], float(_z[f"L_{k}"])) for k in range(int(_z["n"]))]
 n_added = 0
+if int(os.environ.get("THIN_DRY", "0")):      # debug: enumerate every near-pair cluster with its site kind, then exit
+    import time as _t; _t0 = _t.time(); _c = find_near_pairs(V, Fa, all_clusters=True)
+    print(f"[p7] THIN_DRY: {len(_c)} cluster(s), {sum(c[5] in ('MEMBRANE', 'CONTACT') for c in _c)} site-valid, {_t.time() - _t0:.1f}s (mesh genus {genus(V, Fa)})", flush=True); json.dump([{"ci": np.asarray(c[2], float).tolist(), "cj": np.asarray(c[3], float).tolist(), "kind": c[5]} for c in _c], open(f"/tmp/thin_dry_{os.path.basename(BASE_NPZ)}.json", "w")); sys.exit(0)
 MODE_BRIDGE = False
 # When DETECT=hull, override MAX_HANDLES so phase7_multi.sh's MAX_HANDLES=1
 # doesn't prevent adding multiple hull handles in one invocation (spec: "add ALL
 # returned handles in that round").  find_tunnel_by_hull is called fresh each
 # iteration because add_handle modifies V/Fa and invalidates face indices.
 _hull_max = MAX_HANDLES   # one handle per round so phase7_multi.sh can verify (DR) and revert each one
+# BATCH_OPEN=1 (2026-09-30, Boss): open every site-valid candidate in ONE invocation, re-detecting on the
+# updated mesh after each add_handle and with NO DR in between (so waiting membranes are not crushed by DR,
+# and Stage 3 needs one DR loop instead of one per handle). A candidate that is not MEMBRANE/CONTACT is
+# skipped for this batch only (not persisted: the sequential rounds afterwards may still try it with DR
+# verification). Several candidates can belong to one tunnel; re-detection after each handle handles that.
+BATCH_OPEN = int(os.environ.get("BATCH_OPEN", "0"))
+if BATCH_OPEN: _hull_max = MAX_HANDLES + int(os.environ.get("BATCH_TRIES", "8"))
+def _save_handles():
+    if HANDLES_JSON: json.dump([h for h in prev_handles if not (isinstance(h, dict) and h.get("batch_skip"))], open(HANDLES_JSON, "w"))
 for k in range(_hull_max):
     MODE_BRIDGE = False
+    if BATCH_OPEN and n_added >= MAX_HANDLES: break
     if G_TARGET is not None and genus(V, Fa) >= G_TARGET:
         print(f"[p7] genus {genus(V, Fa)} == target g*={G_TARGET}: no more handles", flush=True); break
     if DETECT in ("hull", "membrane"):
@@ -653,7 +710,13 @@ for k in range(_hull_max):
             # says a tunnel is still missing. Ask the HULL itself where it is (closing-ladder plug analysis on the
             # carved hull is independent of mesh refinement). These candidates carry key[0]=="hull", so the
             # count-first gate (Rule C') accepts them unconditionally via rescue-hull.
-            if DETECT == "membrane" and int(os.environ.get("HULL_COMPLETE", "1")):
+            _np_hit = False
+            if int(os.environ.get("NEAR_PAIRS", "0")):
+                _npc = find_near_pairs(V, Fa, search_handles())
+                if _npc:
+                    hit = _npc[0][:5]; _np_hit = True; MODE_BRIDGE = _npc[0][5] == "CONTACT"   # contact = plain single-face join
+                    print(f"[p7] tunnel-evidence pairs: 1 (near-pair, {_npc[0][5]}; {len(_npc)} site-valid cluster(s))", flush=True)
+            if hit is None and DETECT == "membrane" and int(os.environ.get("HULL_COMPLETE", "1")):
                 # memo: after a rejected round phase7_multi reverts to the SAME mesh, so the (slow, ~15 min)
                 # hull face-pair query would be recomputed on identical input. Key = mesh + prior handles.
                 import hashlib, pickle
@@ -696,7 +759,7 @@ for k in range(_hull_max):
             i, j, _ci, _cj, _blob = hit
             tri = V[Fa]; cen = tri.mean(1); d = hdist(cen)
             negL = -np.linalg.norm(_cj - _ci) / np.linalg.norm(V[Fa[:, 0]] - V[Fa[:, 1]], axis=1).mean()
-            if not _hc_hit: print(f"[p7] tunnel-evidence pairs: 1 (ray fallback)", flush=True)
+            if not _hc_hit and not _np_hit: print(f"[p7] tunnel-evidence pairs: 1 (ray fallback)", flush=True)
         else:
             print(f"[p7] tunnel-evidence pairs: 0", flush=True); break
     elif DETECT == "rays":
@@ -731,10 +794,20 @@ for k in range(_hull_max):
             _sf.write(json.dumps({"base": os.path.basename(BASE_NPZ), "mesh_genus": int(genus(V, Fa)), "fi": int(i), "fj": int(j),
                                   "ci": np.asarray(cen[i], float).tolist(), "cj": np.asarray(cen[j], float).tolist(),
                                   "inside": _mi, "air": _ma, "w_med": globals().get("_LAST_WMED", None), "overlap": globals().get("_LAST_OVERLAP", None),
-                                  "geo_ratio": float(contact_geo_ratio(V, Fa, i, j)), "site": _mk}) + "\n")
+                                  "geo_ratio": float(contact_geo_ratio(V, Fa, i, j)), "site": _mk,
+                                  **({"decision": "batch_accept" if _mk in ("MEMBRANE", "CONTACT") else "batch_skip"} if BATCH_OPEN else {})}) + "\n")
     except Exception as _e: print(f"[p7] sitelog write failed: {_e}", flush=True)
     _gr = f" geo_ratio={contact_geo_ratio(V, Fa, i, j):.0f}" if site_kind(_mi, _ma) == "CONTACT" else ""
     print(f"[p7] membrane check: inside={_mi:.2f} air={_ma:.2f}{_gr} -> {_mk}", flush=True)
+    # bt1 (2026-09-30): a LONG tube (sep 7 edges) bored through a thick slab of wrong material reached genus 4 with the
+    # base arch still sealed (redundant with a short drill in the same region). Without DR between handles nothing can
+    # tell two membranes of one tunnel apart, so batch only opens THIN membranes (sep <= BATCH_SEP_MAX edges); thick
+    # ones are left to the DR-verified sequential rounds.
+    _batch_thick = BATCH_OPEN and (-negL) > float(os.environ.get("BATCH_SEP_MAX", "3"))
+    if BATCH_OPEN and (_mk not in ("MEMBRANE", "CONTACT") or _batch_thick):
+        prev_handles.append({"mid": None, "rej_mid": ((cen[i] + cen[j]) / 2).tolist(), "rejected": True, "blob": None, "batch_skip": True})
+        print(f"[p7] batch: skip {'THICK (sep %.1f edges)' % (-negL) if _batch_thick else _mk} candidate at {np.round((cen[i] + cen[j]) / 2, 3)} (left for the verified sequential rounds)", flush=True)
+        continue
     print(f"[p7] add_handle between faces {i},{j}: out {d[i]/pitch:.1f}/{d[j]/pitch:.1f} vox, sep {-negL:.2f} edges, centroids {np.round(cen[i],3)} {np.round(cen[j],3)}", flush=True)
     # Thin/pinched membrane: entry and exit faces are on different sheets but their 1-rings overlap
     # (sheets touch at 1-ring distance) -> the tube's side quads would duplicate existing edges and break
@@ -803,7 +876,7 @@ for k in range(_hull_max):
     if not wt:
         print(f"[p7] handle broke watertightness ({nbad} bad edges): blacklisting this blob and continuing", flush=True)
         prev_handles.append({"mid": None, "blob": _blob if DETECT == "rays" else None})
-        if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
+        _save_handles()
         continue
     n_before = len(V) if not (ABSORB or OPEN == 'merge') else -1
     if ABSORB or OPEN == 'merge':
@@ -834,7 +907,7 @@ for k in range(_hull_max):
     n_added += 1
     _HAXES.append((np.asarray(a0,float), np.asarray(u,float)/(np.linalg.norm(u)+1e-12), float(L_)))
     prev_handles.append({"mid": ((cen[i] + cen[j]) / 2).tolist(), "blob": _blob if DETECT in ("rays", "hull", "membrane") else None})
-    if HANDLES_JSON: json.dump(prev_handles, open(HANDLES_JSON, "w"))
+    _save_handles()
     _loops = _hg.tree_cotree_loops(V, Fa); _g = genus(V, Fa)
     print(f"[p7] H1 verification: {len(_loops)} generator loops = 2*genus? (2*{_g}={2*_g})  {'OK' if len(_loops)==2*_g else 'MISMATCH'}", flush=True)
     report(f"after handle {n_added}", V, Fa); _snap(f"Stage 7 [DLFL add_handle #{n_added}] genus={genus(V, Fa)}", V, Fa, hold=45)

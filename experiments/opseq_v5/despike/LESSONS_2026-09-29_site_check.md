@@ -112,6 +112,57 @@ DR cannot avoid self-collision by itself; mitigation = open membranes earlier (s
 round), not a collision barrier. Every candidate's features + face centroids are now written to
 results_genus/sitelog_<tag>.jsonl for calibration on mid-stage meshes.
 
+## 7c. 2026-10-01: "open every membrane at once" (BATCH_OPEN) is rejected - counterexample bt1
+
+Idea (Boss): open all detected membranes in one go, no DR in between; expected to be faster and to avoid
+DR crushing the membranes that wait (7b). Implemented as `BATCH_OPEN=1` (default OFF, experimental).
+
+- bt1 (no guard): 4 site-valid MEMBRANE handles opened at once, final genus 4 = GT, per-handle GT audit
+  4/4 "on real air" - and the result is WRONG: the base arch is still sealed by a membrane, one handle in
+  the upper region is redundant (figures `fig_batch_open_counterexample.png`, `fig_batch_open_bt1_handles.png`).
+  The redundant one is most likely H2, a 7-edge-long tube bored through the thick slab of wrong material
+  that fills the whole upper concavity on the coarse mesh (inference from length/position, not proven).
+- Why it cannot work in principle: without DR nothing distinguishes two membranes (or two places of one
+  slab) of the SAME tunnel. In sequential mode DR widens the tube and eats the leftover membrane, so the
+  next detection no longer proposes that tunnel; the count stop then protects the rest. In batch mode the
+  spare handle steals the quota of a real tunnel and the genus count cannot tell.
+- Guards that do NOT work: (a) per-handle GT audit - blind to redundancy (now proven, not only predicted);
+  (b) hull plugs - the 5 fertility plugs overlap (plug0/1 share 11k voxels, plug2/3 6k; the three upper
+  plug centres are 0.15 apart), one long tube touches all three upper plugs at 0.2 vox; (c) voxel-block
+  capacity k - one block covers all 4 tunnels and k is unstable (4 -> 3 -> 6 -> 4, thin tubes vanish in
+  the 128 voxelisation); (d) closing-ladder on the final mesh - voxel genus 9 (cracks count as holes).
+- batch-lite (`BATCH_SEP_MAX=3`: only thin membranes are batched, thick ones go to the DR-verified
+  rounds): bt2, bt3 correct layout by eye, n=2 only. bt3 opened nothing in stage 3 and all 4 in the late
+  5b pass (rougher surface, slower). Known defects: a skipped THICK candidate is re-proposed 13-23 times;
+  the sitelog audit cannot read mixed batch+sequential logs.
+- Speed: there is little to gain. Timestamps: stage 3 (all handles) is 100-134 s of a ~400 s chain,
+  ~30 s per round; the refinement stages (~270 s) are untouched. Ideal batch saves ~80 s (20%); batch-lite
+  saved nothing (342 / 487 s vs 405 s). The real tail is a LATE handle: hull face-pair search, 15+ min
+  (g67f2 1472 s, np4 1291 s).
+- This also withdraws the mitigation proposed at the end of 7b ("several handles per round").
+
+## 7d. 2026-10-01: near-pair detector ("close in space, far along the surface") - fast, not selective
+
+Idea (Boss): two faces close in Euclidean distance but far geodesically are the two sides of a membrane.
+- On our data this signature belongs to CONTACTS, not membranes: 138 real membranes have a
+  geodesic/straight ratio with median 6.6 (115 below 10, only 2 above 50); contacts are 82-560. Coarse
+  membranes are thick slabs (page distance 0.3-0.4, 10-15% of the object), crushed ones have overlapping
+  1-rings (ratio ~0). And a real thin part (plate, ear) has the same signature - hull air is still needed.
+- Where it helps: the refined stage. `find_near_pairs` (`NEAR_PAIRS=1`, default OFF): KD-tree face pairs
+  within 6 vox, opposed normals, non-adjacent, clustered, each cluster classified by the site check,
+  membranes before contacts. Runs in 1.4-2.8 s on 44k faces and reproduces the late contact joins that
+  hull completion needs ~16 min for (g67f2; np4 only with `THIN_ALIGN=0.2`: interpenetrating sheets,
+  w=2, are opposed but laterally offset, centre line vs normal alignment 0.24-0.28).
+- Why it is not enabled: (1) 5 of 7 finished, correct genus-4 meshes also carry a site-valid CONTACT
+  cluster that needs no join - only the count stop blocks it; a chain stuck at genus 3 for a missing
+  MEMBRANE would get a wrong join (same class of error as bt1); (2) one CONTACT candidate (g67f5) lies on
+  GT air (narrow real gap filled by the hull); (3) distance to the hull plugs does not separate needed
+  joins (4.7, 5.0 vox) from unneeded ones (4.1-5.4), the closest (1.8) is the wrong one; (4) cluster
+  choice is sensitive to the alignment threshold (bt3: 12 -> 5 membrane clusters).
+- Regression with NEAR_PAIRS=1, alignment 0.7: fertility 6/6 correct genus (np1-6), the detector never
+  fired; this also re-confirms the sequential mode after the 2026-09-30/10-01 edits.
+- Needed before enabling: a criterion for "does this contact need a join" (= open problem 2).
+
 ## 8. Open problems
 
 1. Recalibrate on stage-3 mid-round meshes: geodesic threshold (a true contact at 20) and the handling
@@ -121,4 +172,6 @@ results_genus/sitelog_<tag>.jsonl for calibration on mid-stage meshes.
 3. Thin tunnels the visual hull cannot carve (the oracle itself would undercount) — second source of air
    evidence from image-space see-through, or a finer / adaptive hull (Boss: octree near the surface).
 4. Seam cracks on the arms (folds = the "crease" population): zip them topology-preservingly.
-5. hull-completion face-pair search is slow (~15 min per query); batch the rays.
+5. hull-completion face-pair search is slow (~15 min per query); batch the rays. The near-pair detector (7d)
+   finds the same sites in 2 s but needs the join criterion of item 2 first.
+6. Redundancy-aware layout audit: per-handle GT audit passes bt1 (7c); only the visual GT gallery catches it.

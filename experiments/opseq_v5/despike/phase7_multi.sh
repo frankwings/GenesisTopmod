@@ -7,6 +7,24 @@ cd /home/kingy/Projects/Genesis/GenesisTopmod/experiments/opseq_v5
 S=$SHAPE; R=${ROUNDS:-6}; cur=$1; LOOP=${LOOP_STEPS:-400}
 export HANDLES_JSON=/tmp/liou_cow_viz/handles_${S}.json; rm -f $HANDLES_JSON /tmp/liou_cow_viz/sitelog_${S}.jsonl /tmp/liou_cow_viz/cow_${S}_${S}_h[0-9]*.npz   # no stale round outputs
 COMMON="MEMB_EXEMPT=2 FLIP_EVERY=25 COLLAPSE_EVERY=100 COLLAPSE_RATIO=0.5 COLLAPSE_FRAC=${COLLAPSE_FRAC:-0.02} SI_PUSH=0.15"
+# BATCH_OPEN=1: round 0 opens every site-valid (MEMBRANE/CONTACT) candidate in one go, no DR in between, then ONE
+# Stage-4 loop. Whatever is still missing (genus < g*, e.g. candidates the site check could not classify) is left
+# to the verified one-handle-per-round loop below.
+if [ "${BATCH_OPEN:-0}" = "1" ] && [ "${SKIP_ROUNDS:-0}" != "1" ]; then
+  echo "##### $S batch round: open all site-valid candidates on $cur"
+  out=$(MODE=64v SHAPE=$S TAG=${S}_h0 MAX_HANDLES=${BATCH_MAX:-8} BATCH_OPEN=1 BASE_NPZ=$cur python3 despike/phase7_handle.py 2>&1 | grep "\[p7\]\|\[memb\]\|\[after\|\[base\]\|Traceback\|Error")
+  echo "$out"
+  nb=$(echo "$out" | sed -nE 's/.*handles added: ([0-9]+).*/\1/p' | tail -1)
+  ho_ref=$(echo "$out" | sed -nE 's/^\[base\].*ho16=([0-9.]+) hair=([0-9]+).*/\1/p' | head -1); hair_ref=$(echo "$out" | sed -nE 's/^\[base\].*ho16=([0-9.]+) hair=([0-9]+).*/\2/p' | head -1)
+  if [ "${nb:-0}" -gt 0 ] && [ -f /tmp/liou_cow_viz/cow_${S}_${S}_h0.npz ]; then
+    fin=$(env MODE=64v SHAPE=$S TAG=${S}_h0b STEPS=$LOOP $COMMON BASE_NPZ=/tmp/liou_cow_viz/cow_${S}_${S}_h0.npz python3 despike/phase4_inloop.py 2>&1 | grep "\[final\]\|Traceback\|Error"); echo "$fin"
+    ho_new=$(echo "$fin" | sed -nE 's/.*ho16=([0-9.]+) hair=([0-9]+).*/\1/p' | tail -1); hair_new=$(echo "$fin" | sed -nE 's/.*ho16=([0-9.]+) hair=([0-9]+).*/\2/p' | tail -1)
+    echo "##### $S batch round: BATCH ACCEPTED $nb handle(s) (ho16 $ho_ref -> $ho_new, hair $hair_ref -> $hair_new)"
+    ho_ref=$ho_new; hair_ref=$hair_new; cur=/tmp/liou_cow_viz/cow_${S}_${S}_h0b.npz
+  else
+    echo "##### $S batch round: nothing site-valid to open"
+  fi
+fi
 for r in $(seq 1 $R); do
   [ "${SKIP_ROUNDS:-0}" = "1" ] && break
   echo "##### $S round $r: detect + add_handle on $cur"
