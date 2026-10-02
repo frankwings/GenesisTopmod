@@ -639,25 +639,48 @@ def find_near_pairs(V, F, prev_handles=(), r_vox=float(os.environ.get("THIN_R_VO
         if not all_clusters:
             if any(isinstance(h, dict) and (h.get("blob") == key or (h.get("mid") is not None and np.linalg.norm(np.asarray(h["mid"], float) - mid) < R_DEDUP)) for h in prev_handles): continue
             if any(np.linalg.norm(mid - q) < R_REJ for q in _rejected_mids()): continue
-        best = sorted(m, key=lambda q: np.linalg.norm(P[q] - mid))[:40]                  # pairs nearest the cluster centre
-        hit = next(((ok[q][0], ok[q][1]) for q in best if disjoint(*ok[q])), None)
-        if hit is None: continue
-        i, j = hit; _in, _air, _ = membrane_check(V, F, cen[i], cen[j], fi=i, fj=j); kind = site_kind_full(V, F, i, j, _in, _air)
-        print(f"[p7]   near cluster of {len(m)} pairs at {np.round(mid, 3)}: faces {i},{j} dist {np.linalg.norm(cen[j]-cen[i])/pitch:.2f} vox inside={_in:.2f} air={_air:.2f} -> {kind}", flush=True)
-        if kind in ("MEMBRANE", "CONTACT") and not all_clusters and int(os.environ.get("RANK_PREFILTER", "0")):
-            # strict topology: the loop this handle would close (segment + surface path) must enclose a hull tunnel
-            # that the surface does not realise yet (linking vector independent of the existing handle loops)
+        # Representative pair. A large cluster mixes pairs across a thin REAL part (material once, no action) with the
+        # pairs we want (two sheets interpenetrating: |w| >= 1.5 at the midpoint). st1/st10 (2026-10-02) stopped at genus 3
+        # because the centre pair was of the first kind. Try the interpenetrating pairs first, then the centre ones,
+        # and keep the first site-valid one (at most NEAR_TRIES site checks per cluster).
+        sub = m if len(m) <= 80 else m[np.linspace(0, len(m) - 1, 80).astype(int)]
+        try: wmid = np.abs(winding_numbers(V, F, P[sub]))
+        except Exception: wmid = np.zeros(len(sub))
+        ov = sub[wmid >= 1.5]
+        order = ([q for q in sorted(ov, key=lambda q: np.linalg.norm(P[q] - P[ov].mean(0)))] if len(ov) else []) + sorted(m, key=lambda q: np.linalg.norm(P[q] - mid))[:40]
+        strict = int(os.environ.get("RANK_PREFILTER", "0")) and not all_clusters
+        if strict and "_np_lk" not in globals():
+            # strict topology (refined mesh): the decisive evidence is the LINKING VECTOR of the loop the handle would
+            # close (segment + surface path): it must enclose a hull tunnel the surface does not realise yet.
             try:
                 import linking_audit as _la
-                if "_np_air" not in globals():
-                    globals()["_np_air"] = _la.air_loops(SHAPE, log=lambda m: None)
-                _air_l = globals()["_np_air"]
-                if _air_l:
-                    _R = _la.surface_matrix(V, F, _air_l)[2]; _v = _la.candidate_vector(V, F, i, j, _air_l)
-                    _r0 = int(np.linalg.matrix_rank(_R)) if _R.size else 0; _r1 = int(np.linalg.matrix_rank(np.vstack([_R, _v[None]])))
-                    print(f"[p7]   linking vector {_v.tolist()}: tunnels realised {_r0} -> {_r1} {'(new tunnel)' if _r1 > _r0 else '(no new tunnel -> skip)'}", flush=True)
-                    if _r1 <= _r0: continue
-            except Exception as _e: print(f"[p7]   linking prefilter failed ({_e}); candidate kept", flush=True)
+                _al = _la.air_loops(SHAPE, log=lambda m: None); globals()["_np_lk"] = (_la, _al) if _al else None
+            except Exception as _e: print(f"[p7]   linking prefilter unavailable ({_e})", flush=True); globals()["_np_lk"] = None
+        lk = globals().get("_np_lk") if strict else None
+        if lk is not None and "R" not in locals():
+            R = lk[0].surface_matrix(V, F, lk[1])[2]; r0 = int(np.linalg.matrix_rank(R)) if R.size else 0
+        hit = None; kind = "INVALID"; tried = []; _in = _air = 0.0; chosen = False; vec = None
+        for q in order:
+            if len(tried) >= int(os.environ.get("NEAR_TRIES", "5")): break
+            if not disjoint(*ok[q]) or any(np.linalg.norm(P[q] - t) < 1.5 * pitch for t in tried): continue
+            tried.append(P[q]); i, j = ok[q]
+            _in, _air, _ = membrane_check(V, F, cen[i], cen[j], fi=i, fj=j); kind = site_kind_full(V, F, i, j, _in, _air); hit = (i, j)
+            if lk is None:
+                if kind in ("MEMBRANE", "CONTACT"): chosen = True; break
+                continue
+            # strict: a drill needs a MEMBRANE site; a join only needs "no hull air between the faces" - on the refined
+            # mesh two parts that GT merges often touch with mixed winding (0 / 1 / -1), which the coarse-stage site
+            # rule calls INVALID (st1, 2026-10-02) although the join is exactly what is missing.
+            if not (kind == "MEMBRANE" or _air <= 0.4): continue
+            vec = lk[0].candidate_vector(V, F, i, j, lk[1]); r1 = int(np.linalg.matrix_rank(np.vstack([R, vec[None]]))) if R.size else int(np.any(vec != 0))
+            if r1 > r0:
+                if kind != "MEMBRANE": kind = "CONTACT"
+                chosen = True; break
+        if hit is None: continue
+        i, j = hit
+        print(f"[p7]   near cluster of {len(m)} pairs ({len(ov)} interpenetrating of {len(sub)} sampled, {len(tried)} tried) at {np.round(mid, 3)}: faces {i},{j} dist {np.linalg.norm(cen[j]-cen[i])/pitch:.2f} vox inside={_in:.2f} air={_air:.2f} -> {kind}"
+              + (f" | linking vector {vec.tolist()}: tunnels realised {r0} -> {r0 + 1} (new tunnel)" if (lk is not None and chosen) else (" | no pair encloses a new tunnel" if lk is not None else "")), flush=True)
+        if lk is not None and not chosen: continue
         if kind in ("MEMBRANE", "CONTACT") or all_clusters: out.append((i, j, cen[i], cen[j], key, kind))
     if not all_clusters: out.sort(key=lambda c: c[5] != "MEMBRANE")     # stable: membranes (hard hull-air evidence) before contacts
     return out

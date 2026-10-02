@@ -227,6 +227,28 @@ vector is linearly independent of the vectors already realised by the mesh. One 
 - Limits: fertility only (air loops for other shapes need robust mouth labelling); the cut-and-cap runs on
   triangle arrays, not as a DLFL operator.
 
+## 7g. 2026-10-02: late joins decided by the linking vector - fertility 10/10 strict-correct
+
+The two misses of 7f (st1, st10) were candidate SELECTION, not the rule:
+- st10: one representative pair per cluster was a pair across a thin real part. Now the pairs whose midpoint has
+  |w| >= 1.5 (two sheets really interpenetrating) are tried first, up to NEAR_TRIES=5 distinct pairs per cluster.
+- st1: the audit's null vector (-1, 1, 0, 0) says which tunnel is missing (the bar between upper mouths 1 and 2 is
+  not closed). All six sampled pairs of the cluster at region A enclose exactly that tunnel and GT is solid there,
+  but the midpoint winding is a mix of 0 / 1 / -1 (parts touching, locally inverted), which the coarse-stage site
+  rule calls INVALID. New rule on the refined mesh (RANK_PREFILTER): a DRILL still needs a MEMBRANE site; a JOIN
+  needs "no hull air between the faces" + "the loop encloses a hull tunnel the surface does not realise yet".
+  The dangerous case (real narrow gap filled by the hull, g67f5) has linking vector 0 and stays excluded.
+- Both meshes then end at genus 4, 4/4 (91 s and 246 s for the late pass).
+
+End to end, sx1-10 (`results_genus/linking_audit_fertility_strict_sx.txt`): **10/10 genus 4 with 4/4 tunnels
+realised**, no run with genus > rank. 5 runs were already right after refinement, 4 had micro-handles removed (one
+or two) and re-joined, 1 arrived at genus 3 honestly and was completed. One rejection in total. CD 0.0063-0.0065,
+VolIoU 0.989-0.992. Wall 777-1146 s, but the GPU was shared during this run (every stage 2-3x slower than in
+st1-10, e.g. Stage 2 34 s vs 12 s); the strict steps themselves cost 3-6 s (repair) + 12 s (late pass with
+nothing to do) to ~165 s (two late handles, under contention). Timing must be re-measured on a free GPU.
+
+Still open: other shapes (air loops), the origin of the micro-handles in Stage 3, cut-and-cap as a DLFL operator.
+
 ## 8. Open problems
 
 1. Recalibrate on stage-3 mid-round meshes: geodesic threshold (a true contact at 20) and the handling
