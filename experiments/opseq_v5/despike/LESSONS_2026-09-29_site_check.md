@@ -199,6 +199,34 @@ Consequence for the gate (Boss, 2026-10-01: go for strict topology): accept a ha
 vector is linearly independent of the vectors already realised by the mesh. One rule covers redundancy (bt1),
 "does this contact need a join", and micro-handles; it also makes the 2-second near-pair detector safe to use.
 
+## 7f. 2026-10-01: strict repair on the refined mesh (STRICT=1) - 8/10 strict-correct end to end
+
+- RANK_GATE in Stage 3 (accept a handle only if "tunnels realised" goes up by exactly 1) does not work: on the
+  coarse mesh other tunnels are still blocked by membranes, the hull air loops pass THROUGH that material and
+  the linking numbers are polluted (readings like 0 -> 2 for one handle). 6 chains: 2 reach 4/4, 4 stop honestly at
+  genus 3, no fake handle anywhere, but 30-73 min per chain (everything is pushed into the slow late hull search).
+  The measure is only valid once the mesh is flush with the hull.
+- Where the fake handle comes from: 13 of 15 failing runs are already wrong at the end of Stage 3; 1 lost a tunnel
+  in a pure DR stage (the surface passed through itself, the handle slipped off the tunnel); 1 got a redundant
+  late handle.
+- Every fake handle on the refined mesh is a MICRO-HANDLE = a non-face 3-cycle (three existing edges whose
+  triangle is not a face: the neck of a triangle-sized tube), non-separating, linking vector 0.
+  `strict_repair.py` cuts along it and caps both sides (genus -1, manifold + connected checked, rank unchanged):
+  14/14 failing genus-4 meshes repaired to genus == rank; a correct mesh is left untouched.
+- Late pass under STRICT: near-pair detector (2 s) -> linking-vector prefilter (the loop must enclose a tunnel
+  not realised yet) -> add_handle + DR -> accept iff tunnels realised +1 (RANK_ONLY, replaces the render gate).
+  No hull face-pair search (HULL_COMPLETE=0 in this pass). On the 15 failing v6.4 meshes: 15/15 end at
+  genus 4, 4/4 tunnels, 52-178 s for the pass (was 11-55 min).
+- End to end (st1-10, `results_genus/linking_audit_fertility_strict_st.txt`): strict-correct 8/10 (v6.4: 6/21),
+  the other 2 stop at genus 3 with 3/3 (no fake handle, honest miss). Wall 334-497 s, CD 0.0063-0.0065,
+  VolIoU 0.990-0.992 - same as v6.4. Later stages (refine, seam refit, Taubin) did not break the topology.
+- Cause of the 2 misses (st1 reproduced): the interpenetration clusters are there but the ONE representative
+  pair picked per cluster is a pair across a thin real part (inside 1, air 0, no overlap -> INVALID). With the
+  relaxed alignment (0.2) clusters are large and mixed. Fix to try: choose the representative among the pairs
+  whose midpoint has |w| >= 1.5.
+- Limits: fertility only (air loops for other shapes need robust mouth labelling); the cut-and-cap runs on
+  triangle arrays, not as a DLFL operator.
+
 ## 8. Open problems
 
 1. Recalibrate on stage-3 mid-round meshes: geodesic threshold (a true contact at 20) and the handling

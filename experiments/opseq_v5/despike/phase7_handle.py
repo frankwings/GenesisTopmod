@@ -644,6 +644,20 @@ def find_near_pairs(V, F, prev_handles=(), r_vox=float(os.environ.get("THIN_R_VO
         if hit is None: continue
         i, j = hit; _in, _air, _ = membrane_check(V, F, cen[i], cen[j], fi=i, fj=j); kind = site_kind_full(V, F, i, j, _in, _air)
         print(f"[p7]   near cluster of {len(m)} pairs at {np.round(mid, 3)}: faces {i},{j} dist {np.linalg.norm(cen[j]-cen[i])/pitch:.2f} vox inside={_in:.2f} air={_air:.2f} -> {kind}", flush=True)
+        if kind in ("MEMBRANE", "CONTACT") and not all_clusters and int(os.environ.get("RANK_PREFILTER", "0")):
+            # strict topology: the loop this handle would close (segment + surface path) must enclose a hull tunnel
+            # that the surface does not realise yet (linking vector independent of the existing handle loops)
+            try:
+                import linking_audit as _la
+                if "_np_air" not in globals():
+                    globals()["_np_air"] = _la.air_loops(SHAPE, log=lambda m: None)
+                _air_l = globals()["_np_air"]
+                if _air_l:
+                    _R = _la.surface_matrix(V, F, _air_l)[2]; _v = _la.candidate_vector(V, F, i, j, _air_l)
+                    _r0 = int(np.linalg.matrix_rank(_R)) if _R.size else 0; _r1 = int(np.linalg.matrix_rank(np.vstack([_R, _v[None]])))
+                    print(f"[p7]   linking vector {_v.tolist()}: tunnels realised {_r0} -> {_r1} {'(new tunnel)' if _r1 > _r0 else '(no new tunnel -> skip)'}", flush=True)
+                    if _r1 <= _r0: continue
+            except Exception as _e: print(f"[p7]   linking prefilter failed ({_e}); candidate kept", flush=True)
         if kind in ("MEMBRANE", "CONTACT") or all_clusters: out.append((i, j, cen[i], cen[j], key, kind))
     if not all_clusters: out.sort(key=lambda c: c[5] != "MEMBRANE")     # stable: membranes (hard hull-air evidence) before contacts
     return out

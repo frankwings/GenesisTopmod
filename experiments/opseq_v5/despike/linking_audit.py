@@ -32,6 +32,9 @@ def air_loops(shape, cache=None, min_mouth=20, log=print):
     mouth0 -> mouth j through the block, back through the outer air."""
     from skimage.graph import route_through_array
     cache = cache or f"{OUTD}/hull_plugs_{shape}_128.json"
+    memo = cache + ".airloops.npz"
+    if os.path.exists(memo) and os.path.getmtime(memo) >= os.path.getmtime(cache):
+        z = np.load(memo); return [z[k] for k in sorted(z.files, key=lambda k: int(k[4:]))]
     plugs = json.load(open(cache)); bz = np.load(cache + ".blocks.npz"); hs = bz["hs"].astype(bool)
     P = np.zeros_like(hs)
     for i in range(len(plugs)): b = bz[f"plug{i}"]; P[b[:, 0], b[:, 1], b[:, 2]] = True
@@ -53,6 +56,8 @@ def air_loops(shape, cache=None, min_mouth=20, log=print):
             p1, _ = route_through_array(costC, rep[0], rep[j], fully_connected=True)
             p2, _ = route_through_array(costW, rep[j], rep[0], fully_connected=True)
             loops.append(v2w(np.array(p1 + p2[1:], float)))
+    try: np.savez(memo, **{f"loop{i}": l for i, l in enumerate(loops)})
+    except Exception: pass
     return loops
 
 def linking(A, B):
@@ -98,7 +103,14 @@ def audit(V, F, AIR):
                 tiny_loops=int(sum(x < 0.3 for x in Ls)), int_err=err)
 
 if __name__ == "__main__":
-    shape = os.environ.get("SHAPE", "fertility"); AIR = air_loops(shape, log=lambda m: print(m, file=sys.stderr))
+    shape = os.environ.get("SHAPE", "fertility")
+    if len(sys.argv) > 2 and sys.argv[1] == "--rank":     # machine-readable: "<rank> <genus> <n_air> <tiny>" (rank -1: no air loops)
+        try: AIR = air_loops(shape, log=lambda m: None)
+        except Exception: AIR = []
+        m = np.load(sys.argv[2]); V, F = m["verts"].astype(float), m["tris"].astype(np.int64)
+        if not AIR: print(-1, int(genus(V, F)), 0, 0); sys.exit(0)
+        a = audit(V, F, AIR); print(a["rank"], a["genus"], len(AIR), a["tiny_loops"]); sys.exit(0)
+    AIR = air_loops(shape, log=lambda m: print(m, file=sys.stderr))
     print(f"# {shape}: {len(AIR)} hull tunnel air loops"); ok = n = 0
     for pat in sys.argv[1:]:
         for f in sorted(glob.glob(pat)):

@@ -1,0 +1,12 @@
+# fertility: 4 hull tunnel air loops
+fertility_st10_auto.npz                      genus 3  tunnels realised 3/4  per tunnel [1, 1, 0, 1]  tiny loops 0  MISMATCH
+fertility_st1_auto.npz                       genus 3  tunnels realised 3/4  per tunnel [1, 1, 1, 1]  tiny loops 0  MISMATCH
+fertility_st2_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_st3_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_st4_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_st5_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_st6_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_st7_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_st8_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_st9_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+# strict topology: 8/10

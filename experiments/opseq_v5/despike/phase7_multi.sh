@@ -59,6 +59,18 @@ for r in $(seq 1 $R); do
     ok=$(echo "$jev" | python3 -c "import sys,json; print(1 if json.load(sys.stdin)['gated_accept'] else 0)" 2>/dev/null)
     echo "##### $S round $r: JEV gate (g$curg<g*$gstar, dho=$(python3 -c "print(round(${ho_new:-0}-${ho_ref:-0},4))"), out=${outvox} blob=${blob} prov=${prov} site=${site} memb=${memb}) -> $jev"
   fi
+  # --- RANK gate (2026-10-01, strict topology): genus is only a count. The surface must REALISE one more hull tunnel:
+  # rank of the linking matrix (mesh handle loops x hull tunnel air loops, linking_audit.py) must go up by exactly 1
+  # after the handle + DR. A redundant tube, a hidden micro-handle or a join that encloses no tunnel leaves it unchanged.
+  if [ "${RANK_GATE:-0}" = "1" ]; then
+    rk_prev=$(SHAPE=$S python3 despike/linking_audit.py --rank $prev_cur 2>/dev/null | tail -1); rk_new=$(SHAPE=$S python3 despike/linking_audit.py --rank /tmp/liou_cow_viz/cow_${S}_${S}_h${r}b.npz 2>/dev/null | tail -1)
+    rp=$(echo "$rk_prev" | cut -d' ' -f1); rn=$(echo "$rk_new" | cut -d' ' -f1)
+    if [ "${rp:--1}" -ge 0 ] 2>/dev/null && [ "${rn:--1}" -ge 0 ] 2>/dev/null; then
+      if [ "$rn" -eq $((rp + 1)) ]; then rk_ok=1; else rk_ok=0; fi
+      echo "##### $S round $r: RANK gate: tunnels realised $rp -> $rn (rank genus n_air tiny: prev [$rk_prev] new [$rk_new]) -> $([ $rk_ok = 1 ] && echo pass || echo FAIL) (gate before rank: ok=$ok)"
+      if [ "${RANK_ONLY:-0}" = "1" ]; then ok=$rk_ok; else [ "$rk_ok" = "1" ] || ok=0; fi   # RANK_ONLY (refined mesh, no membranes left): the rank is the whole decision
+    else echo "##### $S round $r: RANK gate skipped (no air loops for $S)"; fi
+  fi
   if [ "$ok" = "1" ]; then
     echo "##### $S round $r: handle VERIFIED (ho16 $ho_ref -> $ho_new, hair $hair_ref -> $hair_new)"; ho_ref=$ho_new; hair_ref=$hair_new
     cur=/tmp/liou_cow_viz/cow_${S}_${S}_h${r}b.npz
