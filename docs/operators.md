@@ -39,6 +39,7 @@ every step (the constructive DLFL guarantee of Akleman & Chen 2003).
 | #8 | [`subdivide_edge`](#8-subdivide_edge) | — | V+1, E+1, F+0 | ✅ Yes | [img](assets/ops/subdivide_edge.png) |
 | #9 | [`subdivide_face`](#9-subdivide_face) | — | V+1, E+n, F+n−1 | ✅ Yes | [img](assets/ops/subdivide_face.png) |
 | #10 | [`add_handle`](#10-add_handle) | HDL | V+0, E+n, F+n−2, χ−2, genus+1 (same component) | ✅ Yes | [img](assets/ops/add_handle.png) |
+| #10b | [`remove_handle`](#10b-remove_handle) | RHDL | V+1, genus−1 (inverse of add_handle on a 3-vertex neck); built from `delete_edge` + `stellate` | ❌ Not yet | — |
 | #11 | [`stellate_all`](#11-stellate_all) | STA | V'=V+F, E'=3E, F'=2E | ✅ Yes | [img](assets/ops/stellate_all.png) |
 | #12 | [`collapse_edge`](#12-collapse_edge) | — | V−1, E−(d0+d1−3), F−2 (d0,d1 = degrees of flanking faces) | ❌ Not yet | [img](assets/ops/collapse_edge.png) |
 | #13 | [`trisect_edge`](#13-trisect_edge) | — | V+2, E+2, F+0 | ❌ Not yet | [img](assets/ops/trisect_edge.png) |
@@ -264,6 +265,23 @@ add_handle(mesh, top_face, bottom_face)
 ```
 
 ![add_handle](assets/ops/add_handle.png)
+
+
+### #10b remove_handle
+
+Removes the handle whose **neck** is a 3-vertex cycle (three existing edges whose triangle is not a face): a triangle-sized tube, or a thread with a triangular cross-section. Inverse of `add_handle`.
+
+Built only from fundamental operators, so the mesh is a valid 2-manifold after every step: on one side of the neck the faces touching the three vertices form a band; each band edge leaving a neck vertex is removed with `delete_edge`. All but one deletion merge two faces; exactly one finds the *same* face on both sides and splits it (the genus-changing step). Two faces remain: the neck triangle, capping the other side, and one polygon, closed with `stellate`.
+
+- **Signature**: `remove_handle(mesh, va, vb, vc) -> (cap_face, apex_vertex)`
+- **Oracle**: V+1, genus−1, component count unchanged
+- **Raises** `ValueError` if the cycle is a face, is not a neck, or separates the surface (a pinch between two parts). The mesh may then be partially edited: work on a copy.
+
+```python
+rim = face1.vertices()
+add_handle(mesh, face1, face2)                 # genus + 1
+remove_handle(mesh, rim[0], rim[1], rim[2])    # genus - 1
+```
 
 ### #11 stellate_all
 

@@ -263,15 +263,19 @@ def _fix_vertex_he(v: Vertex) -> None:
 
 def delete_edge(mesh: DLFLMesh, edge: Edge) -> Face:
     """
-    Delete an edge, merging the two adjacent faces into one.
+    Delete an edge.
 
-    If both half-edges are on the *same* face (a bridge / loop edge in a
-    degenerate mesh), the face is split — but we do not support that here
-    since the manifold invariant prevents it in practice.
+    Two different faces on its sides (the usual case): the faces merge into one.
+    Topology change: E−1, F−1  ⟹  χ unchanged.
 
-    Returns the surviving merged face.
+    The SAME face on both sides (the face's boundary walk passes the edge twice, e.g. an
+    annular face cut open along a "spoke"): the walk falls apart into two loops and the
+    face SPLITS into two faces. Topology change: E−1, F+1  ⟹  χ+2: genus −1 if the
+    surface stays connected, otherwise one more component. This is the exact inverse of
+    the cross-face `insert_edge` (which opens a handle) and is what `remove_handle`
+    builds on. A dangling edge (its two half-edges consecutive in the walk) is refused.
 
-    Topology change: E−1, F−1  ⟹  χ unchanged  (genus may change).
+    Returns the surviving face (same-face case: the loop that contains he_a.next).
     """
     he_a = edge.he0
     he_b = edge.he1
@@ -281,6 +285,8 @@ def delete_edge(mesh: DLFLMesh, edge: Edge) -> Face:
 
     if f_a is None or f_b is None:
         raise ValueError("delete_edge: half-edges must belong to faces.")
+    if f_a is f_b and (he_a.next is he_b or he_b.next is he_a):
+        raise ValueError("delete_edge: dangling edge (would leave an isolated vertex).")
 
     # Splice he_a out of the loop
     prev_a = he_a.prev
@@ -304,6 +310,16 @@ def delete_edge(mesh: DLFLMesh, edge: Edge) -> Face:
             if cur is next_b:
                 break
         mesh._remove_face(f_b)
+    else:
+        # same face on both sides: after the splice the walk is two disjoint loops
+        # (next_a ... prev_b) and (next_b ... prev_a); the second becomes a new face
+        f_new = mesh._new_face(); f_new.he = next_b
+        cur = next_b
+        while True:
+            cur.face = f_new
+            cur = cur.next
+            if cur is next_b:
+                break
 
     # Update f_a entry pointer (avoid deleted half-edges)
     f_a.he = next_a if next_a is not he_a else next_b

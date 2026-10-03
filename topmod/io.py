@@ -97,6 +97,12 @@ def from_obj(path: str) -> DLFLMesh:
     return _build_mesh(positions, face_indices)
 
 
+def from_arrays(positions, faces) -> DLFLMesh:
+    """Build a DLFLMesh from vertex positions [(x, y, z), ...] and faces [[i, j, k, ...], ...] (0-based,
+    closed orientable 2-manifold) - the in-memory counterpart of `from_obj`."""
+    return _build_mesh([tuple(float(x) for x in p) for p in positions], [[int(i) for i in f] for f in faces])
+
+
 # ── triangle arrays (for rendering) ─────────────────────────────────────────
 
 def to_triangle_arrays(mesh: DLFLMesh) -> Tuple[List[Tuple[float, float, float]],

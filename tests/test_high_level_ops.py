@@ -331,3 +331,59 @@ class TestToTriangleArrays:
         assert len(positions) == 26
         # 24 quad faces → 48 triangles
         assert len(triangles) == 48
+
+
+# ── remove_handle (inverse of add_handle) + same-face delete_edge ────────────
+
+def _ico_with_handle(triangulate: bool):
+    from topmod.primitives import make_icosahedron
+    from topmod.high_level_ops import add_handle, triangulate_all
+    m = make_icosahedron(); faces = list(m.faces.values()); f1 = faces[0]; v1 = {v.id for v in f1.vertices()}
+    f2 = next(f for f in faces if not ({v.id for v in f.vertices()} & v1)
+              and not any(m.find_edge(a, b) for a in f.vertices() for b in f1.vertices()))
+    rim = f1.vertices(); add_handle(m, f1, f2)
+    if triangulate:
+        triangulate_all(m)
+    return m, rim
+
+
+def test_remove_handle_inverts_add_handle():
+    from topmod.high_level_ops import remove_handle
+    from topmod.validate import check_all
+    for tri in (False, True):
+        m, rim = _ico_with_handle(tri)
+        assert m.genus() == 1 and check_all(m)[0]
+        v0, c0 = m.V(), m.component_count()
+        cap, apex = remove_handle(m, rim[0], rim[1], rim[2])
+        ok, errs = check_all(m)
+        assert ok, errs
+        assert m.genus() == 0 and m.component_count() == c0 and m.V() == v0 + 1
+        assert cap.degree() == 3 and {v.id for v in cap.vertices()} == {v.id for v in rim}
+
+
+def test_remove_handle_refuses_a_face_and_a_non_cycle():
+    import pytest
+    from topmod.primitives import make_icosahedron
+    from topmod.high_level_ops import remove_handle
+    m = make_icosahedron(); f = next(iter(m.faces.values())); a, b, c = f.vertices()
+    with pytest.raises(ValueError):
+        remove_handle(m, a, b, c)                      # a face is not a neck
+    far = next(v for v in m.vertices.values() if v is not a and m.find_edge(a, v) is None)
+    with pytest.raises(ValueError):
+        remove_handle(m, a, b, far)                    # not pairwise connected
+
+
+def test_delete_edge_same_face_splits_the_face():
+    """Cross-face insert_edge opens a handle (F-1); deleting that edge again must restore F and the genus."""
+    from topmod.primitives import make_cube
+    from topmod.operators import insert_edge, delete_edge
+    from topmod.validate import check_all
+    m = make_cube(); faces = list(m.faces.values()); f1 = faces[0]; ids1 = {v.id for v in f1.vertices()}
+    f2 = next(f for f in faces if not ({v.id for v in f.vertices()} & ids1))
+    g0, F0, E0 = m.genus(), m.F(), m.E()
+    e = insert_edge(m, f1.he, f2.he)                   # different faces -> merged, genus + 1
+    assert m.F() == F0 - 1 and m.genus() == g0 + 1 and e.he0.face is e.he1.face
+    delete_edge(m, e)                                  # same face on both sides -> split, genus - 1
+    ok, errs = check_all(m)
+    assert ok, errs
+    assert m.F() == F0 and m.E() == E0 and m.genus() == g0

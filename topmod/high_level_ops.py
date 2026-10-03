@@ -305,6 +305,90 @@ def add_handle(mesh: DLFLMesh, face1: Face, face2: Face) -> List[Edge]:
 
 # ── stellate ─────────────────────────────────────────────────────────────────
 
+def remove_handle(mesh: DLFLMesh, va: Vertex, vb: Vertex, vc: Vertex) -> Tuple[Face, Vertex]:
+    """
+    Remove the handle whose NECK is the vertex cycle (va, vb, vc): three edges that exist
+    in the mesh while (va, vb, vc) is not a face (a triangle-sized tube, or a thread with a
+    triangular cross-section). Inverse of `add_handle`: genus −1.
+
+    Built only from fundamental DLFL operators, so the mesh is a valid 2-manifold after
+    every single step:
+      1. On one side of the neck the faces touching va, vb, vc form a band (an annulus
+         between the neck and the next ring C'). Every edge of that band that leaves a neck
+         vertex (a "spoke") is removed with `delete_edge`. All but one of these deletions
+         merge two faces; exactly one finds the same face on both sides and splits it.
+         What remains are two faces: the triangle (va, vb, vc), which caps the other side of
+         the neck, and one polygon bounded by C'.
+      2. The C' polygon is closed with `stellate` (apex at its centroid).
+    V+1, genus −1, component count unchanged.
+
+    Raises ValueError (mesh may then be partially edited - work on a copy) if the cycle is
+    not a neck, if the band is not an annulus on either side, or if the cut would separate
+    the surface (a pinch between two parts, not a handle).
+
+    Returns (cap triangle face, apex vertex of the other cap).
+    """
+    from .operators import delete_edge
+
+    cyc = (va, vb, vc)
+    hes = [mesh.find_halfedge(cyc[i], cyc[(i + 1) % 3]) for i in range(3)]
+    if any(h is None for h in hes):
+        raise ValueError("remove_handle: the three vertices are not pairwise connected.")
+    if hes[0].next is hes[1] and hes[1].next is hes[2] and hes[2].next is hes[0]:
+        raise ValueError("remove_handle: (va, vb, vc) is a face, not a neck.")
+    tw = [h.twin for h in hes]
+    if tw[2].next is tw[1] and tw[1].next is tw[0] and tw[0].next is tw[2]:
+        raise ValueError("remove_handle: (va, vb, vc) is a face, not a neck.")
+
+    g0, c0 = mesh.genus(), mesh.component_count()
+    # spokes on the LEFT of the directed cycle va -> vb -> vc: rotate around each neck vertex from its
+    # outgoing cycle half-edge until the incoming cycle half-edge is reached
+    spokes: List[Edge] = []
+    outer = None                                # a half-edge on the far ring C' (stays after the spokes are gone)
+    for i in range(3):
+        x, prv = cyc[i], cyc[(i - 1) % 3]
+        he = hes[i]; guard = 0
+        while True:
+            back = he.prev                      # (w -> x), same face as he
+            if back.origin is prv:
+                break                           # reached the cycle edge prv -> x
+            if back.origin in cyc:
+                raise ValueError("remove_handle: band is not an annulus (neck vertices share a band edge).")
+            spokes.append(back.edge)
+            he = back.twin                      # (x -> w): next face around x
+            cur = he.next                       # walk this band face: any edge between two non-neck vertices is on C'
+            while outer is None and cur is not he:
+                if cur.origin not in cyc and cur.destination not in cyc:
+                    outer = cur
+                cur = cur.next
+            guard += 1
+            if guard > 100000:
+                raise ValueError("remove_handle: fan walk did not close.")
+    if len(spokes) < 3:
+        raise ValueError("remove_handle: band too small.")
+    seen = set()
+    for e in spokes:
+        if e.id in seen:
+            raise ValueError("remove_handle: band is not an annulus (repeated spoke).")
+        seen.add(e.id)
+    for e in spokes:
+        delete_edge(mesh, e)
+
+    cap = hes[0].face                           # loop va -> vb -> vc
+    if cap.degree() != 3:
+        raise ValueError("remove_handle: neck did not close into a triangle (band not an annulus).")
+    if outer is None or outer.face is cap:
+        raise ValueError("remove_handle: far ring of the band not found (band not an annulus).")
+    if any(v in cyc for v in outer.face.vertices()):
+        raise ValueError("remove_handle: the cut did not separate the neck from the far ring.")
+    apex = stellate(mesh, outer.face)
+    if mesh.component_count() != c0:
+        raise ValueError("remove_handle: the cycle separates the surface (a pinch, not a handle).")
+    if mesh.genus() != g0 - 1:
+        raise ValueError("remove_handle: genus did not drop by one.")
+    return cap, apex
+
+
 def stellate(mesh: DLFLMesh, face: Face) -> Vertex:
     """
     Stellate a face: add a new center vertex and split the face into n
