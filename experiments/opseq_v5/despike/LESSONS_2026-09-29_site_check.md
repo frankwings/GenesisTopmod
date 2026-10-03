@@ -249,6 +249,26 @@ nothing to do) to ~165 s (two late handles, under contention). Timing must be re
 
 Still open: other shapes (air loops), the origin of the micro-handles in Stage 3, cut-and-cap as a DLFL operator.
 
+## 7h. 2026-10-02/03: all five shapes under STRICT=1 - 15/15 strict-correct, no time tail
+
+- Air loops are now shape-agnostic: tree-cotree generators of the hull's marching-cubes surface, lifted off the
+  surface up the distance-to-solid field and routed through the air (cost 1/distance); the g threading,
+  independent ones are kept by linking them with the hull's own loops (count must equal the hull genus). The
+  plug-based construction failed on kitten (disk plug: one interface component, centreline not through the hole)
+  and threeholes (duplicate plugs). GT meshes audit 4/4, 3/3, 1/1, 1/1. v6.4 finals of threeholes / kitten /
+  rockerarm / armadillo are strict-correct 12/12: fake handles are a fertility problem (parts pressed together).
+- s5 (first 5-shape run): 14/15. fertility s5B was 4/4 after the late pass and 2/4 after the Stage-6 refine: the
+  refine collapsed two handles AND damaged the geometry (CD 0.0112, VolIoU 0.9856, held-out 0.93) while the genus
+  count said OK. Stage 6s added: re-audit after the refine; on a mismatch repair + late pass + 6b refit. s5B
+  resumed -> 4/4, CD 0.0064, VolIoU 0.9919 (one extra handle was not a 3-cycle and could not be removed; the 6b
+  refit happened to re-inflate it onto its tunnel - not guaranteed by the rule, the final audit is the safety net).
+- s6 (second run, with 6s, GPU free; `results_genus/linking_audit_strict_s6.txt`): **15/15 genus right and all
+  tunnels realised**. Stage 6s did not fire. fertility: micro-handles removed in 2 of 3 runs. Wall: threeholes
+  340-342 s, kitten 276-299, rockerarm 279-342, armadillo 254-290, fertility 482-523. No 20-minute tail (no hull
+  face-pair search in the strict late pass). CD / VolIoU as v6.4.
+- Counting everything run with the final rules: fertility 10 (sx) + 3 (s6) + s5A/C + s5B resumed, other shapes
+  12 (s5) + 12 (s6): no strict failure after Stage 6s was added.
+
 ## 8. Open problems
 
 1. Recalibrate on stage-3 mid-round meshes: geodesic threshold (a true contact at 20) and the handling

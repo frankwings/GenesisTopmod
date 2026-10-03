@@ -1,0 +1,25 @@
+# threeholes: 3 hull tunnel air loops
+threeholes_s6A_auto.npz                      genus 3  tunnels realised 3/3  per tunnel [1, 1, 1]  tiny loops 0  OK
+threeholes_s6B_auto.npz                      genus 3  tunnels realised 3/3  per tunnel [1, 1, 1]  tiny loops 0  OK
+threeholes_s6C_auto.npz                      genus 3  tunnels realised 3/3  per tunnel [1, 1, 1]  tiny loops 0  OK
+# strict topology: 3/3
+# kitten: 1 hull tunnel air loops
+kitten_s6A_auto.npz                          genus 1  tunnels realised 1/1  per tunnel [1]  tiny loops 0  OK
+kitten_s6B_auto.npz                          genus 1  tunnels realised 1/1  per tunnel [1]  tiny loops 0  OK
+kitten_s6C_auto.npz                          genus 1  tunnels realised 1/1  per tunnel [1]  tiny loops 0  OK
+# strict topology: 3/3
+# rockerarm: 1 hull tunnel air loops
+rockerarm_s6A_auto.npz                       genus 1  tunnels realised 1/1  per tunnel [1]  tiny loops 0  OK
+rockerarm_s6B_auto.npz                       genus 1  tunnels realised 1/1  per tunnel [1]  tiny loops 0  OK
+rockerarm_s6C_auto.npz                       genus 1  tunnels realised 1/1  per tunnel [1]  tiny loops 0  OK
+# strict topology: 3/3
+# armadillo: 0 hull tunnel air loops
+armadillo_s6A_auto.npz                       genus 0  tunnels realised 0/0  per tunnel []  tiny loops 0  OK
+armadillo_s6B_auto.npz                       genus 0  tunnels realised 0/0  per tunnel []  tiny loops 0  OK
+armadillo_s6C_auto.npz                       genus 0  tunnels realised 0/0  per tunnel []  tiny loops 0  OK
+# strict topology: 3/3
+# fertility: 4 hull tunnel air loops
+fertility_s6A_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 1  OK
+fertility_s6B_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+fertility_s6C_auto.npz                       genus 4  tunnels realised 4/4  per tunnel [1, 1, 1, 1]  tiny loops 0  OK
+# strict topology: 3/3
