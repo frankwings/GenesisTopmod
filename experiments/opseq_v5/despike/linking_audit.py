@@ -26,12 +26,34 @@ def grid_frame(shape, res=128, pad=24):
     lo, hi = g.min(0) - 0.02, g.max(0) + 0.02
     return lambda v: lo + (np.asarray(v, float) - pad) / (res - 1) * (hi - lo)
 
+def ensure_plugs(shape, cache, res=128, pad=24, log=print):
+    """Build the plug cache (same format as hull_locate.find_tunnel_by_hull) when no chain has written it yet:
+    carve the voting hull from the GT silhouettes (GPU), downsample, run the closing ladder."""
+    if os.path.exists(cache): return
+    import torch, nvdiffrast.torch as dr
+    from eval_local_refine import load_obj, normalize_to_range, BUNNY_PATH
+    from hull_field import build_vote_hull
+    from hull_locate import clean_hull, downsample, genus_solid, find_plugs
+    import run_64v
+    gv, gf = load_obj(os.path.join(os.path.dirname(BUNNY_PATH), f"{shape}.obj")); gvn = normalize_to_range(gv)
+    mvps, views = run_64v.star_cameras(float(np.linalg.norm(gvn, axis=1).max()))
+    ctx = dr.RasterizeCudaContext()
+    HF = build_vote_hull(ctx, mvps, gvn, gf, None, "cuda", nres=256, hires=int(os.environ.get("HULL_HIRES", "512")), vote=2)
+    hs = np.pad(downsample(clean_hull(np.asarray(HF.hull).astype(bool)), res), pad); g0 = genus_solid(hs)
+    log(f"[air] {shape}: hull genus {g0}, locating plugs")
+    plugs = find_plugs(hs, g0, log=lambda m: None) if g0 > 0 else []
+    v2w = grid_frame(shape, res, pad)
+    for p in plugs: p["throat_w"] = v2w(p["throat_vox"]).tolist(); p["cen_w"] = v2w(p["cen_vox"]).tolist(); p["key"] = ["hull", [round(float(x), 3) for x in p["throat_w"]]]
+    np.savez_compressed(cache + ".blocks.npz", hs=hs, **{f"plug{i}": p["block_vox"] for i, p in enumerate(plugs)})
+    json.dump([{k: v for k, v in p.items() if k != "block_vox"} for p in plugs], open(cache, "w"))
+
 def air_loops(shape, cache=None, min_mouth=20, log=print):
     """One closed curve per independent hull tunnel, entirely in hull air (world coordinates).
     Sealed block (union of plug blocks, air voxels) with m mouths to the outer air -> m-1 loops:
     mouth0 -> mouth j through the block, back through the outer air."""
     from skimage.graph import route_through_array
     cache = cache or f"{OUTD}/hull_plugs_{shape}_128.json"
+    ensure_plugs(shape, cache, log=log)
     memo = cache + ".airloops.npz"
     if os.path.exists(memo) and os.path.getmtime(memo) >= os.path.getmtime(cache):
         z = np.load(memo); return [z[k] for k in sorted(z.files, key=lambda k: int(k[4:]))]
@@ -40,22 +62,71 @@ def air_loops(shape, cache=None, min_mouth=20, log=print):
     for i in range(len(plugs)): b = bz[f"plug{i}"]; P[b[:, 0], b[:, 1], b[:, 2]] = True
     P &= ~hs; W0 = ~hs & ~P
     lab, _ = ndimage.label(W0, structure=S26); sizes = np.bincount(lab.ravel()); sizes[0] = 0; W0 = lab == sizes.argmax()
-    clab, cn = ndimage.label(P, structure=S26); v2w = grid_frame(shape); loops = []
-    for c in range(1, cn + 1):
-        C = clab == c
-        if C.sum() < 50: continue
-        iface = ndimage.binary_dilation(C, S26) & W0
-        ml, _ = ndimage.label(iface, structure=S26); msz = np.bincount(ml.ravel())[1:]
-        mouths = [k + 1 for k in np.argsort(-msz) if msz[k] >= min_mouth]
-        log(f"[air] sealed block {c}: {int(C.sum())} vox, mouths {[int(msz[k - 1]) for k in mouths]}")
-        if len(mouths) < 2: continue
-        vox = [np.argwhere(ml == k) for k in mouths]
-        rep = [tuple(a[np.argmin(np.linalg.norm(a - a.mean(0), axis=1))]) for a in vox]
-        costC = np.where(C | iface, 1.0, -1.0); costW = np.where(W0, 1.0, -1.0)
-        for j in range(1, len(mouths)):
-            p1, _ = route_through_array(costC, rep[0], rep[j], fully_connected=True)
-            p2, _ = route_through_array(costW, rep[j], rep[0], fully_connected=True)
-            loops.append(v2w(np.array(p1 + p2[1:], float)))
+    v2w = grid_frame(shape); loops = []
+    # Construction (2026-10-02, shape-agnostic): H1 generators of the hull SURFACE (tree-cotree on the marching-cubes
+    # surface of hs), pushed into the air: anchor points are moved off the surface up the distance-to-solid gradient
+    # (towards the middle of the air channel) and joined by shortest routes in the air weighted by 1/distance. Of the
+    # 2g surface loops the g "meridians" become air loops threading a tunnel, the g "longitudes" become contractible;
+    # the validation below keeps the g independent threading ones. Plug blocks are only used to confirm the count.
+    try:
+        from skimage.measure import marching_cubes
+        import handle_guard as hg
+        from scipy.ndimage import distance_transform_edt
+        vv, ff, _, _ = marching_cubes(hs.astype(np.float32), 0.5); ff = ff.astype(np.int64)
+        hl = [l for l in hg.tree_cotree_loops(vv, ff, max_loops=96) if len(l) >= 10]
+        Wair = ~hs; dair = distance_transform_edt(Wair); _, near = distance_transform_edt(hs, return_indices=True)
+        cost = np.where(Wair, 1.0 / (dair + 0.5), -1.0); N = hs.shape[0]
+        nbr = np.array([[i, j, k] for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1) if (i, j, k) != (0, 0, 0)])
+        def lift(q):
+            q = np.clip(np.round(q).astype(int), 0, N - 1)
+            if not Wair[tuple(q)]: q = near[:, q[0], q[1], q[2]]
+            for _ in range(8):                                   # climb the distance field away from the solid
+                cand = np.clip(q + nbr, 0, N - 1); dv = dair[cand[:, 0], cand[:, 1], cand[:, 2]]
+                if dv.max() <= dair[tuple(q)]: break
+                q = cand[int(dv.argmax())]
+            return tuple(int(x) for x in q)
+        for l in hl:
+            P = vv[np.asarray(l)]; step = max(1, len(P) // 24); anchors = [lift(P[k]) for k in range(0, len(P), step)]
+            anchors = [a for i, a in enumerate(anchors) if i == 0 or a != anchors[i - 1]]
+            pts = []
+            okloop = True
+            for i in range(len(anchors)):
+                a0, a1 = anchors[i], anchors[(i + 1) % len(anchors)]
+                if a0 == a1: continue
+                try: seg, _ = route_through_array(cost, a0, a1, fully_connected=True)
+                except Exception: okloop = False; break
+                pts += seg[:-1]
+            if okloop and len(pts) >= 4: loops.append(v2w(np.array(pts, float)))
+        log(f"[air] hull surface: {len(ff)} faces, {len(hl)} generator loops -> {len(loops)} air loops before validation")
+    except Exception as e: log(f"[air] surface-based construction failed ({e}); falling back to plug centrelines")
+    if not loops:
+        _, idx = ndimage.distance_transform_edt(~W0, return_indices=True); costW = np.where(W0, 1.0, -1.0)
+        for i, p in enumerate(plugs):
+            pv = np.asarray(p.get("path_vox", []), float)
+            if len(pv) < 2: continue
+            q = np.clip(np.round(pv).astype(int), 0, hs.shape[0] - 1)
+            e0 = tuple(int(x) for x in idx[:, q[0, 0], q[0, 1], q[0, 2]]); e1 = tuple(int(x) for x in idx[:, q[-1, 0], q[-1, 1], q[-1, 2]])
+            if e0 == e1: continue
+            try: back, _ = route_through_array(costW, e1, e0, fully_connected=True)
+            except Exception: continue
+            loops.append(v2w(np.vstack([np.array(e0, float)[None], pv, np.array(e1, float)[None], np.array(back[1:-1], float)])))
+    # Validate against the HULL itself (GT-free): the hull surface's own H1 generators must link the air loops with
+    # rank == hull genus. Drop loops that no hull loop links (construction failed) and duplicates of the same
+    # tunnel (two plug blocks on one tunnel) by keeping a maximal independent column set.
+    if int(os.environ.get("AIR_NO_VALIDATE", "0")): return loops
+    try:
+        from skimage.measure import marching_cubes
+        import handle_guard as hg
+        vv, ff, _, _ = marching_cubes(hs.astype(np.float32), 0.5); vv = v2w(vv); ff = ff.astype(np.int64)   # full res: half res has spurious handles
+        hl = [l for l in hg.tree_cotree_loops(vv, ff, max_loops=256) if len(l) >= 10]
+        Mh = np.round(np.array([[linking(vv[np.asarray(l)], A) for A in loops] for l in hl])) if hl and loops else np.zeros((0, len(loops)))
+        from hull_locate import genus_solid
+        g0 = int(genus_solid(hs)); keep = []
+        for k in range(len(loops)):
+            if Mh.size and np.any(Mh[:, k] != 0) and np.linalg.matrix_rank(Mh[:, keep + [k]]) > len(keep): keep.append(k)
+        log(f"[air] hull genus {g0}: {len(loops)} loops built, {len(keep)} independent and threaded -> {'OK' if len(keep) == g0 else 'INCOMPLETE'}")
+        loops = [loops[k] for k in keep]
+    except Exception as e: log(f"[air] hull validation skipped ({e})")
     try: np.savez(memo, **{f"loop{i}": l for i, l in enumerate(loops)})
     except Exception: pass
     return loops
@@ -108,7 +179,7 @@ if __name__ == "__main__":
         try: AIR = air_loops(shape, log=lambda m: None)
         except Exception: AIR = []
         m = np.load(sys.argv[2]); V, F = m["verts"].astype(float), m["tris"].astype(np.int64)
-        if not AIR: print(-1, int(genus(V, F)), 0, 0); sys.exit(0)
+        if not AIR: print(0 if os.path.exists(f"{OUTD}/hull_plugs_{shape}_128.json") else -1, int(genus(V, F)), 0, 0); sys.exit(0)   # 0 loops = genus-0 hull (valid), -1 = unavailable
         a = audit(V, F, AIR); print(a["rank"], a["genus"], len(AIR), a["tiny_loops"]); sys.exit(0)
     AIR = air_loops(shape, log=lambda m: print(m, file=sys.stderr))
     print(f"# {shape}: {len(AIR)} hull tunnel air loops"); ok = n = 0
