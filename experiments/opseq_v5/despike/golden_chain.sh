@@ -50,7 +50,22 @@ chain() { S=$1; T0=$(date +%s); T=${S}_$P
   # gets, and its mouth leaves a crack/seam on the surface (fertility arm). If 5b actually raised the genus,
   # run one gentle vertex-count-stable refit (flips on, collapse off) so the image evidence irons the seam.
   # Measured: ~56 s on 5090; fertility v62r1 seam gone, VolIoU 0.9908->0.9915, CD 0.00644->0.00641, genus kept.
-  if [ "$(genus_of $O/cow_${S}_${T}_p4.npz)" != "$(genus_of $O/cow_${T}_p4g.npz)" ]; then
+  # Stage 6s (STRICT, 2026-10-02): the Stage-6 refine can make a handle slip off its tunnel (s5B: 4/4 after 5b, 2/4 after
+  # Stage 6 - collapses shrink a small join tube to a micro-handle while the parts interpenetrate again). Re-audit the
+  # refined mesh; if genus != tunnels realised != g*, repair + late pass again here, then the 6b refit irons the seam.
+  STRICT_LATE=0
+  if [ "${STRICT:-0}" = "1" ] && [ ! -f $O/cow_${S}_${T}_auto.npz ]; then
+    RK6=$(SHAPE=$S python3 despike/linking_audit.py --rank $O/cow_${S}_${T}_p5.npz 2>/dev/null | tail -1); r6=$(echo $RK6 | cut -d' ' -f1); g6=$(echo $RK6 | cut -d' ' -f2); n6=$(echo $RK6 | cut -d' ' -f3)
+    if [ "${r6:--1}" -ge 0 ] 2>/dev/null && { [ "$r6" != "$g6" ] || [ "$r6" != "$n6" ]; }; then
+      echo "[$S 6s] after refine: genus $g6, tunnels realised $r6/$n6 -> strict repair on the refined mesh"; guard
+      cp $O/cow_${S}_${T}_p5.npz $O/cow_${S}_${T}_p5pre.npz
+      SHAPE=$S python3 despike/strict_repair.py $O/cow_${S}_${T}_p5pre.npz $O/cow_${S}_${T}_p5r.npz 2>&1 | grep --line-buffered "\[repair\]" | sed "s/^/[$S 6s] /"
+      env SNAPSHOT_TITLE="Stage 6s [strict late pass]" SHAPE=$S ROUNDS=4 COLLAPSE_FRAC=0.02 SKIP_FINAL=1 GENUS_TARGET=${GT_MODE:-hull} HULL_COMPLETE=${STRICT_HULL:-0} NEAR_PAIRS=1 THIN_ALIGN=0.2 RANK_PREFILTER=1 RANK_GATE=1 RANK_ONLY=1 bash despike/phase7_multi.sh $O/cow_${S}_${T}_p5r.npz 2>&1 | grep --line-buffered "near-pair\|UNREACHED\|RANK gate\|VERIFIED\|REJECTED\|Traceback\|Error" | sed "s/^/[$S 6s] /"
+      cp /tmp/liou_cow_viz/cow_${S}_${S}_hlast.npz $O/cow_${S}_${T}_p5.npz; rm -f $O/cow_${S}_${T}_p5b.npz; STRICT_LATE=1
+      echo "[$S 6s] after strict repair: $(SHAPE=$S python3 despike/linking_audit.py --rank $O/cow_${S}_${T}_p5.npz 2>/dev/null | tail -1) (rank genus n_air tiny)"
+    fi
+  fi
+  if [ "$(genus_of $O/cow_${S}_${T}_p4.npz)" != "$(genus_of $O/cow_${T}_p4g.npz)" ] || [ "$STRICT_LATE" = "1" ]; then
     if [ -f $O/cow_${S}_${T}_p5b.npz ]; then echo "[$S 6b] skip"; else guard; env SNAPSHOT_TITLE="Stage 6b [late-handle seam refit]" MODE=64v SHAPE=$S TAG=${T}_p5b STEPS=500 MEMB_EXEMPT=2 FLIP_EVERY=25 COLLAPSE_EVERY=100000 COLLAPSE_FRAC=0 SI_PUSH=0.15 LAP_MULT=1 BASE_NPZ=$O/cow_${S}_${T}_p5.npz python3 -u despike/phase4_inloop.py 2>&1 | grep --line-buffered "$F4" | sed "s/^/[$S 6b] /"; fi
     TB_BASE=$O/cow_${S}_${T}_p5b.npz; TB_ENV="ITERS=5"   # fixed x5: AUTO can pick too few iterations to polish the refit
   else
