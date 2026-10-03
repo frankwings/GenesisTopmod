@@ -142,6 +142,22 @@ def linking(A, B):
     sgn = np.sign((np.cross((d - c)[None], (b - a)[:, None]) * r13).sum(-1))
     return float((om * sgn).sum() / (4 * np.pi))
 
+def loop_crossings(V, F, AIR, step=0.02):
+    """Where do the hull-tunnel air loops pass THROUGH the mesh surface? A tunnel the mesh still seals is crossed
+    (twice: into the membrane and out); an open one is not. Exact for thin membranes (ray casting along the loop).
+    Returns (per-loop crossing counts, all crossing points [k,3])."""
+    import open3d as o3d
+    rs = o3d.t.geometry.RaycastingScene(); rs.add_triangles(o3d.t.geometry.TriangleMesh(o3d.core.Tensor(np.asarray(V, np.float32)), o3d.core.Tensor(np.asarray(F, np.uint32))))
+    counts, pts = [], []
+    for A in AIR:
+        P = np.vstack([A, A[:1]]); a = []
+        for u, v in zip(P[:-1], P[1:]):
+            n = max(1, int(np.linalg.norm(v - u) / step)); a += [u + (v - u) * t / n for t in range(n)]
+        a = np.array(a); b = np.roll(a, -1, 0); d = b - a; L = np.linalg.norm(d, axis=1); ok = L > 1e-9; dn = d[ok] / L[ok][:, None]
+        t = rs.cast_rays(o3d.core.Tensor(np.hstack([a[ok], dn]).astype(np.float32)))["t_hit"].numpy(); hit = t <= L[ok]
+        counts.append(int(hit.sum())); pts.append((a[ok] + dn * np.where(np.isfinite(t), t, 0)[:, None])[hit])
+    return counts, (np.vstack(pts) if any(len(x) for x in pts) else np.zeros((0, 3)))
+
 def genus(V, F):
     E = len(np.unique(np.sort(np.concatenate([F[:, [0, 1]], F[:, [1, 2]], F[:, [2, 0]]]), 1), axis=0))
     return (2 - (len(V) - E + len(F))) // 2

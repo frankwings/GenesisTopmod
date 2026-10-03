@@ -124,6 +124,12 @@ def _count_first(f: HandleFeatures):
     else:                                   # unknown (legacy callers): fall back to the air heuristic, never unconditional
         membrane = (f.out_vox >= AIR_VOX) and (f.blob_vox >= BLOB_MIN)
     rescue = f.count_says_missing() and membrane
+    if os.environ.get("GATE_DHO_ONLY", "0") == "1":
+        # 2026-10-03 experiment: with the strict late pass (linking-verified joins on the refined mesh) a handle the
+        # images do not clearly support no longer has to be forced in at the coarse stage. Stage-3 diagnostics: the
+        # handles that later turn into micro-handles are the low-gain ones (dho <= 0.0035: holes drilled through thin
+        # fins / pinched sheets, accepted through the hair alternative or the count rescue); real ones gain >= 0.006.
+        legacy = f.d_ho16 >= thr; rescue = False
     accept = legacy or rescue
     tag = (":rescue-membrane" if (rescue and not legacy) else "")
     return ("accept" if accept else "reject"), (1.0 if accept else 0.0), ("count" + tag)

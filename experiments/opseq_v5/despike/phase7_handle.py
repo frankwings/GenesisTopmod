@@ -727,11 +727,33 @@ _hull_max = MAX_HANDLES   # one handle per round so phase7_multi.sh can verify (
 # verification). Several candidates can belong to one tunnel; re-detection after each handle handles that.
 BATCH_OPEN = int(os.environ.get("BATCH_OPEN", "0"))
 if BATCH_OPEN: _hull_max = MAX_HANDLES + int(os.environ.get("BATCH_TRIES", "8"))
+# AIR_GUARD=1 (2026-10-03, LESSONS 7i): a DRILL is only allowed where a hull tunnel is still sealed. The air loops of
+# the hull tunnels (linking_audit.air_loops) are cast through the current mesh: a sealed tunnel's loop crosses the
+# surface (twice), an open one does not. Stage-3 diagnostics (8 chains, 29 handles): every handle that later became a
+# micro-handle was drilled >= 0.75 away from any crossing (a hole in a free-standing fin) or when no loop was crossed
+# any more (all tunnels already open - the missing genus is then a JOIN for the strict late pass); real drills were
+# within 0.3. Joins (contact) are exempt.
+AIR_GUARD = int(os.environ.get("AIR_GUARD", "0")); AIR_R = float(os.environ.get("AIR_GUARD_R", "0.5")); _air_block = set()
+if AIR_GUARD and not BATCH_OPEN: _hull_max = MAX_HANDLES + int(os.environ.get("AIR_TRIES", "4"))
+def air_guard(V, F, ci, cj):
+    """(ok, text). ok=None when the air loops are unavailable (guard off for this shape)."""
+    try:
+        import linking_audit as _la
+        if "_ag_air" not in globals(): globals()["_ag_air"] = _la.air_loops(SHAPE, log=lambda m: None)
+        air = globals()["_ag_air"]
+        if not air: return None, "no air loops"
+        cnt, X = _la.loop_crossings(V, F, air)
+        if len(X) == 0: return False, f"no hull tunnel is sealed any more (crossings {cnt})"
+        seg = np.asarray(ci, float)[None] + np.linspace(0, 1, 15)[:, None] * (np.asarray(cj, float) - np.asarray(ci, float))[None]
+        dmin = float(np.min(np.linalg.norm(seg[:, None] - X[None], axis=2)))
+        return dmin <= AIR_R, f"nearest sealed-tunnel crossing {dmin:.2f} (limit {AIR_R:g}; crossings per tunnel {cnt})"
+    except Exception as e: return None, f"guard failed ({e})"
 def _save_handles():
     if HANDLES_JSON: json.dump([h for h in prev_handles if not (isinstance(h, dict) and h.get("batch_skip"))], open(HANDLES_JSON, "w"))
 for k in range(_hull_max):
     MODE_BRIDGE = False
-    if BATCH_OPEN and n_added >= MAX_HANDLES: break
+    _hc_hit = False
+    if (BATCH_OPEN or AIR_GUARD) and n_added >= MAX_HANDLES: break
     if G_TARGET is not None and genus(V, Fa) >= G_TARGET:
         print(f"[p7] genus {genus(V, Fa)} == target g*={G_TARGET}: no more handles", flush=True); break
     if DETECT in ("hull", "membrane"):
@@ -759,7 +781,7 @@ for k in range(_hull_max):
                 if _npc:
                     hit = _npc[0][:5]; _np_hit = True; MODE_BRIDGE = _npc[0][5] == "CONTACT"   # contact = plain single-face join
                     print(f"[p7] tunnel-evidence pairs: 1 (near-pair, {_npc[0][5]}; {len(_npc)} site-valid cluster(s))", flush=True)
-            if hit is None and DETECT == "membrane" and int(os.environ.get("HULL_COMPLETE", "1")):
+            if hit is None and DETECT == "membrane" and int(os.environ.get("HULL_COMPLETE", "1")) and "hc" not in _air_block:
                 # memo: after a rejected round phase7_multi reverts to the SAME mesh, so the (slow, ~15 min)
                 # hull face-pair query would be recomputed on identical input. Key = mesh + prior handles.
                 import hashlib, pickle
@@ -782,7 +804,7 @@ for k in range(_hull_max):
                     hit = _hc[0]; _hc_hit = True
                     print(f"[p7] hull-guided completion: {len(_hc)} plug(s) located on the hull, genus {genus(V, Fa)} < g*={G_TARGET}", flush=True)
                     print(f"[p7] tunnel-evidence pairs: 1 (hull-completion)", flush=True)
-            if hit is None:
+            if hit is None and "ray" not in _air_block:
                 # Hull candidates exhausted or no valid face pair: fall back to rays
                 print(f"[p7] hull: 0 valid candidates, genus {genus(V, Fa)} < g*={G_TARGET}: rays fallback", flush=True)
                 for _lv, (_mp, _ov) in enumerate(RELAX):
@@ -846,6 +868,13 @@ for k in range(_hull_max):
     # base arch still sealed (redundant with a short drill in the same region). Without DR between handles nothing can
     # tell two membranes of one tunnel apart, so batch only opens THIN membranes (sep <= BATCH_SEP_MAX edges); thick
     # ones are left to the DR-verified sequential rounds.
+    if AIR_GUARD and not MODE_BRIDGE and _mk != "CONTACT":
+        _ok, _txt = air_guard(V, Fa, cen[i], cen[j])
+        print(f"[p7] air guard: {_txt} -> {'drill allowed' if _ok else 'guard off' if _ok is None else 'DRILL REFUSED'}", flush=True)
+        if _ok is False:
+            prev_handles.append({"mid": None, "rej_mid": ((cen[i] + cen[j]) / 2).tolist(), "rejected": True, "blob": None, "air_guard": True})
+            _air_block.add("hc" if globals().get("_hc_hit") else "ray" if DETECT == "rays" or not _hull_cands else "memb")
+            _save_handles(); continue
     _batch_thick = BATCH_OPEN and (-negL) > float(os.environ.get("BATCH_SEP_MAX", "3"))
     if BATCH_OPEN and (_mk not in ("MEMBRANE", "CONTACT") or _batch_thick):
         prev_handles.append({"mid": None, "rej_mid": ((cen[i] + cen[j]) / 2).tolist(), "rejected": True, "blob": None, "batch_skip": True})

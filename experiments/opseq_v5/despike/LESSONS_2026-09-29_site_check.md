@@ -269,6 +269,32 @@ Still open: other shapes (air loops), the origin of the micro-handles in Stage 3
 - Counting everything run with the final rules: fertility 10 (sx) + 3 (s6) + s5A/C + s5B resumed, other shapes
   12 (s5) + 12 (s6): no strict failure after Stage 6s was added.
 
+## 7i. 2026-10-03: where the fake handles come from (Stage-3 diagnostics) and what does NOT save time
+
+Diagnostics: Stage 3 re-run on 8 chains with every round's mesh kept (29 accepted handles).
+- Tried and failed as Stage-3 criteria: rim shape (3-gon rims are suspicious but not decisive); render gain
+  (`GATE_DHO_ONLY=1 VERIFY_DHO=0.005`, t3 run: 7/7 strict but micro-handles still removed in 4 of 7 chains, time
+  unchanged - the "low gain = fake" split seen on 8 chains did not hold); linking vector of the candidate loop (zero
+  for 22 of 29, including every handle of fully correct chains: polluted by the unopened membranes); non-face
+  3-cycles near the handle (thin real arms have them too); voxel genus tests (thin sheets make the voxel genus noisy).
+- What works: **air-loop crossings** (`linking_audit.loop_crossings`). Cast the hull-tunnel air loops through the
+  current mesh: a sealed tunnel's loop crosses the surface exactly twice, an open one zero times. Clean integers at
+  the coarse stage, exact for thin membranes. Real drills lie 0.00-0.29 from a crossing point.
+- Three kinds of fake handle: (1) a hole drilled in a free-standing FIN, >= 0.75 from any crossing; (2) a drill made
+  when NO loop is crossed any more: all tunnels are already open (through interpenetrating parts), genus is short,
+  and the pipeline keeps looking for something to drill - what is missing then is a JOIN; (3) a second drill in a
+  tunnel that already has one: the strip between the two holes shrinks to a thread = the micro-handle.
+- `AIR_GUARD=1` (default off): a drill needs a crossing within AIR_GUARD_R=0.5 and at least one sealed tunnel;
+  joins exempt. It refuses kinds (1) and (2) (5 refusals in the 8-chain diagnostic, 3 in ag1-10) but not (3).
+  ag1-10 (full chains): 10/10 strict, micro-handles still removed in 4/10, time unchanged.
+- The time lesson (my earlier estimate was wrong): fake handles are NOT what costs fertility +2.5 min over v6.4.
+  Chains without any fake handle (ag3, ag4, ag10) need the late pass too, because one tunnel is typically opened
+  by interpenetration and needs a JOIN, which is only reliable on the refined mesh. Removing a micro-handle costs
+  4 s; the late join (~95 s) + seam refit (~45 s) are the cost, in more than half of the fertility chains.
+  Speed can only come from those two steps themselves (DR verification 400 steps, refit 500 steps).
+- A stricter Stage-3 rule "a handle must reduce some loop's crossings" would reject real handles: big slab drills
+  often need more than one 400-step loop before the loop is free (sx1 r1, sx3 r3, sx4 r1, sx6 r1, sx7 r2).
+
 ## 8. Open problems
 
 1. Recalibrate on stage-3 mid-round meshes: geodesic threshold (a true contact at 20) and the handling
