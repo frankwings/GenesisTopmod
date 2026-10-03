@@ -18,6 +18,10 @@ _gt_of() { local g="${GT[$1]:-?}"; echo "$g"; }
 genus_of() { python3 -c "
 import numpy as np,sys; z=np.load(sys.argv[1]); V,F=z['verts'],z['tris'].astype(np.int64)
 E=len(np.unique(np.sort(np.concatenate([F[:,[0,1]],F[:,[1,2]],F[:,[2,0]]]),1),axis=0)); print((2-(len(V)-E+len(F)))//2)" $1; }
+# golden v6.5 (2026-10-03): STRICT surface topology is the default (micro-handle removal + linking-verified late pass +
+# re-audit after the final refine, LESSONS 7e-7h). It needs the GT-bbox hull grid, so it is off for REAL_DATA scenes
+# unless STRICT=1 is given explicitly. STRICT=0 reproduces golden v6.4.
+STRICT=${STRICT:-$([ -n "${REAL_DATA:-}" ] && echo 0 || echo 1)}
 chain() { S=$1; T0=$(date +%s); T=${S}_$P
   if [ "$SNAPSHOT_EVERY" != "0" ]; then FD=$PWD/out_liou/frames_${P}_$S; export SNAPSHOT_DIR=$FD; mkdir -p $FD; else unset SNAPSHOT_DIR; fi
   echo "##### $S: golden v3 chain ($P, seed $SEED), GT genus $(_gt_of $S)"
@@ -36,7 +40,7 @@ chain() { S=$1; T0=$(date +%s); T=${S}_$P
     # reliable) first REMOVE handles that realise no hull tunnel (micro-handles), then let the late pass add the missing ones
     # with the 2-second near-pair detector, a linking-vector prefilter and "tunnels realised +1" as the only accept rule.
     STRICT_ENV=""
-    if [ "${STRICT:-0}" = "1" ]; then
+    if [ "$STRICT" = "1" ]; then
       cp $O/cow_${S}_${T}_p4.npz $O/cow_${S}_${T}_p4pre.npz
       SHAPE=$S python3 despike/strict_repair.py $O/cow_${S}_${T}_p4pre.npz $O/cow_${S}_${T}_p4.npz 2>&1 | grep --line-buffered "\[repair\]" | sed "s/^/[$S 5a] /"
       STRICT_ENV="HULL_COMPLETE=${STRICT_HULL:-0} NEAR_PAIRS=1 THIN_ALIGN=0.2 RANK_PREFILTER=1 RANK_GATE=1 RANK_ONLY=1"
@@ -54,7 +58,7 @@ chain() { S=$1; T0=$(date +%s); T=${S}_$P
   # Stage 6 - collapses shrink a small join tube to a micro-handle while the parts interpenetrate again). Re-audit the
   # refined mesh; if genus != tunnels realised != g*, repair + late pass again here, then the 6b refit irons the seam.
   STRICT_LATE=0
-  if [ "${STRICT:-0}" = "1" ] && [ ! -f $O/cow_${S}_${T}_auto.npz ]; then
+  if [ "$STRICT" = "1" ] && [ ! -f $O/cow_${S}_${T}_auto.npz ]; then
     RK6=$(SHAPE=$S python3 despike/linking_audit.py --rank $O/cow_${S}_${T}_p5.npz 2>/dev/null | tail -1); r6=$(echo $RK6 | cut -d' ' -f1); g6=$(echo $RK6 | cut -d' ' -f2); n6=$(echo $RK6 | cut -d' ' -f3)
     if [ "${r6:--1}" -ge 0 ] 2>/dev/null && { [ "$r6" != "$g6" ] || [ "$r6" != "$n6" ]; }; then
       echo "[$S 6s] after refine: genus $g6, tunnels realised $r6/$n6 -> strict repair on the refined mesh"; guard
@@ -85,4 +89,4 @@ chain() { S=$1; T0=$(date +%s); T=${S}_$P
     ffmpeg -y -loglevel error -framerate 15 -pattern_type glob -i "$FD/frame_*.png" -vf "select='not(mod(n\,5))',scale=560:-2:flags=lanczos,split[a][b];[a]palettegen=max_colors=32[p];[b][p]paletteuse=dither=none" -vsync vfr ${G2}_discord.gif; fi
   echo "[$S] wall $(( $(date +%s) - T0 ))s"; }
 for S in ${SHAPES:-fertility threeholes kitten rockerarm armadillo}; do chain $S; done
-echo "##### golden_chain done (chain version: golden v6 structure = v3 stages + cpp kernel + batched render + hull-located handles; TAGP=$P)"
+echo "##### golden_chain done (chain version: golden v6.5 strict topology; v6 structure = v3 stages + cpp kernel + batched render + hull-located handles; TAGP=$P)"

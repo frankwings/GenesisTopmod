@@ -120,6 +120,14 @@ interpenetration). All "15/15", "27/27", "75/75" numbers above are genus-COUNT /
 surface-topology statements. Paper claim must be the strict one (Boss decision) -> gate gets the
 linking-independence rule; re-run the table with the audit as the metric. LESSONS 7e.
 
+## 5e. golden v6.5 (2026-10-03): strict topology as the reported metric
+
+Five shapes x3 with STRICT (default): 15/15 genus right AND all hull tunnels realised by the surface; fertility
+16/16 over all runs with the final rules. Report BOTH columns in the paper (genus count, strict rank) and the
+v6.4 row (genus 27/27, strict 6/21 on fertility) as the ablation "without the linking audit". The audit itself
+(linking numbers with hull-tunnel air loops, GT-free) is a contribution: it detects redundant / hidden handles
+that genus, silhouettes and a per-handle GT check all miss (bt1, s5B). GOLDEN.md v6.5.
+
 ## 6. Negative results (report honestly — reviewers like these)
 
 - **Typed-decision text model (TypeSafe Jev paradigm, via Laya)** for the accept/reject gate:

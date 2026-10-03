@@ -214,3 +214,29 @@ Genus count stands (fertility 15/15 + np1-6 6/6, other shapes 12/12). Strict sur
 realised by a surface handle, `linking_audit.py`): fertility **6/21**. The rest reach genus 4 with a hidden
 micro-handle while one tunnel is open only by interpenetration. Table: `results_genus/linking_audit_fertility_v64.txt`;
 analysis: `LESSONS_2026-09-29_site_check.md` 7e. v6.4 is therefore NOT golden under the strict criterion.
+
+## golden v6.5 (2026-10-03) - strict surface topology (tag `golden-v6.5`)
+
+Chain = v6.4 + STRICT (default on for synthetic shapes, `STRICT=0` reproduces v6.4):
+Stage 5a `strict_repair.py` (remove handles that realise no hull tunnel: non-face 3-cycle, non-separating, zero
+linking vector) -> Stage 5b late pass with the near-pair detector, linking-vector prefilter and "tunnels realised
++1" as the only accept rule (no hull face-pair search) -> Stage 6 refine -> Stage 6s re-audit (+ repair if needed)
+-> 6b refit -> Taubin. Metric: `linking_audit.py` (rank of the linking matrix between the mesh's H1 generator loops
+and one air loop per hull tunnel; GT-free; GT meshes audit 4/4, 3/3, 1/1, 1/1).
+
+| shape (GT genus) | runs | genus right | all tunnels realised | wall (s) | CD | VolIoU |
+|---|---|---|---|---|---|---|
+| fertility (4) | s6A-C | 3/3 | 3/3 | 482 / 507 / 523 | 0.0063-0.0064 | 0.988-0.992 |
+| threeholes (3) | s6A-C | 3/3 | 3/3 | 340 / 341 / 342 | 0.0071 | 0.9914 |
+| kitten (1) | s6A-C | 3/3 | 3/3 | 276 / 276 / 299 | 0.0066 | 0.9979 |
+| rockerarm (1) | s6A-C | 3/3 | 3/3 | 342 / 279 / 294 | 0.0061 | 0.9870 |
+| armadillo (0) | s6A-C | 3/3 | 3/3 | 256 / 254 / 290 | 0.0062 | 0.9948 |
+
+More fertility runs with the final rules: sx1-10 10/10, s5A/C 2/2, s5B 4/4 after Stage 6s (it was 2/4 with damaged
+geometry before 6s existed). Tables: `results_genus/linking_audit_strict_s6.txt`,
+`linking_audit_fertility_strict_sx.txt`. v6.4 under the same audit: fertility 6/21, other shapes 12/12.
+Speed vs v6.4: simple shapes unchanged; fertility median +2.5 min (late pass ~95 s + seam refit ~45 s that v6.4
+skipped because a fake handle had filled the count), worst case 25 min -> 8.7 min.
+Known limits: fake handles are repaired, not prevented (origin in Stage 3 not understood yet); the cut-and-cap runs
+on triangle arrays, not as a DLFL operator; a handle that is redundant but not a 3-cycle cannot be removed (seen
+once, s5B; the final audit reports it). Analysis: `LESSONS_2026-09-29_site_check.md` 7e-7h.

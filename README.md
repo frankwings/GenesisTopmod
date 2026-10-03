@@ -20,30 +20,26 @@ watertight, after **every** step, and the genus can never drift silently.
 the stage and the genus — watch <code>add_handle</code> open each tunnel.</i>
 </p>
 
-## Highlights (golden v6.3)
+## Highlights (golden v6.5)
 
-> **Status (2026-09-30, golden v6.4).** v6.2/v6.3 had a bug: a fallback could open a handle at the wrong
-> place (a *bridge* through real material) while the genus number still came out right; those results are
-> withdrawn. v6.4 checks what lies between the two faces of every candidate (winding number of our mesh +
-> exact silhouette test for hull air) before any count-based acceptance. All v6.4 runs below are audited
-> handle-by-handle against ground truth.
->
-> **Correction (2026-10-01).** A new GT-free audit (linking numbers between the mesh's handle loops and the hull's
-> tunnels, [`linking_audit.py`](experiments/opseq_v5/despike/linking_audit.py)) shows that the genus COUNT is
-> right in all runs, but on fertility only 6/21 runs have a surface whose handles realise all four tunnels; in the
-> others one tunnel is open only through interpenetrating parts and the fourth handle is a hidden micro-handle.
-> Shapes and silhouettes are unaffected. Fix in progress (linking-independence rule in the handle gate).
+> **Status (2026-10-03, golden v6.5): strict surface topology.** Genus is only a count. v6.5 checks that the
+> mesh surface *realises every tunnel of the carved hull*: a GT-free audit computes linking numbers between the
+> mesh's handle loops and closed curves through the hull's tunnels
+> ([`linking_audit.py`](experiments/opseq_v5/despike/linking_audit.py)). Under this audit v6.4 had the right
+> genus in every run but on fertility only 6/21 runs had the right surface (one tunnel was open only through
+> interpenetrating parts, the fourth handle was a hidden micro-handle). v6.2/v6.3 results are withdrawn
+> (bridge bug); v6.4 numbers are genus-count statements.
 
-- **Correct genus, handle by handle**: fertility (genus 4) 15/15, threeholes 3/3, kitten 3/3, rockerarm
-  3/3, armadillo 3/3; all 75 accepted handles are consistent with ground truth (drills on real air, joins
-  on real material) — see [`GOLDEN.md`](experiments/opseq_v5/despike/results64v/GOLDEN.md) v6.4.
-- **Count-first propose-and-verify**: a handle is accepted on render evidence *or* when the oracle
-  says a tunnel is missing and the membrane is genuine air / hull-located — fixing the classic
-  failure where a real thin tunnel opens with a *negative* render gain and gets rejected.
-- **Hull-guided completion**: when the refined mesh sits flush to the hull and image-space detection
-  stalls, the hull's own tunnel location proposes the handle.
-- Held-out silhouette IoU **0.9972** on armadillo (DMesh plateaus at 0.989), volume IoU **0.9915**
-  on fertility with the seam-free finish.
+- **Strict topology, five shapes**: fertility (genus 4), threeholes (3), kitten (1), rockerarm (1), armadillo (0):
+  **15/15 runs** with the right genus *and* every hull tunnel realised by a surface handle; fertility alone
+  16/16 with the final rules (v6.4: 6/21). See
+  [`GOLDEN.md`](experiments/opseq_v5/despike/results64v/GOLDEN.md) v6.5.
+- **How**: handles that realise no tunnel (micro-handles) are removed on the refined mesh; missing ones are added
+  by a 2-second near-pair detector and accepted only if the number of realised tunnels goes up by exactly one;
+  the mesh is re-audited after the final refine.
+- **No time tail**: 4-9 min per chain on an RTX 5090 (v6.4: median 5.5 min on fertility, worst case 25 min).
+- **Count-first propose-and-verify** and **hull-guided completion** still drive the coarse discovery stage.
+- Held-out silhouette IoU **0.9972** on armadillo (DMesh plateaus at 0.989), volume IoU **0.992** on fertility.
 
 ## What `add_handle` actually does
 
@@ -144,6 +140,7 @@ cd experiments/opseq_v5
 SHAPES="fertility threeholes kitten rockerarm armadillo" TAGP=repro \
 USE_JEV=1 GATE_BACKEND=count HULL_COMPLETE=1 bash despike/golden_chain.sh
 # prints [RESULT] <shape>: final genus G (GT g) OK per shape
+# and  [STRICT] <shape>: tunnels realised by the surface r/g*   (STRICT=0 reproduces v6.4)
 # add SNAPSHOT_EVERY=2 SNAPSHOT_HERO=1 to record the evolution GIFs
 ```
 
@@ -155,7 +152,8 @@ Requires: PyTorch (cu-enabled), nvdiffrast, open3d, scipy/scikit-image. Tested o
 | `golden-v6.1` | baseline chain (fertility 13/15) |
 | `golden-v6.2` | count-first gate + hull-guided completion + plug-cache fix — result withdrawn (bridge bug) |
 | `golden-v6.3` | + late-handle seam refit (Stage 6b) — contains the bridge bug, superseded |
-| `golden-v6.4` | + handle-site check (winding number + exact hull air + geodesic crease guard), per-handle GT audit |
+| `golden-v6.4` | + handle-site check (winding number + exact hull air + geodesic crease guard), per-handle GT audit; genus count right, surface topology 6/21 on fertility |
+| `golden-v6.5` | + strict surface topology (linking-number audit, micro-handle removal, linking-verified late pass, re-audit after refine): 15/15 on five shapes |
 
 ## Documentation
 
