@@ -3,13 +3,14 @@
 **Topology-Guaranteed Mesh Generation via TopMod Operators**
 
 A pure-Python implementation of Dr. Ergun Akleman's TopMod topological mesh
-theory — 29 mesh operators that guarantee valid orientable 2-manifold output
+theory — 30 mesh operators that guarantee valid orientable 2-manifold output
 at every step. Includes a Blender addon, differentiable (PyTorch) geometry,
 and an autoregressive tokenizer for AI mesh generation.
 
 ## Features
 
-- **29 mesh operators** — 4 fundamental (Akleman & Chen 2003) + 6 high-level
+- **30 mesh operators** — 4 fundamental (Akleman & Chen 2003) + 7 high-level
+  (incl. `add_handle` and its inverse `remove_handle`)
   + 7 classic subdivision + 12 TopMod remeshing schemes — all with closed-form
   oracle tests
 - **100% differentiable** — every operator has a PyTorch-differentiable
@@ -70,7 +71,7 @@ with parameter details and tips.
 
 ## Operator Reference
 
-Full documentation for all 29 operators with signatures, parameters,
+Full documentation for all 30 operators with signatures, parameters,
 closed-form oracles, differentiability details, and before/after
 visualizations:
 
